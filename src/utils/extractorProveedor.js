@@ -18,8 +18,16 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
   else if (upper.includes("PRIME") || upper.includes("AMAZON")) resultado.plataforma = "Prime Video";
   else if (upper.includes("CRUNCHYROLL") || upper.includes("CRUNCHY")) resultado.plataforma = "Crunchyroll";
   else if (upper.includes("HBO") || upper.includes("MAX")) resultado.plataforma = "Max (HBO)";
-  else if (upper.includes("CHATGPT") || upper.includes("OPENAI") || upper.includes("GPT")) resultado.plataforma = "ChatGPT";
-  else if (upper.includes("SPOTIFY")) {
+  else if (upper.includes("GEMINI")) {
+    const tieneGemini = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("GEMINI"));
+    resultado.plataforma = tieneGemini ? tieneGemini.nombre : "Gemini Pro";
+  } else if (upper.includes("CHATGPT") || upper.includes("OPENAI") || upper.includes("GPT")) {
+    const tienePlus = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("CHATGPT"));
+    resultado.plataforma = tienePlus ? tienePlus.nombre : "ChatGPT Plus";
+  } else if (upper.includes("CLAUDE") || upper.includes("ANTHROPIC")) {
+    const tieneClaude = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("CLAUDE"));
+    resultado.plataforma = tieneClaude ? tieneClaude.nombre : "Claude Pro";
+  } else if (upper.includes("SPOTIFY")) {
     resultado.plataforma = upper.includes("INVITACI") ? "Spotify (Invitación)" : "Spotify (Asignada)";
   } else if (upper.includes("YOUTUBE")) resultado.plataforma = "YouTube Premium";
   else if (upper.includes("CANVA")) resultado.plataforma = "Canva Pro";
@@ -54,7 +62,6 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
   const lineas = textoCrudo.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   for (const linea of lineas) {
-    // 4. Extraer Contraseña
     if (!resultado.password) {
       const matchPass = linea.match(
         /(?:contrase[ñn]a|clave|pass(?:word)?|key|acceso)\s*(?:de\s*la\s*cuenta)?\s*[:=\->]+\s*([^\s|]+)/i
@@ -65,7 +72,6 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
       }
     }
 
-    // 5. Extraer Perfil / Pantalla
     if (!resultado.perfil) {
       const matchPerfilEtiqueta = linea.match(
         /(?:perfil|pantalla|espacio|slot|usuario\s*asignado)\s*[:=\->]+\s*([^|\n🔒📌🔑]+)/i
@@ -84,7 +90,6 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
       }
     }
 
-    // 6. Extraer PIN
     if (!resultado.pin) {
       const matchPin = linea.match(/(?:pin|c[óo]digo\s*de\s*perfil|clave\s*perfil|candado)\s*[:=\->#]*\s*(\d{4,6})/i);
       if (matchPin && matchPin[1]) {

@@ -35,13 +35,13 @@ export const AUTH_CONFIG = {
   pin: "2020"
 };
 
-// Solo se usa como respaldo visual mientras carga tu tabla 'plataformas' desde Supabase
 export const PLATAFORMAS = [
   { nombre: "Netflix", perfilesDefault: 6, tieneExtra2020: true, pidePass: true, pidePerfil: true, pidePin: true },
   { nombre: "Disney+ / ESPN", perfilesDefault: 7, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true },
   { nombre: "Prime Video", perfilesDefault: 6, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true },
   { nombre: "Crunchyroll", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: false },
   { nombre: "Max (HBO)", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true },
+  { nombre: "Gemini Pro", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false },
   { nombre: "ChatGPT Plus", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false },
   { nombre: "Claude Pro", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: false },
   { nombre: "Spotify (Asignada)", perfilesDefault: 1, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false },

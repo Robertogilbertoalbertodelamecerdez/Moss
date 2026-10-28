@@ -20,7 +20,8 @@ import {
   Layers,
   Trash2,
   Monitor,
-  Crown
+  Crown,
+  MailCheck
 } from "lucide-react";
 
 export default function ModuloVentas({
@@ -43,7 +44,7 @@ export default function ModuloVentas({
   const [carritoCombo, setCarritoCombo] = useState([]);
 
   const [plataforma, setPlataforma] = useState("Netflix");
-  const [tipoCuenta, setTipoCuenta] = useState("1 Dispositivo"); // '1 Dispositivo' | 'Cuenta Completa'
+  const [tipoCuenta, setTipoCuenta] = useState("1 Dispositivo"); // '1 Dispositivo' | 'Cuenta Completa' | 'Por Invitación'
   const [origen, setOrigen] = useState("stock");
   const [matrizSeleccionadaId, setMatrizSeleccionadaId] = useState("");
 
@@ -79,6 +80,20 @@ export default function ModuloVentas({
       pidePin: true
     };
 
+  // Al elegir plataforma, si la app está configurada como "Sin Clave / Invitación" (ej: Gemini Pro), se pone automático en "Por Invitación"
+  const seleccionarPlataforma = (nombrePlat, libresPlat = 0) => {
+    setPlataforma(nombrePlat);
+    setMatrizSeleccionadaId("");
+    const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
+    if (cfg && cfg.pidePass === false) {
+      setTipoCuenta("Por Invitación");
+      setOrigen("proveedor");
+    } else {
+      if (tipoCuenta === "Por Invitación") setTipoCuenta("1 Dispositivo");
+      setOrigen(libresPlat > 0 ? "stock" : "proveedor");
+    }
+  };
+
   const armarMensajesMultiples = (nombre, tel, listaItems) => {
     const bloqueOfertas = linkWhatsappMoss?.trim()
       ? `\n\n🎁 *Únete a nuestra comunidad de ofertas y sorteos MOSS:*\n${linkWhatsappMoss.trim()}`
@@ -89,30 +104,50 @@ export default function ModuloVentas({
 
     const bloquesCompletos = listaItems
       .map((item, idx) => {
-        const textoMeses = Number(item.meses) === 1 ? "1 mes" : `${item.meses} meses`;
+        const textoMeses =
+          Number(item.meses) === 12
+            ? "1 año (12 meses)"
+            : Number(item.meses) === 1
+            ? "1 mes"
+            : `${item.meses} meses`;
+
         const fechaFormateada = formatearFechaDMA(item.fechaCorte);
-        const modalidadTexto = item.tipoCuenta === "Cuenta Completa" ? "👑 Cuenta Completa" : "👤 1 Dispositivo / Perfil";
+        const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
+
+        const modalidadTexto =
+          item.tipoCuenta === "Cuenta Completa"
+            ? "👑 Cuenta Completa"
+            : esInv
+            ? "📩 Activación por Invitación"
+            : "👤 1 Dispositivo / Perfil";
 
         const titulo = esCombo
           ? `🔹 *CUENTA #${idx + 1}: ${item.plataforma.toUpperCase()} (${modalidadTexto})*`
           : `📺 *Plataforma:* ${item.plataforma} (${modalidadTexto})`;
 
-        const lineaPass = item.passFinal ? `\n🔑 *Contraseña:* ${item.passFinal}` : "";
+        const etiquetaCorreo = esInv ? "📧 *Correo del cliente activado:*" : "📧 *Correo / Usuario:*";
+        const lineaPass = item.passFinal && !esInv ? `\n🔑 *Contraseña:* ${item.passFinal}` : "";
         const lineaPerfil =
           item.tipoCuenta === "Cuenta Completa"
-            ? `\n👑 *Acceso:* Cuenta Completa (Todos los perfiles)`
-            : item.perfilFinal && item.perfilFinal !== "1 Dispositivo" && item.perfilFinal !== "Cuenta / Invitación"
+            ? `\n👑 *Acceso:* Cuenta Completa`
+            : esInv
+            ? `\n✅ *Estado:* Invitación enviada / activada en tu correo personal`
+            : item.perfilFinal &&
+              item.perfilFinal !== "1 Dispositivo" &&
+              item.perfilFinal !== "Por Invitación" &&
+              item.perfilFinal !== "Cuenta / Invitación"
             ? `\n👤 *Perfil asignado:* ${item.perfilFinal}`
             : "";
-        const lineaPin = item.pinFinal && item.tipoCuenta !== "Cuenta Completa" ? `\n📌 *PIN del perfil:* ${item.pinFinal}` : "";
+        const lineaPin =
+          item.pinFinal && item.tipoCuenta === "1 Dispositivo" ? `\n📌 *PIN del perfil:* ${item.pinFinal}` : "";
 
-        return `${titulo}\n📧 *Correo / Usuario:* ${item.correoFinal}${lineaPass}${lineaPerfil}${lineaPin}\n⏳ *Plan contratado:* ${textoMeses}\n📅 *Fecha de vencimiento:* ${fechaFormateada}`;
+        return `${titulo}\n${etiquetaCorreo} ${item.correoFinal}${lineaPass}${lineaPerfil}${lineaPin}\n⏳ *Plan contratado:* ${textoMeses}\n📅 *Fecha de vencimiento:* ${fechaFormateada}`;
       })
       .join("\n\n━━━━━━━━━━━━━━━━━━━━\n\n");
 
     const encabezado = esCombo
       ? `🌿 *MOSS STREAMING - ENTREGA DE COMBO (${listaItems.length} CUENTAS)*`
-      : `🌿 *MOSS STREAMING - ENTREGA DE CUENTA*`;
+      : `🌿 *MOSS STREAMING - ENTREGA DE SUSCRIPCIÓN*`;
 
     const lineaTotalCombo = esCombo ? `\n\n💰 *Total Combo Pagado:* Bs ${totalCobrado.toFixed(2)}` : "";
 
@@ -120,13 +155,23 @@ export default function ModuloVentas({
 
     const bloquesResumidos = listaItems
       .map((item, idx) => {
-        const textoMeses = Number(item.meses) === 1 ? "1 mes" : `${item.meses} meses`;
+        const textoMeses =
+          Number(item.meses) === 12
+            ? "1 año"
+            : Number(item.meses) === 1
+            ? "1 mes"
+            : `${item.meses} meses`;
         const fechaFormateada = formatearFechaDMA(item.fechaCorte);
-        const lineaPass = item.passFinal ? `\n🔑 Clave: ${item.passFinal}` : "";
+        const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
+        const lineaPass = item.passFinal && !esInv ? `\n🔑 Clave: ${item.passFinal}` : "";
         const lineaPerfil =
           item.tipoCuenta === "Cuenta Completa"
             ? `\n👑 Modalidad: Cuenta Completa`
-            : item.perfilFinal && item.perfilFinal !== "1 Dispositivo" && item.perfilFinal !== "Cuenta / Invitación"
+            : esInv
+            ? `\n📩 Modalidad: Activación por Invitación`
+            : item.perfilFinal &&
+              item.perfilFinal !== "1 Dispositivo" &&
+              item.perfilFinal !== "Por Invitación"
             ? `\n👤 Perfil: ${item.perfilFinal}${item.pinFinal ? ` | PIN: ${item.pinFinal}` : ""}`
             : `\n👤 Modalidad: 1 Dispositivo`;
 
@@ -173,7 +218,7 @@ export default function ModuloVentas({
   const procesarTextoProveedor = (texto) => {
     setTextoProveedorCrudo(texto);
     const extraido = extraerDatosProveedor(texto, plataformasList);
-    if (extraido.plataforma) setPlataforma(extraido.plataforma);
+    if (extraido.plataforma) seleccionarPlataforma(extraido.plataforma);
     if (extraido.correo) setProvCorreo(extraido.correo);
     if (extraido.password) setProvPassword(extraido.password);
     if (extraido.perfil) setProvPerfil(extraido.perfil);
@@ -245,6 +290,11 @@ export default function ModuloVentas({
     return libres[0] || null;
   };
 
+  const calcularDiasPorMeses = (cantMeses) => {
+    const m = Number(cantMeses);
+    return m === 12 ? 365 : m * 30;
+  };
+
   const armarItemActualFormulario = () => {
     if (precioVenta === "" || Number(precioVenta) < 0) {
       notificar("Ingresa el precio de venta de esta cuenta", "error");
@@ -262,7 +312,9 @@ export default function ModuloVentas({
     let provNombreFinal = null;
     let provTelFinal = null;
 
-    if (origen === "stock") {
+    const esModoInvitacion = tipoCuenta === "Por Invitación" || configPlatActual.pidePass === false;
+
+    if (origen === "stock" && !esModoInvitacion) {
       const matrizObj =
         matricesDisponibles.find((m) => m.id === matrizSeleccionadaId) ||
         matricesDisponibles[0];
@@ -288,7 +340,12 @@ export default function ModuloVentas({
       provTelFinal = matrizObj.telefono_proveedor || null;
     } else {
       if (!provCorreo.trim()) {
-        notificar("Ingresa al menos el Correo o Usuario", "error");
+        notificar(
+          esModoInvitacion
+            ? "Ingresa el correo del cliente para la invitación"
+            : "Ingresa al menos el Correo o Usuario",
+          "error"
+        );
         return null;
       }
       const provObj =
@@ -297,19 +354,21 @@ export default function ModuloVentas({
         null;
 
       correoFinal = provCorreo.trim();
-      passFinal = provPassword.trim();
+      passFinal = esModoInvitacion ? "" : provPassword.trim();
       perfilFinal =
         tipoCuenta === "Cuenta Completa"
           ? "Cuenta Completa"
+          : esModoInvitacion
+          ? "Por Invitación"
           : provPerfil.trim() || "1 Dispositivo";
-      pinFinal = tipoCuenta === "Cuenta Completa" ? "" : provPin.trim();
+      pinFinal = tipoCuenta === "Cuenta Completa" || esModoInvitacion ? "" : provPin.trim();
       costoFinal = Number(costoProveedor || 0);
       provIdFinal = provObj ? provObj.id : null;
       provNombreFinal = provObj ? provObj.nombre : "Proveedor Externo";
       provTelFinal = provObj ? provObj.telefono : "";
     }
 
-    const diasTotales = Number(meses) * 30;
+    const diasTotales = calcularDiasPorMeses(meses);
     const fechaBaseStr = fechaVenta || new Date().toISOString().split("T")[0];
     const fechaObj = new Date(fechaBaseStr + "T12:00:00");
     fechaObj.setDate(fechaObj.getDate() + diasTotales);
@@ -318,8 +377,8 @@ export default function ModuloVentas({
     return {
       tempId: Date.now() + Math.random(),
       plataforma,
-      tipoCuenta,
-      origen,
+      tipoCuenta: esModoInvitacion ? "Por Invitación" : tipoCuenta,
+      origen: esModoInvitacion ? "proveedor" : origen,
       matrizIdUsada,
       perfilIdUsado,
       provIdFinal,
@@ -424,7 +483,6 @@ export default function ModuloVentas({
 
         if (errSub) throw errSub;
 
-        // Si es de stock: si vendió "Cuenta Completa" ocupa todos los perfiles de esa matriz; si es "1 Dispositivo" ocupa solo el suyo
         if (item.origen === "stock" && item.matrizIdUsada) {
           if (item.tipoCuenta === "Cuenta Completa") {
             await supabase
@@ -440,12 +498,13 @@ export default function ModuloVentas({
         }
 
         const etiquetaCombo = itemsParaGuardar.length > 1 ? " [Combo]" : "";
+        const etiquetaDuracion = Number(item.meses) === 12 ? "1 Año" : `${item.meses}M`;
 
         await supabase.from("movimientos_yolo").insert([{
           tipo: "Ingreso Venta",
           monto: Math.abs(Number(item.precioVenta)),
           afecta_ganancia_neta: true,
-          descripcion: `Venta${etiquetaCombo} ${item.plataforma} (${item.tipoCuenta}) a ${nombreCliente.trim()} (${item.meses}M)`,
+          descripcion: `Venta${etiquetaCombo} ${item.plataforma} (${item.tipoCuenta}) a ${nombreCliente.trim()} (${etiquetaDuracion})`,
           referencia_id: nuevaSub.id
         }]);
 
@@ -494,6 +553,9 @@ export default function ModuloVentas({
     carritoCombo.reduce((acc, item) => acc + Number(item.precioVenta || 0), 0) +
     (precioVenta !== "" ? Number(precioVenta) : 0);
 
+  const esModoInvitacionActual =
+    tipoCuenta === "Por Invitación" || configPlatActual.pidePass === false;
+
   return (
     <div className="space-y-6">
       {/* BANNER PRINCIPAL HERO */}
@@ -506,7 +568,7 @@ export default function ModuloVentas({
             ¿Nueva venta o Combo para entregar?
           </h2>
           <p className="text-xs sm:text-sm text-gray-300 max-w-xl">
-            Toca cualquier plataforma abajo para abrir la ventana emergente. Puedes vender <b>1 Dispositivo / Perfil</b> o <b>Cuenta Completa</b>.
+            Toca cualquier plataforma abajo para abrir la ventana emergente. Puedes vender <b>1 Dispositivo</b>, <b>Cuenta Completa</b> o <b>Por Invitación</b> (1M, 2M, 3M o 1 Año).
           </p>
 
           <div className="flex flex-wrap justify-center md:justify-start gap-2 pt-2">
@@ -520,17 +582,21 @@ export default function ModuloVentas({
                   key={p.nombre}
                   type="button"
                   onClick={() => {
-                    setPlataforma(p.nombre);
-                    setMatrizSeleccionadaId("");
-                    setOrigen(libresPlat > 0 ? "stock" : "proveedor");
+                    seleccionarPlataforma(p.nombre, libresPlat);
                     setModalVentaAbierto(true);
                   }}
                   className="px-3 py-1.5 rounded-xl bg-[#070B06]/90 hover:bg-[#66FF00] hover:text-black border border-[#2A4226] hover:border-[#66FF00] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>{p.nombre}</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] ${libresPlat > 0 ? "bg-[#66FF00]/20 text-[#66FF00]" : "bg-gray-800 text-gray-400"}`}>
-                    {libresPlat} stock
-                  </span>
+                  {p.pidePass === false ? (
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-blue-950/80 text-blue-300">
+                      Invitación
+                    </span>
+                  ) : (
+                    <span className={`px-1.5 py-0.2 rounded text-[10px] ${libresPlat > 0 ? "bg-[#66FF00]/20 text-[#66FF00]" : "bg-gray-800 text-gray-400"}`}>
+                      {libresPlat} stock
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -648,7 +714,7 @@ export default function ModuloVentas({
                   <ShoppingBag className="w-5 h-5" /> Registrar Venta o Armar Combo
                 </h2>
                 <p className="text-[11px] text-gray-400">
-                  Elige si entregas 1 Dispositivo / Perfil o Cuenta Completa.
+                  Elige 1 Dispositivo, Cuenta Completa o Por Invitación (1M, 2M, 3M o 1 Año).
                 </p>
               </div>
               <button
@@ -732,16 +798,13 @@ export default function ModuloVentas({
               </div>
             )}
 
-            {/* PLATAFORMA, MODALIDAD (1 DISPOSITIVO VS CUENTA COMPLETA) Y ORIGEN */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#1E331A]">
-              <div>
+            {/* PLATAFORMA, MODALIDAD (1 DISPOSITIVO / COMPLETA / INVITACIÓN) Y ORIGEN */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-[#1E331A]">
+              <div className="sm:col-span-4">
                 <label className="text-xs text-gray-400">Plataforma</label>
                 <select
                   value={plataforma}
-                  onChange={(e) => {
-                    setPlataforma(e.target.value);
-                    setMatrizSeleccionadaId("");
-                  }}
+                  onChange={(e) => seleccionarPlataforma(e.target.value)}
                   className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs font-bold"
                 >
                   {plataformasList.map((p) => (
@@ -750,42 +813,57 @@ export default function ModuloVentas({
                 </select>
               </div>
 
-              <div>
+              <div className="sm:col-span-5">
                 <label className="text-xs text-[#66FF00] font-bold">Modalidad de Entrega</label>
-                <div className="grid grid-cols-2 gap-1.5 mt-1">
+                <div className="grid grid-cols-3 gap-1 mt-1">
                   <button
                     type="button"
                     onClick={() => setTipoCuenta("1 Dispositivo")}
-                    className={`py-2.5 px-2 rounded-xl font-bold text-[11px] border flex items-center justify-center gap-1 cursor-pointer ${
+                    className={`py-2.5 px-1.5 rounded-xl font-bold text-[11px] border flex items-center justify-center gap-1 cursor-pointer ${
                       tipoCuenta === "1 Dispositivo"
                         ? "bg-[#66FF00] text-black border-[#66FF00]"
                         : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                     }`}
                   >
-                    <Monitor className="w-3.5 h-3.5" /> 1 Dispositivo
+                    <Monitor className="w-3 h-3" /> 1 Disp.
                   </button>
                   <button
                     type="button"
                     onClick={() => setTipoCuenta("Cuenta Completa")}
-                    className={`py-2.5 px-2 rounded-xl font-bold text-[11px] border flex items-center justify-center gap-1 cursor-pointer ${
+                    className={`py-2.5 px-1.5 rounded-xl font-bold text-[11px] border flex items-center justify-center gap-1 cursor-pointer ${
                       tipoCuenta === "Cuenta Completa"
                         ? "bg-[#66FF00] text-black border-[#66FF00]"
                         : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                     }`}
                   >
-                    <Crown className="w-3.5 h-3.5" /> Completa
+                    <Crown className="w-3 h-3" /> Completa
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTipoCuenta("Por Invitación");
+                      setOrigen("proveedor");
+                    }}
+                    className={`py-2.5 px-1.5 rounded-xl font-bold text-[11px] border flex items-center justify-center gap-1 cursor-pointer ${
+                      tipoCuenta === "Por Invitación"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    <MailCheck className="w-3 h-3" /> Invitación
                   </button>
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs text-gray-400">Origen de la Cuenta</label>
-                <div className="grid grid-cols-2 gap-1.5 mt-1">
+              <div className="sm:col-span-3">
+                <label className="text-xs text-gray-400">Origen</label>
+                <div className="grid grid-cols-2 gap-1 mt-1">
                   <button
                     type="button"
+                    disabled={esModoInvitacionActual}
                     onClick={() => setOrigen("stock")}
-                    className={`py-2.5 px-2 rounded-xl font-bold text-[11px] border cursor-pointer ${
-                      origen === "stock"
+                    className={`py-2.5 px-1.5 rounded-xl font-bold text-[11px] border cursor-pointer disabled:opacity-40 ${
+                      origen === "stock" && !esModoInvitacionActual
                         ? "bg-[#66FF00] text-black border-[#66FF00]"
                         : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                     }`}
@@ -795,19 +873,19 @@ export default function ModuloVentas({
                   <button
                     type="button"
                     onClick={() => setOrigen("proveedor")}
-                    className={`py-2.5 px-2 rounded-xl font-bold text-[11px] border cursor-pointer ${
-                      origen === "proveedor"
+                    className={`py-2.5 px-1.5 rounded-xl font-bold text-[11px] border cursor-pointer ${
+                      origen === "proveedor" || esModoInvitacionActual
                         ? "bg-[#66FF00] text-black border-[#66FF00]"
                         : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                     }`}
                   >
-                    Proveedor
+                    {esModoInvitacionActual ? "Invitación" : "Proveedor"}
                   </button>
                 </div>
               </div>
             </div>
 
-            {origen === "stock" ? (
+            {origen === "stock" && !esModoInvitacionActual ? (
               <div className="bg-[#0B120A] border border-[#233820] rounded-xl p-4">
                 <label className="text-xs text-[#66FF00] font-semibold">
                   Selecciona Matriz con Espacio Disponible ({tipoCuenta}):
@@ -868,77 +946,99 @@ export default function ModuloVentas({
                   </select>
                 </div>
 
-                <div className="bg-[#111A10] border border-[#2A4226] rounded-xl p-3 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <label className="text-xs font-bold text-[#66FF00] flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4" /> Pegar Mensaje del Proveedor (Autocompleta)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={pegarDesdePortapapeles}
-                      className="px-3 py-1 bg-[#66FF00] text-black font-bold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
-                    >
-                      <ClipboardPaste className="w-3.5 h-3.5" /> Pegar Portapapeles
-                    </button>
+                {/* SOLO MOSTRAR EXTRACTOR SI NO ES POR INVITACIÓN */}
+                {!esModoInvitacionActual && (
+                  <div className="bg-[#111A10] border border-[#2A4226] rounded-xl p-3 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-[#66FF00] flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4" /> Pegar Mensaje del Proveedor (Autocompleta)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={pegarDesdePortapapeles}
+                        className="px-3 py-1 bg-[#66FF00] text-black font-bold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                      >
+                        <ClipboardPaste className="w-3.5 h-3.5" /> Pegar Portapapeles
+                      </button>
+                    </div>
+                    <textarea
+                      rows={2}
+                      placeholder="Pega aquí el mensaje que te mandó el proveedor..."
+                      value={textoProveedorCrudo}
+                      onChange={(e) => procesarTextoProveedor(e.target.value)}
+                      className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-gray-200 focus:border-[#66FF00] outline-none"
+                    />
                   </div>
-                  <textarea
-                    rows={2}
-                    placeholder="Pega aquí el mensaje que te mandó el proveedor..."
-                    value={textoProveedorCrudo}
-                    onChange={(e) => procesarTextoProveedor(e.target.value)}
-                    className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-gray-200 focus:border-[#66FF00] outline-none"
-                  />
-                </div>
+                )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
-                  <div>
-                    <label className="text-[11px] text-[#66FF00] font-bold">
-                      1. Correo / Usuario *
+                {/* SI ES POR INVITACIÓN (EJ. GEMINI PRO): SOLO PIDE EL CORREO DEL CLIENTE */}
+                {esModoInvitacionActual ? (
+                  <div className="bg-[#111A10] border-2 border-[#66FF00]/60 rounded-xl p-3.5 space-y-1.5">
+                    <label className="text-xs text-[#66FF00] font-extrabold flex items-center gap-1.5">
+                      <MailCheck className="w-4 h-4" /> Correo del Cliente (donde se activó la invitación de {plataforma}) *
                     </label>
                     <input
                       type="text"
-                      placeholder="correo@cuenta.com"
+                      placeholder="Ej: cliente@gmail.com"
                       value={provCorreo}
                       onChange={(e) => setProvCorreo(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                      className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-sm text-white focus:outline-none"
                     />
                   </div>
+                ) : (
+                  /* SI ES CUENTA CON CREDENCIALES: MUESTRA LOS CAMPOS QUE CORRESPONDA */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-[11px] text-[#66FF00] font-bold">
+                        1. Correo / Usuario *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="correo@cuenta.com"
+                        value={provCorreo}
+                        onChange={(e) => setProvCorreo(e.target.value)}
+                        className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-[11px] text-gray-400">2. Contraseña (Opc.)</label>
-                    <input
-                      type="text"
-                      placeholder="Contraseña"
-                      value={provPassword}
-                      onChange={(e) => setProvPassword(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
+                    <div>
+                      <label className="text-[11px] text-gray-400">2. Contraseña (Opc.)</label>
+                      <input
+                        type="text"
+                        placeholder="Contraseña"
+                        value={provPassword}
+                        onChange={(e) => setProvPassword(e.target.value)}
+                        className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-[11px] text-gray-400">3. Perfil (Opc.)</label>
-                    <input
-                      type="text"
-                      disabled={tipoCuenta === "Cuenta Completa"}
-                      placeholder={tipoCuenta === "Cuenta Completa" ? "Cuenta Completa" : "Ej: Perfil 5"}
-                      value={tipoCuenta === "Cuenta Completa" ? "" : provPerfil}
-                      onChange={(e) => setProvPerfil(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white disabled:opacity-50"
-                    />
-                  </div>
+                    {configPlatActual.pidePerfil !== false && tipoCuenta !== "Cuenta Completa" && (
+                      <div>
+                        <label className="text-[11px] text-gray-400">3. Perfil (Opc.)</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: Perfil 5"
+                          value={provPerfil}
+                          onChange={(e) => setProvPerfil(e.target.value)}
+                          className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                        />
+                      </div>
+                    )}
 
-                  <div>
-                    <label className="text-[11px] text-gray-400">4. PIN (Opc.)</label>
-                    <input
-                      type="text"
-                      disabled={tipoCuenta === "Cuenta Completa"}
-                      placeholder={tipoCuenta === "Cuenta Completa" ? "Sin PIN" : "Ej: 9472"}
-                      value={tipoCuenta === "Cuenta Completa" ? "" : provPin}
-                      onChange={(e) => setProvPin(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white disabled:opacity-50"
-                    />
+                    {configPlatActual.pidePin !== false && tipoCuenta !== "Cuenta Completa" && (
+                      <div>
+                        <label className="text-[11px] text-gray-400">4. PIN (Opc.)</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 9472"
+                          value={provPin}
+                          onChange={(e) => setProvPin(e.target.value)}
+                          className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                        />
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
 
                 <div>
                   <label className="text-xs text-orange-300">Costo del Proveedor (Bs) - Opcional</label>
@@ -954,6 +1054,7 @@ export default function ModuloVentas({
               </div>
             )}
 
+            {/* PRECIO, MESES (CON BOTÓN 1 AÑO) Y FECHA DE VENTA */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-[#1E331A]">
               <div>
                 <label className="text-xs text-gray-400">Precio de esta Cuenta (Bs) *</label>
@@ -968,20 +1069,27 @@ export default function ModuloVentas({
               </div>
 
               <div>
-                <label className="text-xs text-gray-400">Meses ({meses * 30} días)</label>
+                <label className="text-xs text-gray-400">
+                  Duración ({calcularDiasPorMeses(meses)} días)
+                </label>
                 <div className="flex gap-1 mt-1">
-                  {[1, 2, 3].map((m) => (
+                  {[
+                    { valor: 1, texto: "1M" },
+                    { valor: 2, texto: "2M" },
+                    { valor: 3, texto: "3M" },
+                    { valor: 12, texto: "1 Año" }
+                  ].map((op) => (
                     <button
-                      key={m}
+                      key={op.valor}
                       type="button"
-                      onClick={() => setMeses(m)}
-                      className={`flex-1 py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                        Number(meses) === m
+                      onClick={() => setMeses(op.valor)}
+                      className={`flex-1 py-2 px-1 rounded-xl text-[11px] font-extrabold border cursor-pointer ${
+                        Number(meses) === op.valor
                           ? "bg-[#66FF00] text-black border-[#66FF00]"
                           : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                       }`}
                     >
-                      {m}M
+                      {op.texto}
                     </button>
                   ))}
                   <input
@@ -989,7 +1097,8 @@ export default function ModuloVentas({
                     min="1"
                     value={meses}
                     onChange={(e) => setMeses(e.target.value)}
-                    className="w-12 bg-[#070B06] border border-[#2A4226] rounded-xl text-center text-xs text-white"
+                    className="w-11 bg-[#070B06] border border-[#2A4226] rounded-xl text-center text-xs text-white"
+                    title="Cantidad de meses personalizada"
                   />
                 </div>
               </div>

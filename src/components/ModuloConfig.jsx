@@ -13,7 +13,10 @@ import {
   Tv,
   Plus,
   X,
-  Search
+  Search,
+  MailCheck,
+  KeyRound,
+  Sparkles
 } from "lucide-react";
 
 export default function ModuloConfig({
@@ -42,6 +45,7 @@ export default function ModuloConfig({
 
   // Estado para nueva Plataforma en Supabase
   const [nuevaPlatNombre, setNuevaPlatNombre] = useState("");
+  const [esPorInvitacion, setEsPorInvitacion] = useState(false);
   const [nuevaPlatCupos, setNuevaPlatCupos] = useState(5);
   const [nuevaPlatPidePass, setNuevaPlatPidePass] = useState(true);
   const [nuevaPlatPidePerfil, setNuevaPlatPidePerfil] = useState(true);
@@ -50,6 +54,40 @@ export default function ModuloConfig({
   // Estado para nuevo Proveedor
   const [nombreProv, setNombreProv] = useState("");
   const [telProv, setTelProv] = useState("");
+
+  const seleccionarModoInvitacion = (modoInv) => {
+    setEsPorInvitacion(modoInv);
+    if (modoInv) {
+      setNuevaPlatPidePass(false);
+      setNuevaPlatPidePerfil(false);
+      setNuevaPlatPidePin(false);
+      setNuevaPlatCupos(1);
+    } else {
+      setNuevaPlatPidePass(true);
+      setNuevaPlatPidePerfil(true);
+      setNuevaPlatCupos(5);
+    }
+  };
+
+  // Botón de 1 clic para guardar Gemini Pro (Invitación) en Supabase
+  const activarGeminiProRapido = async () => {
+    const { error } = await supabase.from("plataformas").upsert(
+      [
+        {
+          nombre: "Gemini Pro",
+          perfiles_default: 1,
+          tiene_extra_2020: false,
+          pide_pass: false,
+          pide_perfil: false,
+          pide_pin: false
+        }
+      ],
+      { onConflict: "nombre" }
+    );
+    if (error) return notificar("Error: " + error.message, "error");
+    await recargarTodo();
+    notificar("¡Gemini Pro (Por Invitación) guardado en Supabase!");
+  };
 
   // Guardar plataforma directamente en la tabla 'plataformas' de Supabase
   const agregarNuevaPlataforma = async (e) => {
@@ -61,11 +99,11 @@ export default function ModuloConfig({
       [
         {
           nombre: limpio,
-          perfiles_default: Number(nuevaPlatCupos || 5),
+          perfiles_default: esPorInvitacion ? 1 : Number(nuevaPlatCupos || 5),
           tiene_extra_2020: limpio.toLowerCase().includes("netflix"),
-          pide_pass: nuevaPlatPidePass,
-          pide_perfil: nuevaPlatPidePerfil,
-          pide_pin: nuevaPlatPidePin
+          pide_pass: esPorInvitacion ? false : nuevaPlatPidePass,
+          pide_perfil: esPorInvitacion ? false : nuevaPlatPidePerfil,
+          pide_pin: esPorInvitacion ? false : nuevaPlatPidePin
         }
       ],
       { onConflict: "nombre" }
@@ -76,6 +114,27 @@ export default function ModuloConfig({
     setNuevaPlatNombre("");
     await recargarTodo();
     notificar(`Plataforma ${limpio} guardada en Supabase`);
+  };
+
+  // Alternar entre "Por Invitación" (solo correo) y "Con Clave" en cualquier plataforma existente
+  const toggleModoInvitacionExistente = async (plat) => {
+    const actualmenteEsInvitacion = plat.pidePass === false;
+    const { error } = await supabase
+      .from("plataformas")
+      .update({
+        pide_pass: actualmenteEsInvitacion ? true : false,
+        pide_perfil: actualmenteEsInvitacion ? plat.pidePerfil : false,
+        pide_pin: actualmenteEsInvitacion ? plat.pidePin : false
+      })
+      .eq("nombre", plat.nombre);
+
+    if (error) return notificar("Error al actualizar: " + error.message, "error");
+    await recargarTodo();
+    notificar(
+      actualmenteEsInvitacion
+        ? `${plat.nombre} cambiada a Cuenta con Clave`
+        : `${plat.nombre} cambiada a Por Invitación (Solo Correo)`
+    );
   };
 
   const togglePropiedadPlataforma = async (plat, propFront) => {
@@ -125,7 +184,6 @@ export default function ModuloConfig({
     notificar("Proveedor eliminado");
   };
 
-  // Descargar Backup consultando directo a Supabase (incluye tabla 'plataformas' y 'ajustes_sistema')
   const descargarBackup = async () => {
     try {
       const [mRes, pefRes, sRes, cRes, prRes, yRes, plRes, ajRes] = await Promise.all([
@@ -141,7 +199,7 @@ export default function ModuloConfig({
 
       const backupObj = {
         fecha_backup: new Date().toISOString(),
-        version: "MOSS_CRM_2.0_SUPABASE",
+        version: "MOSS_CRM_2.1_SUPABASE",
         plataformas: plRes.data || [],
         ajustes_sistema: ajRes.data || [],
         proveedores: prRes.data || [],
@@ -225,7 +283,7 @@ export default function ModuloConfig({
               <Tv className="w-5 h-5 text-[#66FF00]" /> Plataformas en Supabase ({plataformasList.length})
             </h3>
             <p className="text-xs text-gray-300 mt-1">
-              Guardadas en tu base de datos para que nunca se borren.
+              Configura qué datos pide cada app o si es por Invitación.
             </p>
           </div>
           <button
@@ -265,7 +323,7 @@ export default function ModuloConfig({
         </div>
       </div>
 
-      {/* LINK DE COMUNIDAD / OFERTAS WHATSAPP DE MOSS (GUARDADO EN SUPABASE) */}
+      {/* LINK DE COMUNIDAD / OFERTAS WHATSAPP DE MOSS */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
         <h3 className="font-black text-[#66FF00] flex items-center gap-2">
           <Link2 className="w-5 h-5" /> Link de Grupo / Comunidad de Ofertas WhatsApp MOSS
@@ -387,71 +445,128 @@ export default function ModuloConfig({
       {/* ================================================================= */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 shadow-[0_0_50px_rgba(102,255,0,0.3)] max-h-[92vh] overflow-y-auto animate-modal">
-            <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-5 sm:p-6 max-w-2xl w-full space-y-4 shadow-[0_0_50px_rgba(102,255,0,0.3)] max-h-[92vh] overflow-y-auto animate-modal">
+            <div className="flex flex-wrap justify-between items-center gap-2 border-b border-[#233820] pb-3">
               <h3 className="font-black text-[#66FF00] text-base flex items-center gap-2">
                 <Tv className="w-5 h-5" /> Plataformas Guardadas en Supabase ({plataformasList.length})
               </h3>
-              <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {!plataformasList.some((p) => p.nombre.toLowerCase() === "gemini pro") && (
+                  <button
+                    type="button"
+                    onClick={activarGeminiProRapido}
+                    className="px-3 py-1.5 bg-[#1A2B18] hover:bg-[#253D22] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> + Añadir Gemini Pro (Invitación)
+                  </button>
+                )}
+                <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <form onSubmit={agregarNuevaPlataforma} className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3">
+            <form onSubmit={agregarNuevaPlataforma} className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3.5">
+              {/* SELECTOR VISUAL: ¿ES CON CLAVE O POR INVITACIÓN AL CORREO DEL CLIENTE? */}
+              <div>
+                <label className="text-[11px] text-gray-400 font-bold block mb-1.5">
+                  1. ¿Cómo se entrega esta aplicación al cliente?
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => seleccionarModoInvitacion(false)}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-2 cursor-pointer ${
+                      !esPorInvitacion
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    <KeyRound className="w-4 h-4" /> Cuenta con Correo y Clave
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => seleccionarModoInvitacion(true)}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-2 cursor-pointer ${
+                      esPorInvitacion
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    <MailCheck className="w-4 h-4" /> Por Invitación (Solo Correo del Cliente)
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="sm:col-span-2">
-                  <label className="text-[11px] text-gray-400">Nombre de la Nueva App</label>
+                <div className={esPorInvitacion ? "sm:col-span-3" : "sm:col-span-2"}>
+                  <label className="text-[11px] text-gray-400">2. Nombre de la Nueva App</label>
                   <input
                     type="text"
-                    placeholder="Ej: ChatGPT Plus, Claude Pro, Crunchyroll..."
+                    placeholder={
+                      esPorInvitacion
+                        ? "Ej: Gemini Pro, YouTube Premium, Canva Pro..."
+                        : "Ej: Crunchyroll, Paramount+, ChatGPT Plus..."
+                    }
                     value={nuevaPlatNombre}
                     onChange={(e) => setNuevaPlatNombre(e.target.value)}
                     className="w-full mt-1 bg-[#111A10] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white focus:border-[#66FF00] outline-none"
                   />
                 </div>
-                <div>
-                  <label className="text-[11px] text-gray-400">Cupos por defecto (si creas Matriz)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={nuevaPlatCupos}
-                    onChange={(e) => setNuevaPlatCupos(e.target.value)}
-                    className="w-full mt-1 bg-[#111A10] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
-                  />
-                </div>
+
+                {!esPorInvitacion && (
+                  <div>
+                    <label className="text-[11px] text-gray-400">Cupos (si creas Matriz)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={nuevaPlatCupos}
+                      onChange={(e) => setNuevaPlatCupos(e.target.value)}
+                      className="w-full mt-1 bg-[#111A10] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+                    />
+                  </div>
+                )}
               </div>
 
+              {/* DATOS QUE PIDE LA APP */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                <div className="flex flex-wrap gap-3 text-xs text-gray-300">
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={nuevaPlatPidePass}
-                      onChange={(e) => setNuevaPlatPidePass(e.target.checked)}
-                    />
-                    Usa Clave
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={nuevaPlatPidePerfil}
-                      onChange={(e) => setNuevaPlatPidePerfil(e.target.checked)}
-                    />
-                    Usa Perfil
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={nuevaPlatPidePin}
-                      onChange={(e) => setNuevaPlatPidePin(e.target.checked)}
-                    />
-                    Usa PIN
-                  </label>
-                </div>
+                {esPorInvitacion ? (
+                  <p className="text-[11px] text-[#66FF00] font-semibold">
+                    ✓ Modo Invitación: Al vender solo te pedirá el correo del cliente (sin clave, sin perfil y sin PIN).
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-3 text-xs text-gray-300">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={nuevaPlatPidePass}
+                        onChange={(e) => setNuevaPlatPidePass(e.target.checked)}
+                      />
+                      Pide Contraseña
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={nuevaPlatPidePerfil}
+                        onChange={(e) => setNuevaPlatPidePerfil(e.target.checked)}
+                      />
+                      Pide Perfil
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={nuevaPlatPidePin}
+                        onChange={(e) => setNuevaPlatPidePin(e.target.checked)}
+                      />
+                      Pide PIN
+                    </label>
+                  </div>
+                )}
 
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                  className="px-4 py-2.5 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center gap-1 cursor-pointer ml-auto"
                 >
                   <Plus className="w-4 h-4" /> Guardar en Supabase
                 </button>
@@ -487,39 +602,43 @@ export default function ModuloConfig({
                     <div className="flex flex-wrap gap-1.5">
                       <button
                         type="button"
-                        onClick={() => togglePropiedadPlataforma(p, "pidePass")}
+                        onClick={() => toggleModoInvitacionExistente(p)}
                         className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
                           p.pidePass !== false
                             ? "bg-[#66FF00]/15 text-[#66FF00] border-[#66FF00]/40"
-                            : "bg-gray-900 text-gray-500 border-gray-800"
+                            : "bg-blue-950/80 text-blue-300 border-blue-600/50"
                         }`}
                       >
-                        {p.pidePass !== false ? "✓ Clave" : "Invitación"}
+                        {p.pidePass !== false ? "✓ Usa Clave" : "📩 Por Invitación (Solo Correo)"}
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => togglePropiedadPlataforma(p, "pidePerfil")}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
-                          p.pidePerfil !== false
-                            ? "bg-[#66FF00]/15 text-[#66FF00] border-[#66FF00]/40"
-                            : "bg-gray-900 text-gray-500 border-gray-800"
-                        }`}
-                      >
-                        {p.pidePerfil !== false ? "✓ Perfil" : "Sin Perfil"}
-                      </button>
+                      {p.pidePass !== false && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => togglePropiedadPlataforma(p, "pidePerfil")}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+                              p.pidePerfil !== false
+                                ? "bg-[#66FF00]/15 text-[#66FF00] border-[#66FF00]/40"
+                                : "bg-gray-900 text-gray-500 border-gray-800"
+                            }`}
+                          >
+                            {p.pidePerfil !== false ? "✓ Perfil" : "Sin Perfil"}
+                          </button>
 
-                      <button
-                        type="button"
-                        onClick={() => togglePropiedadPlataforma(p, "pidePin")}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
-                          p.pidePin !== false
-                            ? "bg-[#66FF00]/15 text-[#66FF00] border-[#66FF00]/40"
-                            : "bg-gray-900 text-gray-500 border-gray-800"
-                        }`}
-                      >
-                        {p.pidePin !== false ? "✓ PIN" : "Sin PIN"}
-                      </button>
+                          <button
+                            type="button"
+                            onClick={() => togglePropiedadPlataforma(p, "pidePin")}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+                              p.pidePin !== false
+                                ? "bg-[#66FF00]/15 text-[#66FF00] border-[#66FF00]/40"
+                                : "bg-gray-900 text-gray-500 border-gray-800"
+                            }`}
+                          >
+                            {p.pidePin !== false ? "✓ PIN" : "Sin PIN"}
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
