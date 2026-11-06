@@ -204,6 +204,7 @@ export default function ModuloDirectorio({
     if (actualizada) abrirMensajeDeSuscripcion(actualizada, "REEMPLAZO DE CUENTA");
   };
 
+  // GUARDAR EDICIÓN TOTAL (Incluye Fecha de Venta, Fecha de Corte, Precio y Costo)
   const guardarEdicionManual = async (e) => {
     e.preventDefault();
 
@@ -274,6 +275,13 @@ export default function ModuloDirectorio({
       .eq("id", subEditar.id)
       .select()
       .single();
+
+    // Sincronizar también el monto del ingreso en movimientos_yolo si se corrigió el precio
+    await supabase
+      .from("movimientos_yolo")
+      .update({ monto: Math.abs(Number(subEditar.precio_venta)) })
+      .eq("referencia_id", subEditar.id)
+      .eq("tipo", "Ingreso Venta");
 
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
@@ -468,9 +476,12 @@ export default function ModuloDirectorio({
                     </p>
                   </div>
 
-                  <div className="text-right">
+                  <div className="text-right space-y-0.5">
                     <p className={`text-xs font-bold ${dias <= 1 ? "text-red-400" : dias <= 3 ? "text-yellow-400" : "text-gray-300"}`}>
                       {dias < 0 ? `Venció hace ${Math.abs(dias)}d` : `Quedan ${dias} día(s)`}
+                    </p>
+                    <p className="text-[11px] text-gray-400">
+                      Venta: <span className="text-gray-300">{formatearFechaDMA(s.fecha_venta)}</span>
                     </p>
                     <p className="text-[11px] text-gray-400">
                       Corte: <b className="text-gray-200">{formatearFechaDMA(s.fecha_corte)}</b>
@@ -489,7 +500,10 @@ export default function ModuloDirectorio({
 
                     <button
                       onClick={() => {
-                        setSubEditar(s);
+                        setSubEditar({
+                          ...s,
+                          fecha_venta: s.fecha_venta || new Date().toISOString().split("T")[0]
+                        });
                         setMatrizNuevaEdicionId("");
                       }}
                       className="px-3 py-1.5 bg-[#1A2B18] hover:bg-[#253D22] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
@@ -560,7 +574,9 @@ export default function ModuloDirectorio({
         )}
       </div>
 
-      {/* VENTANA EMERGENTE: EDICIÓN TOTAL DE LA VENTA */}
+      {/* ================================================================= */}
+      {/* VENTANA EMERGENTE: EDICIÓN TOTAL DE LA VENTA (INCLUYE FECHA VENTA) */}
+      {/* ================================================================= */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -767,22 +783,47 @@ export default function ModuloDirectorio({
                 />
               </div>
               <div>
-                <label className="text-[11px] text-gray-400">Precio Venta (Bs)</label>
+                <label className="text-[11px] text-[#66FF00] font-bold">Precio Venta (Bs)</label>
                 <input
                   type="number"
                   step="0.01"
                   value={subEditar.precio_venta}
                   onChange={(e) => setSubEditar({ ...subEditar, precio_venta: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-bold"
                 />
               </div>
               <div>
-                <label className="text-[11px] text-gray-400">Fecha Corte ({formatearFechaDMA(subEditar.fecha_corte)})</label>
+                <label className="text-[11px] text-orange-300">Costo Proveedor (Bs)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={subEditar.costo_proveedor ?? 0}
+                  onChange={(e) => setSubEditar({ ...subEditar, costo_proveedor: e.target.value })}
+                  className="w-full bg-[#070B06] border border-orange-500/40 rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              {/* FECHA DE VENTA Y FECHA DE CORTE EDITABLES */}
+              <div>
+                <label className="text-[11px] text-[#66FF00] font-bold">
+                  Fecha de Venta ({formatearFechaDMA(subEditar.fecha_venta)})
+                </label>
                 <input
                   type="date"
-                  value={subEditar.fecha_corte}
+                  value={subEditar.fecha_venta || ""}
+                  onChange={(e) => setSubEditar({ ...subEditar, fecha_venta: e.target.value })}
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-[#66FF00] font-bold">
+                  Fecha de Corte ({formatearFechaDMA(subEditar.fecha_corte)})
+                </label>
+                <input
+                  type="date"
+                  value={subEditar.fecha_corte || ""}
                   onChange={(e) => setSubEditar({ ...subEditar, fecha_corte: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
                 />
               </div>
             </div>
