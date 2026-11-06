@@ -6,6 +6,7 @@ import ModuloStock from "@/components/ModuloStock";
 import ModuloRenovaciones from "@/components/ModuloRenovaciones";
 import ModuloDirectorio from "@/components/ModuloDirectorio";
 import ModuloConfig from "@/components/ModuloConfig";
+import ModuloEstadisticas from "@/components/ModuloEstadisticas";
 import {
   Wallet,
   TrendingUp,
@@ -20,7 +21,8 @@ import {
   Sparkles,
   X,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  BarChart3
 } from "lucide-react";
 
 export default function MossCRM() {
@@ -28,7 +30,6 @@ export default function MossCRM() {
   const [autenticado, setAutenticado] = useState(false);
   const [userInput, setUserInput] = useState("Mateus");
   const [pinInput, setPinInput] = useState("");
-
   const [toast, setToast] = useState(null);
 
   const notificar = useCallback((texto, tipo = "exito") => {
@@ -48,6 +49,7 @@ export default function MossCRM() {
   const [suscripciones, setSuscripciones] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [proveedores, setProveedores] = useState([]);
+  const [revendedores, setRevendedores] = useState([]);
   const [movimientosYolo, setMovimientosYolo] = useState([]);
 
   const [modalYolo, setModalYolo] = useState(false);
@@ -65,11 +67,12 @@ export default function MossCRM() {
   }, []);
 
   const recargarTodo = async () => {
-    const [mRes, sRes, cRes, pRes, yRes, platRes, ajuRes] = await Promise.all([
+    const [mRes, sRes, cRes, pRes, revRes, yRes, platRes, ajuRes] = await Promise.all([
       supabase.from("matrices_stock").select("*, perfiles_matriz(*)").order("creado_en", { ascending: false }),
       supabase.from("suscripciones").select("*").order("creado_en", { ascending: false }),
       supabase.from("clientes").select("*").order("creado_en", { ascending: false }),
       supabase.from("proveedores").select("*").order("creado_en", { ascending: false }),
+      supabase.from("revendedores").select("*").order("creado_en", { ascending: false }),
       supabase.from("movimientos_yolo").select("*").order("fecha", { ascending: false }),
       supabase.from("plataformas").select("*").order("creado_en", { ascending: true }),
       supabase.from("ajustes_sistema").select("*")
@@ -79,28 +82,28 @@ export default function MossCRM() {
     if (sRes.data) setSuscripciones(sRes.data);
     if (cRes.data) setClientes(cRes.data);
     if (pRes.data) setProveedores(pRes.data);
+    if (revRes.data) setRevendedores(revRes.data);
     if (yRes.data) setMovimientosYolo(yRes.data);
 
-    // Cargar plataformas guardadas en Supabase
     if (platRes.data && platRes.data.length > 0) {
-      const mapeadas = platRes.data.map((p) => ({
-        id: p.id,
-        nombre: p.nombre,
-        perfilesDefault: p.perfiles_default ?? 5,
-        tieneExtra2020: p.tiene_extra_2020 ?? false,
-        pidePass: p.pide_pass ?? true,
-        pidePerfil: p.pide_perfil ?? true,
-        pidePin: p.pide_pin ?? true
-      }));
-      setPlataformasList(mapeadas);
+      setPlataformasList(
+        platRes.data.map((p) => ({
+          id: p.id,
+          nombre: p.nombre,
+          perfilesDefault: p.perfiles_default ?? 5,
+          tieneExtra2020: p.tiene_extra_2020 ?? false,
+          pidePass: p.pide_pass ?? true,
+          pidePerfil: p.pide_perfil ?? true,
+          pidePin: p.pide_pin ?? true
+        }))
+      );
     }
 
-    // Cargar ajustes (Billetera y Link de WhatsApp) desde Supabase
     if (ajuRes.data && ajuRes.data.length > 0) {
-      const billeteraDB = ajuRes.data.find((a) => a.clave === "nombre_billetera");
-      const linkDB = ajuRes.data.find((a) => a.clave === "link_whatsapp_moss");
-      if (billeteraDB?.valor) setNombreBilletera(billeteraDB.valor);
-      if (linkDB?.valor !== undefined) setLinkWhatsappMoss(linkDB.valor);
+      const bDB = ajuRes.data.find((a) => a.clave === "nombre_billetera");
+      const lDB = ajuRes.data.find((a) => a.clave === "link_whatsapp_moss");
+      if (bDB?.valor) setNombreBilletera(bDB.valor);
+      if (lDB?.valor !== undefined) setLinkWhatsappMoss(lDB.valor);
     }
   };
 
@@ -165,7 +168,6 @@ export default function MossCRM() {
 
   return (
     <div className="min-h-screen text-white pb-16">
-      {/* NOTIFICACIÓN EMERGENTE ARRIBA A LA DERECHA (3 SEGUNDOS) */}
       {toast && (
         <div
           className={`fixed top-4 right-4 z-[100] max-w-sm px-4 py-3 rounded-2xl border-2 shadow-2xl flex items-center gap-2.5 animate-modal backdrop-blur-xl ${
@@ -264,7 +266,7 @@ export default function MossCRM() {
           <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
             {/* TARJETAS FINANCIERAS */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] hover:border-[#66FF00]/50 transition rounded-2xl p-5 flex items-center justify-between shadow-lg">
+              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Ingreso Total (Ventas)</p>
                   <p className="text-3xl font-black text-white mt-1">Bs {ingresoBrutoTotal.toFixed(2)}</p>
@@ -274,7 +276,7 @@ export default function MossCRM() {
                 </div>
               </div>
 
-              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] hover:border-[#66FF00]/50 transition rounded-2xl p-5 flex items-center justify-between shadow-lg">
+              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Ganancia Neta (Negocio)</p>
                   <p className={`text-3xl font-black mt-1 ${gananciaNeta >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
@@ -295,32 +297,43 @@ export default function MossCRM() {
                 </div>
                 <button
                   onClick={() => setModalYolo(true)}
-                  className="px-3.5 py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-[0_0_15px_rgba(102,255,0,0.4)] transition cursor-pointer"
+                  className="px-3.5 py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
                 >
                   <Edit className="w-3.5 h-3.5" /> Gasto / Editar
                 </button>
               </div>
             </div>
 
-            {/* BARRA DE 5 PESTAÑAS */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-[#0E170D]/90 p-2 rounded-2xl border border-[#264023] shadow-xl">
+            {/* BARRA DE 6 PESTAÑAS (CON ESTADÍSTICAS) */}
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 bg-[#0E170D]/90 p-2 rounded-2xl border border-[#264023] shadow-xl">
               <button
                 onClick={() => setTabActiva("ventas")}
-                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition cursor-pointer ${
+                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                   tabActiva === "ventas"
-                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black shadow-[0_0_18px_rgba(102,255,0,0.4)]"
-                    : "text-gray-300 hover:bg-[#162414] hover:text-white"
+                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black"
+                    : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
                 <ShoppingCart className="w-4 h-4" /> Ventas
               </button>
 
               <button
+                onClick={() => setTabActiva("estadisticas")}
+                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                  tabActiva === "estadisticas"
+                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black"
+                    : "text-gray-300 hover:bg-[#162414]"
+                }`}
+              >
+                <BarChart3 className="w-4 h-4" /> Estadísticas
+              </button>
+
+              <button
                 onClick={() => setTabActiva("stock")}
-                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition cursor-pointer ${
+                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                   tabActiva === "stock"
-                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black shadow-[0_0_18px_rgba(102,255,0,0.4)]"
-                    : "text-gray-300 hover:bg-[#162414] hover:text-white"
+                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black"
+                    : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
                 <Layers className="w-4 h-4" /> Stock ({matrices.filter((m) => !m.en_papelera).length})
@@ -328,10 +341,10 @@ export default function MossCRM() {
 
               <button
                 onClick={() => setTabActiva("renovaciones")}
-                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition cursor-pointer ${
+                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                   tabActiva === "renovaciones"
-                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black shadow-[0_0_18px_rgba(102,255,0,0.4)]"
-                    : "text-gray-300 hover:bg-[#162414] hover:text-white"
+                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black"
+                    : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
                 <BellRing className="w-4 h-4" /> Renovaciones
@@ -344,10 +357,10 @@ export default function MossCRM() {
 
               <button
                 onClick={() => setTabActiva("directorio")}
-                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition cursor-pointer ${
+                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                   tabActiva === "directorio"
-                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black shadow-[0_0_18px_rgba(102,255,0,0.4)]"
-                    : "text-gray-300 hover:bg-[#162414] hover:text-white"
+                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black"
+                    : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
                 <FolderSearch className="w-4 h-4" /> Directorio ({suscripciones.filter((s) => !s.en_papelera).length})
@@ -360,27 +373,36 @@ export default function MossCRM() {
 
               <button
                 onClick={() => setTabActiva("config")}
-                className={`col-span-2 sm:col-span-1 py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition cursor-pointer ${
+                className={`py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                   tabActiva === "config"
-                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black shadow-[0_0_18px_rgba(102,255,0,0.4)]"
-                    : "text-gray-300 hover:bg-[#162414] hover:text-white"
+                    ? "bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black"
+                    : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
-                <Settings className="w-4 h-4" /> Config / Backup
+                <Settings className="w-4 h-4" /> Ajustes
               </button>
             </div>
 
-            {/* CONTENIDO DE PESTAÑAS */}
             {tabActiva === "ventas" && (
               <ModuloVentas
                 matrices={matrices}
                 clientes={clientes}
                 proveedores={proveedores}
+                revendedores={revendedores}
                 suscripciones={suscripciones}
                 linkWhatsappMoss={linkWhatsappMoss}
                 plataformasList={plataformasList}
                 recargarTodo={recargarTodo}
                 notificar={notificar}
+              />
+            )}
+
+            {tabActiva === "estadisticas" && (
+              <ModuloEstadisticas
+                suscripciones={suscripciones}
+                movimientosYolo={movimientosYolo}
+                revendedores={revendedores}
+                nombreBilletera={nombreBilletera}
               />
             )}
 
@@ -411,6 +433,8 @@ export default function MossCRM() {
                 matrices={matrices}
                 clientes={clientes}
                 proveedores={proveedores}
+                revendedores={revendedores}
+                linkWhatsappMoss={linkWhatsappMoss}
                 plataformasList={plataformasList}
                 recargarTodo={recargarTodo}
                 notificar={notificar}
@@ -423,6 +447,7 @@ export default function MossCRM() {
                 suscripciones={suscripciones}
                 clientes={clientes}
                 proveedores={proveedores}
+                revendedores={revendedores}
                 movimientosYolo={movimientosYolo}
                 nombreBilletera={nombreBilletera}
                 setNombreBilletera={setNombreBilletera}
@@ -435,12 +460,11 @@ export default function MossCRM() {
             )}
           </main>
 
-          {/* VENTANA EMERGENTE AJUSTAR SALDO */}
           {modalYolo && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <form
                 onSubmit={registrarAjusteYolo}
-                className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-[0_0_40px_rgba(102,255,0,0.25)] animate-modal"
+                className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4 animate-modal"
               >
                 <div className="flex justify-between items-center">
                   <h3 className="font-extrabold text-[#66FF00] flex items-center gap-2">
@@ -450,18 +474,15 @@ export default function MossCRM() {
                     <X className="w-5 h-5" />
                   </button>
                 </div>
-                <p className="text-xs text-gray-400">
-                  Usa un número negativo (ej. <span className="text-white">-20</span>) si hiciste un gasto o retiro, o positivo si ingresaste plata.
-                </p>
                 <div>
-                  <label className="text-xs text-gray-400">Monto (Bs)</label>
+                  <label className="text-xs text-gray-400">Monto (Bs) — Usa negativo para gastos</label>
                   <input
                     type="number"
                     step="0.01"
                     placeholder="Ej: -15.50"
                     value={montoAjusteYolo}
                     onChange={(e) => setMontoAjusteYolo(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white focus:border-[#66FF00] outline-none"
+                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white"
                   />
                 </div>
                 <div>
@@ -471,7 +492,7 @@ export default function MossCRM() {
                     placeholder="Ej: Retiro o pago"
                     value={descAjusteYolo}
                     onChange={(e) => setDescAjusteYolo(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white focus:border-[#66FF00] outline-none"
+                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white"
                   />
                 </div>
                 <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
@@ -480,21 +501,14 @@ export default function MossCRM() {
                     checked={afectaGanancia}
                     onChange={(e) => setAfectaGanancia(e.target.checked)}
                   />
-                  ¿Este movimiento también afecta la Ganancia Neta del negocio?
+                  ¿Afecta también la Ganancia Neta del negocio?
                 </label>
                 <div className="flex gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setModalYolo(false)}
-                    className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold cursor-pointer"
-                  >
+                  <button type="button" onClick={() => setModalYolo(false)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
                     Cancelar
                   </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer"
-                  >
-                    Guardar Movimiento
+                  <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
+                    Guardar
                   </button>
                 </div>
               </form>
