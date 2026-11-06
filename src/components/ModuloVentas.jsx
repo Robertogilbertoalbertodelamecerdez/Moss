@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   UserCheck,
   Sparkles,
-  ClipboardPaste,
   UserPlus,
   Truck,
   PlusCircle,
@@ -18,11 +17,7 @@ import {
   Zap,
   Calendar,
   MessageSquare,
-  Layers,
   Trash2,
-  Monitor,
-  Crown,
-  MailCheck,
   Users
 } from "lucide-react";
 
@@ -41,8 +36,7 @@ export default function ModuloVentas({
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [modalNuevoRev, setModalNuevoRev] = useState(false);
 
-  // Selector Cliente vs Revendedor
-  const [tipoComprador, setTipoComprador] = useState("cliente"); // 'cliente' | 'revendedor'
+  const [tipoComprador, setTipoComprador] = useState("cliente");
   const [revendedorId, setRevendedorId] = useState("");
   const [nuevoRevNombre, setNuevoRevNombre] = useState("");
   const [nuevoRevTelefono, setNuevoRevTelefono] = useState("");
@@ -222,7 +216,6 @@ export default function ModuloVentas({
 
   const perfilesEnCarritoIds = carritoCombo.map((item) => item.perfilIdUsado).filter(Boolean);
 
-  // Solo toma perfiles que NO estén ocupados y NO estén marcados como caídos
   const obtenerPerfilesLibresDeMatriz = (matriz) => {
     if (!matriz || !matriz.perfiles_matriz) return [];
     const libres = matriz.perfiles_matriz.filter(
@@ -431,7 +424,14 @@ export default function ModuloVentas({
         }
       }
 
-      const msgObj = generarMensajeEntrega(nombreCliente.trim(), telefono.trim(), itemsParaGuardar, linkWhatsappMoss);
+      const msgObj = generarMensajeEntrega(
+        nombreCliente.trim(),
+        telefono.trim(),
+        itemsParaGuardar,
+        linkWhatsappMoss,
+        null,
+        tipoComprador === "revendedor"
+      );
       setModalVentaAbierto(false);
       setMensajeGenerado(msgObj);
 
@@ -527,11 +527,9 @@ export default function ModuloVentas({
 
       {/* ÚLTIMAS VENTAS */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-4">
-        <div className="flex justify-between items-center">
-          <h3 className="font-extrabold text-sm text-[#66FF00] uppercase flex items-center gap-2">
-            <Calendar className="w-4 h-4" /> Ventas Recientes (En Directorio puedes ver todas)
-          </h3>
-        </div>
+        <h3 className="font-extrabold text-sm text-[#66FF00] uppercase flex items-center gap-2">
+          <Calendar className="w-4 h-4" /> Ventas Recientes
+        </h3>
 
         {ventasActivas.length === 0 ? (
           <div className="text-center py-6 text-gray-400 text-xs">Aún no hay ventas registradas.</div>
@@ -559,17 +557,24 @@ export default function ModuloVentas({
                   type="button"
                   onClick={() =>
                     setMensajeGenerado(
-                      generarMensajeEntrega(v.nombre_cliente, v.telefono_cliente, [{
-                        plataforma: v.plataforma,
-                        tipoCuenta: v.tipo_cuenta || "1 Dispositivo",
-                        correoFinal: v.correo_cuenta,
-                        passFinal: v.password_cuenta,
-                        perfilFinal: v.nombre_perfil,
-                        pinFinal: v.pin_perfil,
-                        meses: v.meses_contratados || 1,
-                        fechaCorte: v.fecha_corte,
-                        precioVenta: v.precio_venta
-                      }], linkWhatsappMoss)
+                      generarMensajeEntrega(
+                        v.nombre_cliente,
+                        v.telefono_cliente,
+                        [{
+                          plataforma: v.plataforma,
+                          tipoCuenta: v.tipo_cuenta || "1 Dispositivo",
+                          correoFinal: v.correo_cuenta,
+                          passFinal: v.password_cuenta,
+                          perfilFinal: v.nombre_perfil,
+                          pinFinal: v.pin_perfil,
+                          meses: v.meses_contratados || 1,
+                          fechaCorte: v.fecha_corte,
+                          precioVenta: v.precio_venta
+                        }],
+                        linkWhatsappMoss,
+                        null,
+                        v.tipo_comprador === "revendedor"
+                      )
                     )
                   }
                   className="px-3 py-2 bg-[#162614] hover:bg-[#66FF00] text-[#66FF00] hover:text-black border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
@@ -625,7 +630,6 @@ export default function ModuloVentas({
                 </button>
               </div>
 
-              {/* SI ES REVENDEDOR: MOSTRAR SELECTOR DE REVENDEDORES + BOTÓN AGREGAR REVENDEDOR */}
               {tipoComprador === "revendedor" && (
                 <div className="bg-[#111A10] border border-[#66FF00]/40 rounded-xl p-3 space-y-2">
                   <div className="flex justify-between items-center">
@@ -1095,7 +1099,7 @@ export default function ModuloVentas({
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-[#66FF00] font-black text-base flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5" /> ¡Mensaje para {mensajeGenerado.cliente}!
+                <CheckCircle2 className="w-5 h-5" /> ¡Mensaje Lista para {mensajeGenerado.cliente}!
               </h3>
               <button onClick={() => setMensajeGenerado(null)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />

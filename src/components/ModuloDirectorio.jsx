@@ -10,7 +10,6 @@ import {
   Trash2,
   RotateCcw,
   Edit3,
-  Users,
   Truck,
   Layers,
   X,
@@ -35,10 +34,8 @@ export default function ModuloDirectorio({
   const [filtroPlataforma, setFiltroPlataforma] = useState("Todas");
   const [filtroEstado, setFiltroEstado] = useState("todos");
 
-  // Modal de Mensaje Disponible en Cualquier Momento
   const [mensajeActivo, setMensajeActivo] = useState(null);
 
-  // Modal Reemplazo
   const [subReemplazo, setSubReemplazo] = useState(null);
   const [origenReemp, setOrigenReemp] = useState("stock");
   const [matrizReempId, setMatrizReempId] = useState("");
@@ -49,13 +46,9 @@ export default function ModuloDirectorio({
   const [pinReemp, setPinReemp] = useState("");
   const [costoReemp, setCostoReemp] = useState(0);
 
-  // Modal Reembolso
   const [subReembolso, setSubReembolso] = useState(null);
   const [montoReembolsoCalc, setMontoReembolsoCalc] = useState(0);
-  const [diasRestantesCalc, setDiasRestantesCalc] = useState(0);
-  const [pasoConfirmacionReembolso, setPasoConfirmacionReembolso] = useState(1);
 
-  // Modal Edición Total
   const [subEditar, setSubEditar] = useState(null);
   const [matrizNuevaEdicionId, setMatrizNuevaEdicionId] = useState("");
 
@@ -84,7 +77,8 @@ export default function ModuloDirectorio({
         }
       ],
       linkWhatsappMoss,
-      titulo
+      titulo,
+      s.tipo_comprador === "revendedor"
     );
     setMensajeActivo(msg);
   };
@@ -128,7 +122,6 @@ export default function ModuloDirectorio({
     notificar(nuevo === "Caida" ? "Cuenta marcada como Caída" : "Cuenta reactivada");
   };
 
-  // DAR REEMPLAZO: Si estaba caída, deja el perfil anterior bloqueado con caido=true para que NO salga libre hasta resolverlo
   const ejecutarReemplazo = async (e) => {
     e.preventDefault();
     if (!subReemplazo) return;
@@ -211,7 +204,6 @@ export default function ModuloDirectorio({
     if (actualizada) abrirMensajeDeSuscripcion(actualizada, "REEMPLAZO DE CUENTA");
   };
 
-  // EDICIÓN TOTAL (Plataforma, Cliente <-> Revendedor, Stock <-> Proveedor, Credenciales, Fechas) + Abre nuevo mensaje
   const guardarEdicionManual = async (e) => {
     e.preventDefault();
 
@@ -294,9 +286,7 @@ export default function ModuloDirectorio({
     const diasRest = Math.max(0, calcularDiasRestantes(s.fecha_corte));
     const diasContratados = Number(s.dias_totales || 30);
     setSubReembolso(s);
-    setDiasRestantesCalc(diasRest);
     setMontoReembolsoCalc(((Number(s.precio_venta) / diasContratados) * diasRest).toFixed(2));
-    setPasoConfirmacionReembolso(1);
   };
 
   const ejecutarReembolsoConfirmado = async () => {
@@ -332,6 +322,19 @@ export default function ModuloDirectorio({
     await supabase.from("movimientos_yolo").delete().eq("referencia_id", s.id);
     await recargarTodo();
     notificar("Enviado a papelera y cupo liberado");
+  };
+
+  const restaurarDePapelera = async (s) => {
+    await supabase.from("suscripciones").update({ en_papelera: false }).eq("id", s.id);
+    await supabase.from("movimientos_yolo").insert([{
+      tipo: "Ingreso Venta",
+      monto: Number(s.precio_venta),
+      afecta_ganancia_neta: true,
+      descripcion: `Venta restaurada (${s.nombre_cliente})`,
+      referencia_id: s.id
+    }]);
+    await recargarTodo();
+    notificar("Venta restaurada");
   };
 
   const borrarDefinitivo = async (s) => {
@@ -475,7 +478,6 @@ export default function ModuloDirectorio({
                   </div>
                 </div>
 
-                {/* BOTONES DE ACCIÓN (INCLUYE VER/COPIAR MENSAJE EN CUALQUIER MOMENTO) */}
                 {!s.en_papelera ? (
                   <div className="flex flex-wrap gap-2 pt-2 border-t border-[#1E331A]">
                     <button
@@ -539,6 +541,12 @@ export default function ModuloDirectorio({
                 ) : (
                   <div className="flex gap-2 pt-2 border-t border-[#1E331A]">
                     <button
+                      onClick={() => restaurarDePapelera(s)}
+                      className="px-3 py-1.5 bg-[#66FF00] text-black rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" /> Restaurar Venta
+                    </button>
+                    <button
                       onClick={() => borrarDefinitivo(s)}
                       className="px-3 py-1.5 bg-red-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                     >
@@ -566,7 +574,6 @@ export default function ModuloDirectorio({
               </button>
             </div>
 
-            {/* CAMBIAR ENTRE CLIENTE Y REVENDEDOR */}
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
               <label className="text-xs font-bold text-[#66FF00]">1. Tipo de Comprador (Cliente o Revendedor):</label>
               <div className="grid grid-cols-2 gap-2">
@@ -618,7 +625,6 @@ export default function ModuloDirectorio({
               )}
             </div>
 
-            {/* CAMBIAR ENTRE MATRIZ DE STOCK Y PROVEEDOR EXTERNO */}
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
               <label className="text-xs font-bold text-[#66FF00]">2. Origen (Matriz Stock o Proveedor):</label>
               <div className="grid grid-cols-2 gap-2">
@@ -681,7 +687,6 @@ export default function ModuloDirectorio({
               )}
             </div>
 
-            {/* TODOS LOS DATOS EDITABLES */}
             <div className="grid grid-cols-2 gap-2.5">
               <div>
                 <label className="text-[11px] text-gray-400">Plataforma</label>

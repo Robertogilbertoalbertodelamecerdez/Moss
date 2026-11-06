@@ -6,19 +6,19 @@ import { generarMensajeCambioCredencial } from "@/utils/mensajesMoss";
 import {
   Plus,
   KeyRound,
-  Unlock,
   AlertTriangle,
   Trash2,
   Edit3,
-  Check,
   X,
   Copy,
-  Sparkles,
-  ClipboardPaste,
   UserPlus,
-  Truck,
   Layers,
-  Search
+  Search,
+  User,
+  UserCheck,
+  UserX,
+  Phone,
+  Share2
 } from "lucide-react";
 
 export default function ModuloStock({
@@ -50,20 +50,58 @@ export default function ModuloStock({
   const [nuevoProvNombre, setNuevoProvNombre] = useState("");
   const [nuevoProvTelefono, setNuevoProvTelefono] = useState("");
 
+  // Modal cambio de contraseña de toda la matriz
   const [matrizCambioPass, setMatrizCambioPass] = useState(null);
   const [nuevaPass, setNuevaPass] = useState("");
 
-  const [editandoPinId, setEditandoPinId] = useState(null);
-  const [nuevoPinTexto, setNuevoPinTexto] = useState("");
-  const [nuevoNombrePerfil, setNuevoNombrePerfil] = useState("");
+  // Modal emergente al hacer clic en una personita (perfil)
+  const [perfilModal, setPerfilModal] = useState(null); // { perfil, matriz, subOcupante }
+  const [nombrePerfilEdit, setNombrePerfilEdit] = useState("");
+  const [pinPerfilEdit, setPinPerfilEdit] = useState("");
+  const [pinCambiadoExito, setPinCambiadoExito] = useState(false);
 
   useEffect(() => {
     setFechaCompra(new Date().toISOString().split("T")[0]);
   }, []);
 
+  const abrirModalPersonita = (perfil, matriz, subOcupante) => {
+    setPerfilModal({ perfil, matriz, subOcupante });
+    setNombrePerfilEdit(perfil.nombre_perfil || "");
+    setPinPerfilEdit(perfil.pin || "");
+    setPinCambiadoExito(false);
+  };
+
+  const guardarEdicionPerfilModal = async (e) => {
+    e.preventDefault();
+    if (!perfilModal) return;
+
+    await supabase
+      .from("perfiles_matriz")
+      .update({
+        pin: pinPerfilEdit.trim(),
+        nombre_perfil: nombrePerfilEdit.trim()
+      })
+      .eq("id", perfilModal.perfil.id);
+
+    await supabase
+      .from("suscripciones")
+      .update({
+        pin_perfil: pinPerfilEdit.trim(),
+        nombre_perfil: nombrePerfilEdit.trim()
+      })
+      .eq("perfil_id", perfilModal.perfil.id)
+      .eq("estado", "Activa");
+
+    setPinCambiadoExito(true);
+    await recargarTodo();
+    notificar("Perfil y PIN guardados. Ya puedes copiar el aviso abajo");
+  };
+
   const guardarNuevoProveedor = async (e) => {
     e.preventDefault();
-    if (!nuevoProvNombre.trim() || !nuevoProvTelefono.trim()) return notificar("Completa nombre y teléfono", "error");
+    if (!nuevoProvNombre.trim() || !nuevoProvTelefono.trim()) {
+      return notificar("Completa nombre y teléfono", "error");
+    }
     const { data, error } = await supabase
       .from("proveedores")
       .insert([{ nombre: nuevoProvNombre.trim(), telefono: nuevoProvTelefono.trim() }])
@@ -198,28 +236,12 @@ export default function ModuloStock({
     notificar("Contraseña actualizada. Usa el botón morado para copiar el aviso corto");
   };
 
-  const guardarEdicionPerfil = async (perfilId) => {
-    await supabase
-      .from("perfiles_matriz")
-      .update({ pin: nuevoPinTexto, nombre_perfil: nuevoNombrePerfil })
-      .eq("id", perfilId);
-    await supabase
-      .from("suscripciones")
-      .update({ pin_perfil: nuevoPinTexto, nombre_perfil: nuevoNombrePerfil })
-      .eq("perfil_id", perfilId)
-      .eq("estado", "Activa");
-    setEditandoPinId(null);
-    await recargarTodo();
-    notificar("Perfil/PIN actualizado");
-  };
-
   const marcarMatrizCaida = async (matriz) => {
     const nuevoEstado = matriz.estado === "Caida" ? "Activa" : "Caida";
     await supabase.from("matrices_stock").update({ estado: nuevoEstado }).eq("id", matriz.id);
     if (nuevoEstado === "Caida") {
       await supabase.from("suscripciones").update({ estado: "Caida" }).eq("matriz_id", matriz.id).eq("estado", "Activa");
     } else {
-      // Si el usuario marca la matriz como Resuelta/Reactivada, también limpia los perfiles caídos de esa matriz
       await supabase.from("perfiles_matriz").update({ caido: false }).eq("matriz_id", matriz.id);
     }
     await recargarTodo();
@@ -260,7 +282,7 @@ export default function ModuloStock({
             <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en Stock ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            Botones morados para copiar aviso corto de cambio de clave/PIN y control de perfiles caídos.
+            Haz clic en el ícono de personita de cualquier perfil para ver cliente, editar su PIN y copiar el aviso de cambio.
           </p>
         </div>
         <div className="flex gap-2">
@@ -358,125 +380,78 @@ export default function ModuloStock({
                 </div>
               </div>
 
-              {/* PERFILES CON BOTÓN MORADO PARA AVISO DE CAMBIO DE PIN Y CONTROL DE CAÍDOS */}
+              {/* ÍCONOS DE PERSONITAS POR CADA PERFIL (CON NOMBRE Y TELÉFONO DEL CLIENTE) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                 {perfiles.map((p) => {
                   const subOcupante = suscripciones.find(
                     (s) => s.perfil_id === p.id && s.estado === "Activa" && !s.en_papelera
                   );
+                  const resaltaBusqueda =
+                    busquedaStock.trim() !== "" &&
+                    subOcupante &&
+                    ((subOcupante.telefono_cliente || "").includes(busquedaStock.trim()) ||
+                      (subOcupante.nombre_cliente || "").toLowerCase().includes(busquedaStock.toLowerCase().trim()));
 
                   return (
-                    <div
+                    <button
                       key={p.id}
-                      className={`p-2 rounded-xl border text-xs flex flex-col justify-between ${
-                        p.caido
-                          ? "bg-red-950/50 border-red-500 text-red-200"
+                      type="button"
+                      onClick={() => abrirModalPersonita(p, matriz, subOcupante)}
+                      className={`p-2.5 rounded-2xl border text-left transition flex items-center gap-2.5 cursor-pointer group ${
+                        resaltaBusqueda
+                          ? "bg-[#223B1E] border-2 border-[#66FF00]"
+                          : p.caido
+                          ? "bg-red-950/60 border-red-500 hover:bg-red-900/60"
                           : p.ocupado
-                          ? "bg-[#070B06] border-gray-800 text-gray-400"
-                          : "bg-[#162614] border-[#66FF00]/40 text-white"
+                          ? "bg-[#070B06] border-[#2A4226] hover:border-[#66FF00]"
+                          : "bg-[#142412] border-[#66FF00]/40 hover:border-[#66FF00]"
                       }`}
                     >
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold truncate">{p.nombre_perfil}</span>
-                        <div className="flex items-center gap-1">
-                          {/* BOTÓN MORADO PARA COPIAR AVISO CORTO DE CAMBIO DE PIN/CLAVE DE ESTE PERFIL */}
-                          <button
-                            onClick={() => {
-                              const msg = generarMensajeCambioCredencial(
-                                "PIN / Contraseña",
-                                matriz.plataforma,
-                                matriz.correo,
-                                matriz.password,
-                                p.nombre_perfil,
-                                p.pin
-                              );
-                              navigator.clipboard.writeText(msg);
-                              notificar("Aviso corto de cambio copiado (Morado)");
-                            }}
-                            className="p-1 rounded bg-purple-600 hover:bg-purple-500 text-white cursor-pointer"
-                            title="Copiar mensaje corto de cambio de PIN/Clave"
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              setEditandoPinId(p.id);
-                              setNuevoPinTexto(p.pin);
-                              setNuevoNombrePerfil(p.nombre_perfil);
-                            }}
-                            className="text-gray-400 hover:text-[#66FF00]"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                      {/* ÍCONO DE PERSONITA */}
+                      <div
+                        className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 border ${
+                          p.caido
+                            ? "bg-red-900/70 border-red-400 text-red-200"
+                            : p.ocupado
+                            ? "bg-orange-500/15 border-orange-400/50 text-orange-300"
+                            : "bg-[#66FF00]/20 border-[#66FF00] text-[#66FF00]"
+                        }`}
+                      >
+                        {p.caido ? (
+                          <UserX className="w-4 h-4" />
+                        ) : p.ocupado ? (
+                          <UserCheck className="w-4 h-4" />
+                        ) : (
+                          <User className="w-4 h-4" />
+                        )}
                       </div>
 
-                      {editandoPinId === p.id ? (
-                        <div className="mt-1 space-y-1">
-                          <input
-                            type="text"
-                            value={nuevoNombrePerfil}
-                            onChange={(e) => setNuevoNombrePerfil(e.target.value)}
-                            className="w-full bg-black border border-[#66FF00] rounded px-1 py-0.5 text-xs text-white"
-                          />
-                          <div className="flex gap-1">
-                            <input
-                              type="text"
-                              value={nuevoPinTexto}
-                              onChange={(e) => setNuevoPinTexto(e.target.value)}
-                              className="w-full bg-black border border-[#66FF00] rounded px-1 py-0.5 text-xs text-white"
-                            />
-                            <button onClick={() => guardarEdicionPerfil(p.id)} className="text-[#66FF00]">
-                              <Check className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <p className="text-[11px] text-gray-300 mt-0.5">
-                            PIN: <span className="font-mono text-[#66FF00]">{p.pin}</span>
-                          </p>
-                          {p.caido ? (
-                            <div className="mt-1 flex items-center justify-between">
-                              <span className="text-[10px] text-red-400 font-extrabold">⚠️ Caído</span>
-                              <button
-                                onClick={async () => {
-                                  await supabase.from("perfiles_matriz").update({ caido: false, ocupado: false }).eq("id", p.id);
-                                  await recargarTodo();
-                                  notificar("Perfil marcado como Resuelto y Disponible");
-                                }}
-                                className="px-1.5 py-0.5 bg-[#66FF00] text-black rounded text-[10px] font-extrabold cursor-pointer"
-                              >
-                                Resuelto
-                              </button>
-                            </div>
-                          ) : p.ocupado ? (
-                            <div className="mt-1 flex items-center justify-between">
-                              <span className="text-[10px] text-orange-400 font-bold truncate">
-                                {subOcupante ? subOcupante.nombre_cliente : "Ocupado"}
-                              </span>
-                              <button
-                                onClick={async () => {
-                                  await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", p.id);
-                                  await recargarTodo();
-                                  notificar("Perfil liberado");
-                                }}
-                                className="text-[10px] underline text-gray-400 hover:text-white"
-                              >
-                                Liberar
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-[10px] text-[#66FF00] font-semibold mt-1">● Disponible</span>
-                          )}
-                        </>
-                      )}
-                    </div>
+                      {/* TEXTO DE LA PERSONITA: PERFIL + NOMBRE Y TELÉFONO DEL CLIENTE */}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-black text-white truncate">{p.nombre_perfil}</p>
+                        {p.caido ? (
+                          <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído (Tocar)</p>
+                        ) : p.ocupado && subOcupante ? (
+                          <>
+                            <p className="text-[10px] text-orange-300 font-bold truncate">
+                              {subOcupante.nombre_cliente}
+                            </p>
+                            <p className="text-[10px] text-[#66FF00] font-mono truncate">
+                              📞 {subOcupante.telefono_cliente}
+                            </p>
+                          </>
+                        ) : p.ocupado ? (
+                          <p className="text-[10px] text-orange-300 font-bold">Ocupado</p>
+                        ) : (
+                          <p className="text-[10px] text-[#66FF00] font-semibold">● Libre (PIN {p.pin})</p>
+                        )}
+                      </div>
+                    </button>
                   );
                 })}
               </div>
 
-              {/* ACCIONES DE LA MATRIZ (INCLUYE BOTÓN MORADO Y EDITAR MATRIZ) */}
+              {/* ACCIONES DE LA MATRIZ */}
               <div className="flex flex-wrap gap-2 pt-2 border-t border-[#1E331A]">
                 <button
                   onClick={() => {
@@ -485,7 +460,7 @@ export default function ModuloStock({
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white flex items-center gap-1 cursor-pointer"
                 >
-                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave / Copiar Aviso
+                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave Matriz
                 </button>
 
                 <button
@@ -520,7 +495,184 @@ export default function ModuloStock({
         })}
       </div>
 
-      {/* MODAL CAMBIO DE CLAVE CON BOTÓN MORADO DE AVISO CORTO */}
+      {/* ========================================================================= */}
+      {/* VENTANA EMERGENTE AL CLICKEAR EN UNA PERSONITA (VER CLIENTE + EDITAR PIN) */}
+      {/* ========================================================================= */}
+      {perfilModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-[0_0_50px_rgba(102,255,0,0.3)] animate-modal">
+            <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-full bg-[#66FF00]/20 border border-[#66FF00] flex items-center justify-center text-[#66FF00]">
+                  <User className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-[#66FF00] text-base">
+                    {perfilModal.matriz.plataforma} — {perfilModal.perfil.nombre_perfil}
+                  </h3>
+                  <p className="text-[11px] text-gray-400">{perfilModal.matriz.correo}</p>
+                </div>
+              </div>
+              <button onClick={() => setPerfilModal(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* INFORMACIÓN DEL CLIENTE ASIGNADO A ESTE PERFIL */}
+            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-2">
+              <p className="text-[11px] text-gray-400 font-bold uppercase">Cliente en este perfil:</p>
+              {perfilModal.subOcupante ? (
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-black text-white">{perfilModal.subOcupante.nombre_cliente}</p>
+                    <p className="text-xs text-[#66FF00] font-mono flex items-center gap-1 mt-0.5">
+                      <Phone className="w-3.5 h-3.5" /> {perfilModal.subOcupante.telefono_cliente}
+                    </p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Vence: {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(perfilModal.subOcupante.telefono_cliente);
+                      notificar("Número de teléfono copiado");
+                    }}
+                    className="px-3 py-1.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" /> Copiar Nro
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-[#66FF00] font-semibold">
+                  ● Este perfil está libre actualmente (Sin cliente asignado).
+                </p>
+              )}
+            </div>
+
+            {/* FORMULARIO PARA EDITAR NOMBRE DEL PERFIL Y PIN */}
+            <form onSubmit={guardarEdicionPerfilModal} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-400">Nombre del Perfil</label>
+                  <input
+                    type="text"
+                    value={nombrePerfilEdit}
+                    onChange={(e) => setNombrePerfilEdit(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white focus:border-[#66FF00] outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-[#66FF00] font-bold">PIN del Perfil</label>
+                  <input
+                    type="text"
+                    value={pinPerfilEdit}
+                    onChange={(e) => setPinPerfilEdit(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-mono font-bold focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs cursor-pointer"
+              >
+                Guardar Cambios de Perfil y PIN
+              </button>
+            </form>
+
+            {/* BOTÓN MORADO PARA COPIAR AVISO DE CAMBIO DE PIN SOLO PARA ESTE CLIENTE */}
+            <div className="pt-2 border-t border-[#1E331A] space-y-2">
+              {pinCambiadoExito && (
+                <p className="text-[11px] text-purple-300 font-bold text-center">
+                  ✓ ¡PIN actualizado! Copia el aviso corto para enviárselo a este cliente:
+                </p>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const msg = generarMensajeCambioCredencial(
+                      "PIN de tu perfil",
+                      perfilModal.matriz.plataforma,
+                      perfilModal.matriz.correo,
+                      perfilModal.matriz.password,
+                      nombrePerfilEdit,
+                      pinPerfilEdit
+                    );
+                    navigator.clipboard.writeText(msg);
+                    notificar("Aviso corto de cambio de PIN copiado");
+                  }}
+                  className="py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Copy className="w-4 h-4" /> Copiar Aviso de Cambio de PIN
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const msg = generarMensajeCambioCredencial(
+                      "PIN de tu perfil",
+                      perfilModal.matriz.plataforma,
+                      perfilModal.matriz.correo,
+                      perfilModal.matriz.password,
+                      nombrePerfilEdit,
+                      pinPerfilEdit
+                    );
+                    if (navigator.share) navigator.share({ text: msg });
+                    else {
+                      navigator.clipboard.writeText(msg);
+                      notificar("Aviso copiado");
+                    }
+                  }}
+                  className="py-2.5 px-3 bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-500 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Share2 className="w-4 h-4" /> Compartir Aviso (Celular)
+                </button>
+              </div>
+            </div>
+
+            {/* CONTROL RÁPIDO DE LIBERAR O RESOLVER PERFIL CAÍDO */}
+            <div className="flex justify-between items-center pt-2 border-t border-[#1E331A]">
+              {perfilModal.perfil.caido ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await supabase
+                      .from("perfiles_matriz")
+                      .update({ caido: false, ocupado: false })
+                      .eq("id", perfilModal.perfil.id);
+                    setPerfilModal(null);
+                    await recargarTodo();
+                    notificar("Perfil marcado como Resuelto y Disponible");
+                  }}
+                  className="w-full py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer"
+                >
+                  ✓ Marcar Perfil como Resuelto y Disponible
+                </button>
+              ) : perfilModal.perfil.ocupado ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await supabase
+                      .from("perfiles_matriz")
+                      .update({ ocupado: false })
+                      .eq("id", perfilModal.perfil.id);
+                    setPerfilModal(null);
+                    await recargarTodo();
+                    notificar("Perfil liberado manualmente");
+                  }}
+                  className="text-xs text-red-400 hover:underline cursor-pointer"
+                >
+                  Liberar este perfil manualmente (Dejar Disponible)
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CAMBIO DE CLAVE DE LA MATRIZ CON BOTÓN MORADO */}
       {matrizCambioPass && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-5 max-w-md w-full space-y-4">
@@ -579,7 +731,7 @@ export default function ModuloStock({
                   return (
                     <div key={c.id} className="flex justify-between items-center bg-[#070B06] p-2 rounded-xl text-xs">
                       <span>
-                        <b>{c.nombre_cliente}</b> ({c.nombre_perfil})
+                        <b>{c.nombre_cliente}</b> ({c.telefono_cliente} · {c.nombre_perfil})
                       </span>
                       <button
                         onClick={() => {
@@ -588,7 +740,7 @@ export default function ModuloStock({
                         }}
                         className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                       >
-                        <Copy className="w-3 h-3" /> Copiar Aviso
+                        <Copy className="w-3 h-3" /> Copiar
                       </button>
                     </div>
                   );
@@ -598,7 +750,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL EDITAR MATRIZ COMPLETA */}
+      {/* MODAL EDITAR MATRIZ */}
       {matrizEditar && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form onSubmit={guardarEdicionMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-3">
@@ -673,7 +825,7 @@ export default function ModuloStock({
               </select>
               <input type="number" step="0.01" placeholder="Costo Total (Bs)" value={costoTotal} onChange={(e) => setCostoTotal(e.target.value)} className="bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-white text-xs font-bold" />
               <input type="text" placeholder="Correo *" value={correo} onChange={(e) => setCorreo(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
-              <input type="text" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
+              <input type="text" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
               <input type="number" placeholder="Cupos" value={capacidad} onChange={(e) => setCapacidad(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
               <input type="date" value={fechaCompra} onChange={(e) => setFechaCompra(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
             </div>
