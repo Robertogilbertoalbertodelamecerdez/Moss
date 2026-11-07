@@ -1,12 +1,13 @@
 "use client";
 import React, { useState, useEffect, useCallback } from "react";
-import { supabase, AUTH_CONFIG, PLATAFORMAS } from "@/config";
+import { supabase, AUTH_CONFIG, PLATAFORMAS, formatearFechaDMA } from "@/config";
 import ModuloVentas from "@/components/ModuloVentas";
 import ModuloStock from "@/components/ModuloStock";
 import ModuloRenovaciones from "@/components/ModuloRenovaciones";
 import ModuloDirectorio from "@/components/ModuloDirectorio";
 import ModuloConfig from "@/components/ModuloConfig";
 import ModuloEstadisticas from "@/components/ModuloEstadisticas";
+import PortalRevendedor from "@/components/PortalRevendedor";
 import {
   Wallet,
   TrendingUp,
@@ -22,23 +23,21 @@ import {
   X,
   CheckCircle2,
   AlertTriangle,
-  BarChart3
+  BarChart3,
+  Bell,
+  Copy,
+  Trash2,
+  Check
 } from "lucide-react";
 
 export default function MossCRM() {
   const [montado, setMontado] = useState(false);
-  const [autenticado, setAutenticado] = useState(false);
-  const [userInput, setUserInput] = useState("Mateus");
+  const [sesionActual, setSesionActual] = useState(null); // { rol: 'admin' | 'revendedor', revendedorId: null }
+  const [userInput, setUserInput] = useState("");
   const [pinInput, setPinInput] = useState("");
   const [toast, setToast] = useState(null);
 
-  const notificar = useCallback((texto, tipo = "exito") => {
-    const id = Date.now();
-    setToast({ id, texto, tipo });
-    setTimeout(() => {
-      setToast((actual) => (actual?.id === id ? null : actual));
-    }, 3000);
-  }, []);
+  const [modalNotificaciones, setModalNotificaciones] = useState(false);
 
   const [tabActiva, setTabActiva] = useState("ventas");
   const [nombreBilletera, setNombreBilletera] = useState("Yolo");
@@ -51,23 +50,58 @@ export default function MossCRM() {
   const [proveedores, setProveedores] = useState([]);
   const [revendedores, setRevendedores] = useState([]);
   const [movimientosYolo, setMovimientosYolo] = useState([]);
+  const [notificaciones, setNotificaciones] = useState([]);
 
   const [modalYolo, setModalYolo] = useState(false);
   const [montoAjusteYolo, setMontoAjusteYolo] = useState("");
   const [descAjusteYolo, setDescAjusteYolo] = useState("");
   const [afectaGanancia, setAfectaGanancia] = useState(false);
 
-  useEffect(() => {
-    setMontado(true);
-    const sesion = localStorage.getItem("moss_auth");
-    if (sesion === "ok") {
-      setAutenticado(true);
-      recargarTodo();
+  // Registrar cualquier error en la bandeja para que Mateus lo copie con un botón
+  const registrarErrorSistema = useCallback(async (origen, mensajeError, usuarioNombre = "Sistema") => {
+    try {
+      await supabase.from("notificaciones_sistema").insert([
+        {
+          tipo: "error",
+          titulo: `⚠️ Error en ${origen} (${usuarioNombre})`,
+          mensaje: String(mensajeError),
+          detalle_tecnico: `Origen: ${origen} | Usuario: ${usuarioNombre} | Fecha: ${new Date().toISOString()} | Error: ${mensajeError}`
+        }
+      ]);
+    } catch {
+      // Silencioso si falla red
     }
   }, []);
 
+  const notificar = useCallback(
+    (texto, tipo = "exito") => {
+      const id = Date.now();
+      setToast({ id, texto, tipo });
+      if (tipo === "error") {
+        registrarErrorSistema("Alerta UI", texto, sesionActual?.nombre || "Admin");
+      }
+      setTimeout(() => {
+        setToast((actual) => (actual?.id === id ? null : actual));
+      }, 3000);
+    },
+    [registrarErrorSistema, sesionActual]
+  );
+
+  useEffect(() => {
+    setMontado(true);
+    const guardada = localStorage.getItem("moss_sesion_v3");
+    if (guardada) {
+      try {
+        setSesionActual(JSON.parse(guardada));
+      } catch {
+        localStorage.removeItem("moss_sesion_v3");
+      }
+    }
+    recargarTodo();
+  }, []);
+
   const recargarTodo = async () => {
-    const [mRes, sRes, cRes, pRes, revRes, yRes, platRes, ajuRes] = await Promise.all([
+    const [mRes, sRes, cRes, pRes, revRes, yRes, platRes, ajuRes, notRes] = await Promise.all([
       supabase.from("matrices_stock").select("*, perfiles_matriz(*)").order("creado_en", { ascending: false }),
       supabase.from("suscripciones").select("*").order("creado_en", { ascending: false }),
       supabase.from("clientes").select("*").order("creado_en", { ascending: false }),
@@ -75,7 +109,8 @@ export default function MossCRM() {
       supabase.from("revendedores").select("*").order("creado_en", { ascending: false }),
       supabase.from("movimientos_yolo").select("*").order("fecha", { ascending: false }),
       supabase.from("plataformas").select("*").order("creado_en", { ascending: true }),
-      supabase.from("ajustes_sistema").select("*")
+      supabase.from("ajustes_sistema").select("*"),
+      supabase.from("notificaciones_sistema").select("*").order("creado_en", { ascending: false }).limit(60)
     ]);
 
     if (mRes.data) setMatrices(mRes.data);
@@ -84,6 +119,7 @@ export default function MossCRM() {
     if (pRes.data) setProveedores(pRes.data);
     if (revRes.data) setRevendedores(revRes.data);
     if (yRes.data) setMovimientosYolo(yRes.data);
+    if (notRes.data) setNotificaciones(notRes.data);
 
     if (platRes.data && platRes.data.length > 0) {
       setPlataformasList(
@@ -94,7 +130,8 @@ export default function MossCRM() {
           tieneExtra2020: p.tiene_extra_2020 ?? false,
           pidePass: p.pide_pass ?? true,
           pidePerfil: p.pide_perfil ?? true,
-          pidePin: p.pide_pin ?? true
+          pidePin: p.pide_pin ?? true,
+          precioRevendedor: p.precio_revendedor ?? 15
         }))
       );
     }
@@ -107,19 +144,71 @@ export default function MossCRM() {
     }
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (
-      userInput.trim().toLowerCase() === AUTH_CONFIG.usuario.toLowerCase() &&
-      pinInput.trim() === AUTH_CONFIG.pin
-    ) {
-      localStorage.setItem("moss_auth", "ok");
-      setAutenticado(true);
-      recargarTodo();
-      notificar("¡Bienvenido a MOSS CRM, Mateus!");
-    } else {
-      notificar("Usuario o PIN incorrecto", "error");
+    const u = userInput.trim().toLowerCase();
+    const p = pinInput.trim();
+
+    // 1. Verificar si es Mateus (Admin)
+    if (u === AUTH_CONFIG.usuario.toLowerCase() && p === AUTH_CONFIG.pin) {
+      const nuevaSesion = { rol: "admin", nombre: "Mateus" };
+      localStorage.setItem("moss_sesion_v3", JSON.stringify(nuevaSesion));
+      setSesionActual(nuevaSesion);
+      await recargarTodo();
+      return notificar("¡Bienvenido a tu Panel Admin, Mateus!");
     }
+
+    // 2. Verificar si es un Revendedor registrado en Supabase
+    const revEncontrado = revendedores.find(
+      (r) =>
+        r.activo !== false &&
+        ((r.usuario || r.nombre || "").trim().toLowerCase() === u || r.telefono.trim() === u) &&
+        String(r.pin || "1234").trim() === p
+    );
+
+    if (revEncontrado) {
+      const nuevaSesion = {
+        rol: "revendedor",
+        revendedorId: revEncontrado.id,
+        nombre: revEncontrado.nombre
+      };
+      localStorage.setItem("moss_sesion_v3", JSON.stringify(nuevaSesion));
+      setSesionActual(nuevaSesion);
+      await recargarTodo();
+      return notificar(`¡Bienvenido, ${revEncontrado.nombre}!`);
+    }
+
+    notificar("Usuario o PIN incorrecto", "error");
+  };
+
+  // BOTÓN "¡PAGADO!" EN LA CAMPANA DE NOTIFICACIONES (Cuando el revendedor te paga el cupo que sacó)
+  const marcarCobroRevendedorComoPagado = async (notif) => {
+    await supabase
+      .from("notificaciones_sistema")
+      .update({ pagado: true, leido: true })
+      .eq("id", notif.id);
+
+    if (notif.suscripcion_id) {
+      await supabase
+        .from("suscripciones")
+        .update({ pagado_al_admin: true })
+        .eq("id", notif.suscripcion_id);
+    }
+
+    if (Number(notif.monto_cobrar) > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          tipo: "Ingreso Venta",
+          monto: Math.abs(Number(notif.monto_cobrar)),
+          afecta_ganancia_neta: true,
+          descripcion: `Pago recibido de revendedor ${notif.nombre_revendedor || ""} (${notif.titulo})`,
+          referencia_id: notif.suscripcion_id
+        }
+      ]);
+    }
+
+    await recargarTodo();
+    notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
   };
 
   const ingresoBrutoTotal = movimientosYolo
@@ -146,16 +235,24 @@ export default function MossCRM() {
 
   const cantidadCaidos = suscripciones.filter((s) => !s.en_papelera && s.estado === "Caida").length;
 
+  const cobrosPendientesCount = notificaciones.filter(
+    (n) => n.tipo === "venta_revendedor" && !n.pagado
+  ).length;
+  const erroresCount = notificaciones.filter((n) => n.tipo === "error" && !n.leido).length;
+  const alertasTotalesBadge = cobrosPendientesCount + erroresCount;
+
   const registrarAjusteYolo = async (e) => {
     e.preventDefault();
     if (!montoAjusteYolo) return notificar("Ingresa un monto válido", "error");
 
-    await supabase.from("movimientos_yolo").insert([{
-      tipo: "Ajuste Manual",
-      monto: Number(montoAjusteYolo),
-      afecta_ganancia_neta: afectaGanancia,
-      descripcion: descAjusteYolo || `Ajuste / Gasto manual en ${nombreBilletera}`
-    }]);
+    await supabase.from("movimientos_yolo").insert([
+      {
+        tipo: "Ajuste Manual",
+        monto: Number(montoAjusteYolo),
+        afecta_ganancia_neta: afectaGanancia,
+        descripcion: descAjusteYolo || `Ajuste / Gasto manual en ${nombreBilletera}`
+      }
+    ]);
 
     setMontoAjusteYolo("");
     setDescAjusteYolo("");
@@ -165,6 +262,11 @@ export default function MossCRM() {
   };
 
   if (!montado) return null;
+
+  const revendedorLogueadoObj =
+    sesionActual?.rol === "revendedor"
+      ? revendedores.find((r) => r.id === sesionActual.revendedorId)
+      : null;
 
   return (
     <div className="min-h-screen text-white pb-16">
@@ -188,7 +290,7 @@ export default function MossCRM() {
         </div>
       )}
 
-      {!autenticado ? (
+      {!sesionActual ? (
         <div className="min-h-screen flex items-center justify-center p-4">
           <form
             onSubmit={handleLogin}
@@ -200,21 +302,22 @@ export default function MossCRM() {
             <div>
               <h1 className="text-3xl font-black tracking-widest text-white">MOSS</h1>
               <p className="text-xs text-[#66FF00] font-semibold tracking-wider uppercase mt-1">
-                Streaming & Control CRM
+                Acceso Admin & Revendedores
               </p>
             </div>
             <div className="space-y-3 text-left">
               <div>
-                <label className="text-xs text-gray-400">Usuario</label>
+                <label className="text-xs text-gray-400">Usuario o Teléfono</label>
                 <input
                   type="text"
+                  placeholder="Tu usuario"
                   value={userInput}
                   onChange={(e) => setUserInput(e.target.value)}
                   className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-3 text-white focus:border-[#66FF00] outline-none"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400">PIN de Acceso</label>
+                <label className="text-xs text-gray-400">PIN / Contraseña</label>
                 <input
                   type="password"
                   placeholder="••••"
@@ -228,11 +331,62 @@ export default function MossCRM() {
               type="submit"
               className="w-full py-3.5 bg-gradient-to-r from-[#66FF00] to-[#45B800] hover:brightness-110 text-black font-black rounded-xl shadow-[0_0_20px_rgba(102,255,0,0.4)] transition cursor-pointer"
             >
-              ENTRAR AL PANEL
+              ENTRAR AL SISTEMA
             </button>
           </form>
         </div>
+      ) : sesionActual.rol === "revendedor" ? (
+        /* ============================================================== */
+        /* VISTA PRIVADA PARA REVENDEDORES                                */
+        /* ============================================================== */
+        <>
+          <header className="border-b border-[#66FF00]/20 bg-[#0A1209]/90 sticky top-0 z-40 backdrop-blur-xl">
+            <div className="max-w-5xl mx-auto px-4 py-3.5 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full border-2 border-[#66FF00] flex items-center justify-center bg-[#070B06]">
+                  <span className="text-xl font-black text-[#66FF00]">M</span>
+                </div>
+                <div>
+                  <h1 className="font-black text-base text-white">
+                    MOSS · Panel de {revendedorLogueadoObj?.nombre || sesionActual.nombre}
+                  </h1>
+                  <span className="text-[11px] text-[#66FF00]">Portal Oficial de Revendedor</span>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  localStorage.removeItem("moss_sesion_v3");
+                  setSesionActual(null);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-[#142013] border border-[#233820] text-xs text-gray-300 flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" /> Salir
+              </button>
+            </div>
+          </header>
+
+          <main className="max-w-5xl mx-auto px-4 pt-6">
+            {revendedorLogueadoObj ? (
+              <PortalRevendedor
+                revendedor={revendedorLogueadoObj}
+                suscripciones={suscripciones}
+                matrices={matrices}
+                plataformasList={plataformasList}
+                recargarTodo={recargarTodo}
+                notificar={notificar}
+                registrarErrorSistema={registrarErrorSistema}
+              />
+            ) : (
+              <div className="text-center py-12 text-gray-400 text-sm">
+                Cargando tu perfil de revendedor...
+              </div>
+            )}
+          </main>
+        </>
       ) : (
+        /* ============================================================== */
+        /* VISTA COMPLETA DE ADMINISTRADOR (MATEUS)                       */
+        /* ============================================================== */
         <>
           <header className="border-b border-[#66FF00]/20 bg-[#0A1209]/85 sticky top-0 z-40 backdrop-blur-xl shadow-[0_4px_30px_rgba(0,0,0,0.6)]">
             <div className="max-w-6xl mx-auto px-4 py-3.5 flex justify-between items-center">
@@ -244,22 +398,38 @@ export default function MossCRM() {
                   <div className="flex items-center gap-2">
                     <h1 className="font-black tracking-widest text-xl leading-none text-white">MOSS</h1>
                     <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase rounded-full bg-[#66FF00]/15 text-[#66FF00] border border-[#66FF00]/40 flex items-center gap-1">
-                      <Sparkles className="w-2.5 h-2.5" /> PRO CRM
+                      <Sparkles className="w-2.5 h-2.5" /> ADMIN CRM
                     </span>
                   </div>
                   <span className="text-xs text-gray-400">Panel de Mateus</span>
                 </div>
               </div>
 
-              <button
-                onClick={() => {
-                  localStorage.removeItem("moss_auth");
-                  setAutenticado(false);
-                }}
-                className="px-3 py-1.5 rounded-xl bg-[#142013] hover:bg-red-950/60 border border-[#233820] hover:border-red-700/50 flex items-center gap-1.5 text-xs text-gray-300 hover:text-red-300 transition cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" /> Salir
-              </button>
+              <div className="flex items-center gap-2.5">
+                {/* BOTÓN DE CAMPANA: COBROS A REVENDEDORES Y REGISTRO DE ERRORES */}
+                <button
+                  onClick={() => setModalNotificaciones(true)}
+                  className="relative px-3.5 py-2 rounded-xl bg-[#142013] hover:bg-[#1E311C] border border-[#66FF00]/50 flex items-center gap-1.5 text-xs font-extrabold text-white cursor-pointer"
+                >
+                  <Bell className="w-4 h-4 text-[#66FF00]" />
+                  <span>Alertas / Cobros</span>
+                  {alertasTotalesBadge > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-black font-black text-[10px]">
+                      {alertasTotalesBadge}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => {
+                    localStorage.removeItem("moss_sesion_v3");
+                    setSesionActual(null);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-[#142013] hover:bg-red-950/60 border border-[#233820] flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" /> Salir
+                </button>
+              </div>
             </div>
           </header>
 
@@ -304,7 +474,7 @@ export default function MossCRM() {
               </div>
             </div>
 
-            {/* BARRA DE 6 PESTAÑAS (CON ESTADÍSTICAS) */}
+            {/* BARRA DE 6 PESTAÑAS */}
             <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 bg-[#0E170D]/90 p-2 rounded-2xl border border-[#264023] shadow-xl">
               <button
                 onClick={() => setTabActiva("ventas")}
@@ -459,6 +629,127 @@ export default function MossCRM() {
               />
             )}
           </main>
+
+          {/* ============================================================== */}
+          {/* MODAL CAMPANA DE NOTIFICACIONES: COBROS DE STOCK Y ERRORES     */}
+          {/* ============================================================== */}
+          {modalNotificaciones && (
+            <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
+              <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[90vh] overflow-y-auto animate-modal">
+                <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+                  <h3 className="font-black text-[#66FF00] text-base flex items-center gap-2">
+                    <Bell className="w-5 h-5" /> Centro de Cobros a Revendedores & Registro de Errores
+                  </h3>
+                  <button onClick={() => setModalNotificaciones(false)} className="text-gray-400 hover:text-white">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* SECCIÓN 1: CUENTAS DE MATRIZ SACADAS POR REVENDEDORES (PARA COBRARLES Y DAR CLIC EN PAGADO) */}
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-extrabold uppercase text-amber-300">
+                    🛒 Cuentas de Stock sacadas por Revendedores ({notificaciones.filter((n) => n.tipo === "venta_revendedor").length})
+                  </h4>
+
+                  {notificaciones.filter((n) => n.tipo === "venta_revendedor").length === 0 ? (
+                    <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
+                      Ningún revendedor ha sacado perfiles de tu Stock todavía.
+                    </p>
+                  ) : (
+                    notificaciones
+                      .filter((n) => n.tipo === "venta_revendedor")
+                      .map((n) => (
+                        <div
+                          key={n.id}
+                          className={`p-3.5 rounded-2xl border flex flex-wrap justify-between items-center gap-3 text-xs ${
+                            n.pagado
+                              ? "bg-[#070B06] border-[#1E331A] opacity-70"
+                              : "bg-amber-950/30 border-amber-500"
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <p className="font-black text-white text-sm">{n.titulo}</p>
+                            <p className="text-gray-300">{n.mensaje}</p>
+                            <p className="text-[10px] text-gray-500">{formatearFechaDMA(n.creado_en)}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {n.pagado ? (
+                              <span className="px-3 py-1.5 rounded-xl bg-green-900/40 text-green-300 font-bold">
+                                ✓ Pagado (Bs {n.monto_cobrar})
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => marcarCobroRevendedorComoPagado(n)}
+                                className="px-4 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(102,255,0,0.4)]"
+                              >
+                                <Check className="w-4 h-4" /> Marcar Pagado (+Bs {n.monto_cobrar})
+                              </button>
+                            )}
+                            <button
+                              onClick={async () => {
+                                await supabase.from("notificaciones_sistema").delete().eq("id", n.id);
+                                await recargarTodo();
+                              }}
+                              className="p-1.5 text-gray-500 hover:text-red-400"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                  )}
+                </div>
+
+                {/* SECCIÓN 2: CONSOLA DE ERRORES CON BOTÓN DE COPIAR PARA GEMINI */}
+                <div className="space-y-2.5 pt-3 border-t border-[#233820]">
+                  <h4 className="text-xs font-extrabold uppercase text-red-400">
+                    🛠️ Registro de Errores del Sistema ({notificaciones.filter((n) => n.tipo === "error").length})
+                  </h4>
+
+                  {notificaciones.filter((n) => n.tipo === "error").length === 0 ? (
+                    <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
+                      ✓ Sin errores registrados. Todo funciona limpio.
+                    </p>
+                  ) : (
+                    notificaciones
+                      .filter((n) => n.tipo === "error")
+                      .map((err) => (
+                        <div
+                          key={err.id}
+                          className="bg-red-950/30 border border-red-600/50 rounded-2xl p-3 flex flex-wrap justify-between items-center gap-2 text-xs"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold text-red-300">{err.titulo}</p>
+                            <p className="text-gray-300 font-mono text-[11px] break-all mt-0.5">{err.mensaje}</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(err.detalle_tecnico || err.mensaje);
+                                notificar("Error copiado para pegar en el chat");
+                              }}
+                              className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5" /> Copiar Error
+                            </button>
+                            <button
+                              onClick={async () => {
+                                await supabase.from("notificaciones_sistema").delete().eq("id", err.id);
+                                await recargarTodo();
+                              }}
+                              className="p-1.5 text-gray-400 hover:text-white"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {modalYolo && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">

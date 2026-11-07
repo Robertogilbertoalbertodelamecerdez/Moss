@@ -8,17 +8,15 @@ import {
   Wallet,
   Trash2,
   Truck,
-  UserPlus,
   Link2,
   Tv,
-  Plus,
   X,
-  Search,
   MailCheck,
   KeyRound,
   Users,
   Edit3,
-  Check
+  Check,
+  Layers
 } from "lucide-react";
 
 export default function ModuloConfig({
@@ -47,10 +45,11 @@ export default function ModuloConfig({
   const [busquedaRev, setBusquedaRev] = useState("");
   const [busquedaPlat, setBusquedaPlat] = useState("");
 
-  // Nueva Plataforma
+  // Nueva Plataforma + Precio Revendedor
   const [nuevaPlatNombre, setNuevaPlatNombre] = useState("");
   const [esPorInvitacion, setEsPorInvitacion] = useState(false);
   const [nuevaPlatCupos, setNuevaPlatCupos] = useState(5);
+  const [nuevaPlatPrecioRev, setNuevaPlatPrecioRev] = useState(15);
   const [nuevaPlatPidePass, setNuevaPlatPidePass] = useState(true);
   const [nuevaPlatPidePerfil, setNuevaPlatPidePerfil] = useState(true);
   const [nuevaPlatPidePin, setNuevaPlatPidePin] = useState(false);
@@ -60,26 +59,44 @@ export default function ModuloConfig({
   const [telProv, setTelProv] = useState("");
   const [editProv, setEditProv] = useState(null);
 
-  // Nuevo Revendedor / Edición
+  // Nuevo Revendedor con Usuario, PIN y Permiso de Stock
   const [nombreRev, setNombreRev] = useState("");
   const [telRev, setTelRev] = useState("");
+  const [userRev, setUserRev] = useState("");
+  const [pinRev, setPinRev] = useState("1234");
+  const [stockPermRev, setStockPermRev] = useState(false);
   const [editRev, setEditRev] = useState(null);
 
   const agregarNuevaPlataforma = async (e) => {
     e.preventDefault();
     const limpio = nuevaPlatNombre.trim();
     if (!limpio) return notificar("Escribe el nombre de la app", "error");
-    await supabase.from("plataformas").upsert([{
-      nombre: limpio,
-      perfiles_default: esPorInvitacion ? 1 : Number(nuevaPlatCupos || 5),
-      tiene_extra_2020: limpio.toLowerCase().includes("netflix"),
-      pide_pass: esPorInvitacion ? false : nuevaPlatPidePass,
-      pide_perfil: esPorInvitacion ? false : nuevaPlatPidePerfil,
-      pide_pin: esPorInvitacion ? false : nuevaPlatPidePin
-    }], { onConflict: "nombre" });
+    await supabase.from("plataformas").upsert(
+      [
+        {
+          nombre: limpio,
+          perfiles_default: esPorInvitacion ? 1 : Number(nuevaPlatCupos || 5),
+          precio_revendedor: Number(nuevaPlatPrecioRev || 15),
+          tiene_extra_2020: limpio.toLowerCase().includes("netflix"),
+          pide_pass: esPorInvitacion ? false : nuevaPlatPidePass,
+          pide_perfil: esPorInvitacion ? false : nuevaPlatPidePerfil,
+          pide_pin: esPorInvitacion ? false : nuevaPlatPidePin
+        }
+      ],
+      { onConflict: "nombre" }
+    );
     setNuevaPlatNombre("");
     await recargarTodo();
     notificar(`App ${limpio} guardada`);
+  };
+
+  const actualizarPrecioRevendedorPlat = async (nombrePlat, nuevoPrecio) => {
+    await supabase
+      .from("plataformas")
+      .update({ precio_revendedor: Number(nuevoPrecio || 0) })
+      .eq("nombre", nombrePlat);
+    await recargarTodo();
+    notificar(`Precio revendedor de ${nombrePlat} actualizado`);
   };
 
   const eliminarPlataforma = async (nombrePlat) => {
@@ -100,7 +117,10 @@ export default function ModuloConfig({
 
   const guardarEdicionProv = async () => {
     if (!editProv) return;
-    await supabase.from("proveedores").update({ nombre: editProv.nombre, telefono: editProv.telefono }).eq("id", editProv.id);
+    await supabase
+      .from("proveedores")
+      .update({ nombre: editProv.nombre, telefono: editProv.telefono })
+      .eq("id", editProv.id);
     setEditProv(null);
     await recargarTodo();
     notificar("Proveedor actualizado");
@@ -108,20 +128,55 @@ export default function ModuloConfig({
 
   const agregarRevendedor = async (e) => {
     e.preventDefault();
-    if (!nombreRev.trim() || !telRev.trim()) return;
-    await supabase.from("revendedores").insert([{ nombre: nombreRev.trim(), telefono: telRev.trim() }]);
+    if (!nombreRev.trim() || !telRev.trim()) return notificar("Ingresa nombre y teléfono", "error");
+    const usuarioFinal = userRev.trim() || nombreRev.trim().split(" ")[0].toLowerCase();
+    await supabase.from("revendedores").insert([
+      {
+        nombre: nombreRev.trim(),
+        telefono: telRev.trim(),
+        usuario: usuarioFinal,
+        pin: pinRev.trim() || "1234",
+        puede_ver_matrices: stockPermRev,
+        activo: true
+      }
+    ]);
     setNombreRev("");
     setTelRev("");
+    setUserRev("");
+    setPinRev("1234");
+    setStockPermRev(false);
     await recargarTodo();
-    notificar("Revendedor agregado");
+    notificar(`Revendedor creado (Usuario: ${usuarioFinal})`);
   };
 
   const guardarEdicionRev = async () => {
     if (!editRev) return;
-    await supabase.from("revendedores").update({ nombre: editRev.nombre, telefono: editRev.telefono }).eq("id", editRev.id);
+    await supabase
+      .from("revendedores")
+      .update({
+        nombre: editRev.nombre,
+        telefono: editRev.telefono,
+        usuario: editRev.usuario,
+        pin: editRev.pin,
+        puede_ver_matrices: editRev.puede_ver_matrices
+      })
+      .eq("id", editRev.id);
     setEditRev(null);
     await recargarTodo();
-    notificar("Revendedor actualizado");
+    notificar("Acceso y datos del revendedor actualizados");
+  };
+
+  const togglePermisoStockRevendedor = async (r) => {
+    await supabase
+      .from("revendedores")
+      .update({ puede_ver_matrices: !r.puede_ver_matrices })
+      .eq("id", r.id);
+    await recargarTodo();
+    notificar(
+      !r.puede_ver_matrices
+        ? `${r.nombre} ahora puede sacar cuentas de Stock`
+        : `Permiso de Stock retirado a ${r.nombre}`
+    );
   };
 
   const guardarAjusteEnSupabase = async (clave, valor) => {
@@ -143,7 +198,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_3.0",
+      version: "MOSS_CRM_4.0_PORTAL_REVENDEDORES",
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
       proveedores: prRes.data || [],
@@ -196,9 +251,9 @@ export default function ModuloConfig({
         <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 flex items-center justify-between">
           <div>
             <h3 className="font-black text-white text-sm flex items-center gap-2">
-              <Tv className="w-4 h-4 text-[#66FF00]" /> Plataformas ({plataformasList.length})
+              <Tv className="w-4 h-4 text-[#66FF00]" /> Plataformas y Precios ({plataformasList.length})
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Apps con clave o por invitación</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Define precios para revendedores</p>
           </div>
           <button onClick={() => setModalPlataformas(true)} className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
             Administrar
@@ -220,9 +275,9 @@ export default function ModuloConfig({
         <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 flex items-center justify-between">
           <div>
             <h3 className="font-black text-white text-sm flex items-center gap-2">
-              <Users className="w-4 h-4 text-[#66FF00]" /> Revendedores ({revendedores.length})
+              <Users className="w-4 h-4 text-[#66FF00]" /> Revendedores y Accesos ({revendedores.length})
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Agregar, buscar o editar</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Usuarios, PIN y permiso de Stock</p>
           </div>
           <button onClick={() => setModalRevendedores(true)} className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
             Administrar
@@ -299,12 +354,14 @@ export default function ModuloConfig({
         </div>
       </div>
 
-      {/* MODAL PLATAFORMAS */}
+      {/* ============================================================== */}
+      {/* MODAL PLATAFORMAS + PRECIO MAYORISTA PARA REVENDEDORES         */}
+      {/* ============================================================== */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-xl w-full space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00]">Plataformas ({plataformasList.length})</h3>
+              <h3 className="font-black text-[#66FF00]">Plataformas y Precio Revendedor ({plataformasList.length})</h3>
               <button onClick={() => setModalPlataformas(false)} className="text-gray-400"><X className="w-5 h-5" /></button>
             </div>
 
@@ -314,31 +371,39 @@ export default function ModuloConfig({
                   <KeyRound className="w-3.5 h-3.5 inline mr-1" /> Con Clave
                 </button>
                 <button type="button" onClick={() => setEsPorInvitacion(true)} className={`py-2 rounded-xl text-xs font-bold border ${esPorInvitacion ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#2A4226]"}`}>
-                  <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación (Solo Correo)
+                  <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación
                 </button>
               </div>
-              <input type="text" placeholder="Nombre de la App (ej: Gemini Pro, Crunchyroll...)" value={nuevaPlatNombre} onChange={(e) => setNuevaPlatNombre(e.target.value)} className="w-full bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-              {!esPorInvitacion && (
-                <div className="flex gap-3 text-xs text-gray-300">
-                  <label><input type="checkbox" checked={nuevaPlatPidePass} onChange={(e) => setNuevaPlatPidePass(e.target.checked)} /> Clave</label>
-                  <label><input type="checkbox" checked={nuevaPlatPidePerfil} onChange={(e) => setNuevaPlatPidePerfil(e.target.checked)} /> Perfil</label>
-                  <label><input type="checkbox" checked={nuevaPlatPidePin} onChange={(e) => setNuevaPlatPidePin(e.target.checked)} /> PIN</label>
-                </div>
-              )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input type="text" placeholder="Nombre App" value={nuevaPlatNombre} onChange={(e) => setNuevaPlatNombre(e.target.value)} className="sm:col-span-2 bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
+                <input type="number" step="0.5" placeholder="Precio Revendedor (Bs)" value={nuevaPlatPrecioRev} onChange={(e) => setNuevaPlatPrecioRev(e.target.value)} className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold" />
+              </div>
               <button type="submit" className="w-full py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer">+ Guardar Plataforma</button>
             </form>
 
             <input type="text" placeholder="Buscar app..." value={busquedaPlat} onChange={(e) => setBusquedaPlat(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto">
               {plataformasList
                 .filter((p) => !busquedaPlat.trim() || p.nombre.toLowerCase().includes(busquedaPlat.toLowerCase()))
                 .map((p) => (
-                  <div key={p.nombre} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2.5 flex justify-between items-center text-xs">
+                  <div key={p.nombre} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-3 flex justify-between items-center text-xs gap-2">
                     <div>
                       <p className="font-bold text-white">{p.nombre}</p>
-                      <span className="text-[10px] text-[#66FF00]">{p.pidePass === false ? "📩 Por Invitación" : "🔑 Con Credenciales"}</span>
+                      <span className="text-[10px] text-gray-400">{p.pidePass === false ? "📩 Invitación" : "🔑 Clave"}</span>
                     </div>
-                    <button onClick={() => eliminarPlataforma(p.nombre)} className="text-gray-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-orange-300">Rev Bs:</span>
+                      <input
+                        type="number"
+                        defaultValue={p.precioRevendedor ?? 15}
+                        onBlur={(e) => actualizarPrecioRevendedorPlat(p.nombre, e.target.value)}
+                        className="w-14 bg-[#111A10] border border-[#66FF00]/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
+                        title="Cambia el precio para revendedor y haz clic afuera para guardar"
+                      />
+                      <button onClick={() => eliminarPlataforma(p.nombre)} className="text-gray-500 hover:text-red-400 ml-1">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
             </div>
@@ -346,7 +411,9 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* MODAL PROVEEDORES (CON EDICIÓN) */}
+      {/* ============================================================== */}
+      {/* MODAL PROVEEDORES                                              */}
+      {/* ============================================================== */}
       {modalProveedores && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
@@ -388,41 +455,84 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* MODAL REVENDEDORES (CON EDICIÓN) */}
+      {/* ============================================================== */}
+      {/* MODAL REVENDEDORES: USUARIO, PIN Y PERMISO DE MATRICES STOCK   */}
+      {/* ============================================================== */}
       {modalRevendedores && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
-          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00]">Mis Revendedores ({revendedores.length})</h3>
+              <h3 className="font-black text-[#66FF00]">Administrar Revendedores y Accesos ({revendedores.length})</h3>
               <button onClick={() => setModalRevendedores(false)} className="text-gray-400"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={agregarRevendedor} className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input type="text" placeholder="Nombre Revendedor" value={nombreRev} onChange={(e) => setNombreRev(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-              <input type="text" placeholder="Teléfono" value={telRev} onChange={(e) => setTelRev(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-              <button type="submit" className="bg-[#66FF00] text-black font-extrabold rounded-xl p-2 text-xs cursor-pointer">+ Agregar</button>
+
+            <form onSubmit={agregarRevendedor} className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3">
+              <p className="text-xs font-bold text-[#66FF00]">+ Registrar Nuevo Revendedor con Acceso Propio</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <input type="text" placeholder="Nombre *" value={nombreRev} onChange={(e) => setNombreRev(e.target.value)} className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
+                <input type="text" placeholder="Teléfono *" value={telRev} onChange={(e) => setTelRev(e.target.value)} className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
+                <input type="text" placeholder="Usuario Login" value={userRev} onChange={(e) => setUserRev(e.target.value)} className="bg-[#111A10] border border-[#66FF00]/60 rounded-xl p-2 text-xs text-white" />
+                <input type="text" placeholder="PIN / Clave" value={pinRev} onChange={(e) => setPinRev(e.target.value)} className="bg-[#111A10] border border-[#66FF00]/60 rounded-xl p-2 text-xs text-white font-mono" />
+              </div>
+              <div className="flex flex-wrap justify-between items-center gap-2 pt-1">
+                <label className="flex items-center gap-2 text-xs text-gray-200 cursor-pointer">
+                  <input type="checkbox" checked={stockPermRev} onChange={(e) => setStockPermRev(e.target.checked)} />
+                  <span>📦 Habilitar apartado de Matrices (Puede sacar cupos libres de mi Stock)</span>
+                </label>
+                <button type="submit" className="px-5 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer">
+                  + Crear Revendedor
+                </button>
+              </div>
             </form>
+
             <input type="text" placeholder="Buscar revendedor..." value={busquedaRev} onChange={(e) => setBusquedaRev(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-            <div className="space-y-2 max-h-64 overflow-y-auto">
+
+            <div className="space-y-2.5 max-h-72 overflow-y-auto">
               {revendedores
                 .filter((r) => !busquedaRev.trim() || r.nombre.toLowerCase().includes(busquedaRev.toLowerCase()) || r.telefono.includes(busquedaRev))
                 .map((r) => (
-                  <div key={r.id} className="bg-[#070B06] border border-[#1E331A] p-2.5 rounded-xl flex justify-between items-center text-xs">
+                  <div key={r.id} className="bg-[#070B06] border border-[#1E331A] p-3 rounded-2xl space-y-2 text-xs">
                     {editRev?.id === r.id ? (
-                      <div className="flex gap-1.5 flex-1 mr-2">
-                        <input type="text" value={editRev.nombre} onChange={(e) => setEditRev({ ...editRev, nombre: e.target.value })} className="bg-black border border-[#66FF00] rounded px-2 py-1 text-xs text-white w-1/2" />
-                        <input type="text" value={editRev.telefono} onChange={(e) => setEditRev({ ...editRev, telefono: e.target.value })} className="bg-black border border-[#66FF00] rounded px-2 py-1 text-xs text-white w-1/2" />
-                        <button onClick={guardarEdicionRev} className="text-[#66FF00]"><Check className="w-4 h-4" /></button>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-center">
+                        <input type="text" value={editRev.nombre} onChange={(e) => setEditRev({ ...editRev, nombre: e.target.value })} placeholder="Nombre" className="bg-black border border-[#66FF00] rounded-lg p-1.5 text-xs text-white" />
+                        <input type="text" value={editRev.telefono} onChange={(e) => setEditRev({ ...editRev, telefono: e.target.value })} placeholder="Teléfono" className="bg-black border border-[#66FF00] rounded-lg p-1.5 text-xs text-white" />
+                        <input type="text" value={editRev.usuario || ""} onChange={(e) => setEditRev({ ...editRev, usuario: e.target.value })} placeholder="Usuario" className="bg-black border border-[#66FF00] rounded-lg p-1.5 text-xs text-white" />
+                        <input type="text" value={editRev.pin || ""} onChange={(e) => setEditRev({ ...editRev, pin: e.target.value })} placeholder="PIN" className="bg-black border border-[#66FF00] rounded-lg p-1.5 text-xs text-white font-mono" />
+                        <button onClick={guardarEdicionRev} className="py-1.5 bg-[#66FF00] text-black font-black rounded-lg text-xs cursor-pointer">
+                          Guardar
+                        </button>
                       </div>
                     ) : (
-                      <div>
-                        <p className="font-bold text-white">{r.nombre}</p>
-                        <p className="text-[#66FF00] font-mono">📞 {r.telefono}</p>
+                      <div className="flex flex-wrap justify-between items-center gap-2">
+                        <div>
+                          <p className="font-black text-white text-sm">{r.nombre} · <span className="text-[#66FF00] font-mono">📞 {r.telefono}</span></p>
+                          <p className="text-gray-400 text-[11px] mt-0.5">
+                            🔑 Usuario: <b className="text-white font-mono">{r.usuario || r.nombre.toLowerCase()}</b> | PIN: <b className="text-[#66FF00] font-mono">{r.pin || "1234"}</b>
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => togglePermisoStockRevendedor(r)}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold border flex items-center gap-1 cursor-pointer ${
+                              r.puede_ver_matrices
+                                ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                                : "bg-gray-900 text-gray-400 border-gray-700"
+                            }`}
+                          >
+                            <Layers className="w-3.5 h-3.5" />
+                            {r.puede_ver_matrices ? "✓ Acceso a Matrices Activo" : "Sin Acceso a Matrices"}
+                          </button>
+
+                          <button onClick={() => setEditRev({ ...r, usuario: r.usuario || r.nombre.toLowerCase(), pin: r.pin || "1234" })} className="p-1.5 text-gray-400 hover:text-[#66FF00]">
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button onClick={async () => { await supabase.from("revendedores").delete().eq("id", r.id); await recargarTodo(); }} className="p-1.5 text-gray-500 hover:text-red-400">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     )}
-                    <div className="flex gap-2">
-                      <button onClick={() => setEditRev(r)} className="text-gray-400 hover:text-[#66FF00]"><Edit3 className="w-4 h-4" /></button>
-                      <button onClick={async () => { await supabase.from("revendedores").delete().eq("id", r.id); await recargarTodo(); }} className="text-gray-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
-                    </div>
                   </div>
                 ))}
             </div>
