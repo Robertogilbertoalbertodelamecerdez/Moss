@@ -32,7 +32,7 @@ import {
 
 export default function MossCRM() {
   const [montado, setMontado] = useState(false);
-  const [sesionActual, setSesionActual] = useState(null); // { rol: 'admin' | 'revendedor', revendedorId: null }
+  const [sesionActual, setSesionActual] = useState(null);
   const [userInput, setUserInput] = useState("");
   const [pinInput, setPinInput] = useState("");
   const [toast, setToast] = useState(null);
@@ -50,6 +50,7 @@ export default function MossCRM() {
   const [proveedores, setProveedores] = useState([]);
   const [revendedores, setRevendedores] = useState([]);
   const [movimientosYolo, setMovimientosYolo] = useState([]);
+  const [movimientosRevendedor, setMovimientosRevendedor] = useState([]);
   const [notificaciones, setNotificaciones] = useState([]);
 
   const [modalYolo, setModalYolo] = useState(false);
@@ -57,7 +58,6 @@ export default function MossCRM() {
   const [descAjusteYolo, setDescAjusteYolo] = useState("");
   const [afectaGanancia, setAfectaGanancia] = useState(false);
 
-  // Registrar cualquier error en la bandeja para que Mateus lo copie con un botón
   const registrarErrorSistema = useCallback(async (origen, mensajeError, usuarioNombre = "Sistema") => {
     try {
       await supabase.from("notificaciones_sistema").insert([
@@ -69,16 +69,16 @@ export default function MossCRM() {
         }
       ]);
     } catch {
-      // Silencioso si falla red
+      // Silencioso
     }
   }, []);
 
   const notificar = useCallback(
-    (texto, tipo = "exito") => {
+    (texto, tipo = "exito", guardarEnConsola = false) => {
       const id = Date.now();
       setToast({ id, texto, tipo });
-      if (tipo === "error") {
-        registrarErrorSistema("Alerta UI", texto, sesionActual?.nombre || "Admin");
+      if (tipo === "error" && guardarEnConsola) {
+        registrarErrorSistema("Sistema", texto, sesionActual?.nombre || "Admin");
       }
       setTimeout(() => {
         setToast((actual) => (actual?.id === id ? null : actual));
@@ -101,13 +101,14 @@ export default function MossCRM() {
   }, []);
 
   const recargarTodo = async () => {
-    const [mRes, sRes, cRes, pRes, revRes, yRes, platRes, ajuRes, notRes] = await Promise.all([
+    const [mRes, sRes, cRes, pRes, revRes, yRes, movRevRes, platRes, ajuRes, notRes] = await Promise.all([
       supabase.from("matrices_stock").select("*, perfiles_matriz(*)").order("creado_en", { ascending: false }),
       supabase.from("suscripciones").select("*").order("creado_en", { ascending: false }),
       supabase.from("clientes").select("*").order("creado_en", { ascending: false }),
       supabase.from("proveedores").select("*").order("creado_en", { ascending: false }),
       supabase.from("revendedores").select("*").order("creado_en", { ascending: false }),
       supabase.from("movimientos_yolo").select("*").order("fecha", { ascending: false }),
+      supabase.from("movimientos_revendedor").select("*").order("fecha", { ascending: false }),
       supabase.from("plataformas").select("*").order("creado_en", { ascending: true }),
       supabase.from("ajustes_sistema").select("*"),
       supabase.from("notificaciones_sistema").select("*").order("creado_en", { ascending: false }).limit(60)
@@ -119,6 +120,7 @@ export default function MossCRM() {
     if (pRes.data) setProveedores(pRes.data);
     if (revRes.data) setRevendedores(revRes.data);
     if (yRes.data) setMovimientosYolo(yRes.data);
+    if (movRevRes.data) setMovimientosRevendedor(movRevRes.data);
     if (notRes.data) setNotificaciones(notRes.data);
 
     if (platRes.data && platRes.data.length > 0) {
@@ -149,7 +151,6 @@ export default function MossCRM() {
     const u = userInput.trim().toLowerCase();
     const p = pinInput.trim();
 
-    // 1. Verificar si es Mateus (Admin)
     if (u === AUTH_CONFIG.usuario.toLowerCase() && p === AUTH_CONFIG.pin) {
       const nuevaSesion = { rol: "admin", nombre: "Mateus" };
       localStorage.setItem("moss_sesion_v3", JSON.stringify(nuevaSesion));
@@ -158,7 +159,6 @@ export default function MossCRM() {
       return notificar("¡Bienvenido a tu Panel Admin, Mateus!");
     }
 
-    // 2. Verificar si es un Revendedor registrado en Supabase
     const revEncontrado = revendedores.find(
       (r) =>
         r.activo !== false &&
@@ -178,10 +178,9 @@ export default function MossCRM() {
       return notificar(`¡Bienvenido, ${revEncontrado.nombre}!`);
     }
 
-    notificar("Usuario o PIN incorrecto", "error");
+    notificar("Usuario o PIN incorrecto (Verifica tus datos)", "error", false);
   };
 
-  // BOTÓN "¡PAGADO!" EN LA CAMPANA DE NOTIFICACIONES (Cuando el revendedor te paga el cupo que sacó)
   const marcarCobroRevendedorComoPagado = async (notif) => {
     await supabase
       .from("notificaciones_sistema")
@@ -336,9 +335,6 @@ export default function MossCRM() {
           </form>
         </div>
       ) : sesionActual.rol === "revendedor" ? (
-        /* ============================================================== */
-        /* VISTA PRIVADA PARA REVENDEDORES                                */
-        /* ============================================================== */
         <>
           <header className="border-b border-[#66FF00]/20 bg-[#0A1209]/90 sticky top-0 z-40 backdrop-blur-xl">
             <div className="max-w-5xl mx-auto px-4 py-3.5 flex justify-between items-center">
@@ -371,6 +367,9 @@ export default function MossCRM() {
                 revendedor={revendedorLogueadoObj}
                 suscripciones={suscripciones}
                 matrices={matrices}
+                movimientosRevendedor={movimientosRevendedor.filter(
+                  (m) => m.revendedor_id === revendedorLogueadoObj.id
+                )}
                 plataformasList={plataformasList}
                 recargarTodo={recargarTodo}
                 notificar={notificar}
@@ -384,9 +383,6 @@ export default function MossCRM() {
           </main>
         </>
       ) : (
-        /* ============================================================== */
-        /* VISTA COMPLETA DE ADMINISTRADOR (MATEUS)                       */
-        /* ============================================================== */
         <>
           <header className="border-b border-[#66FF00]/20 bg-[#0A1209]/85 sticky top-0 z-40 backdrop-blur-xl shadow-[0_4px_30px_rgba(0,0,0,0.6)]">
             <div className="max-w-6xl mx-auto px-4 py-3.5 flex justify-between items-center">
@@ -406,7 +402,6 @@ export default function MossCRM() {
               </div>
 
               <div className="flex items-center gap-2.5">
-                {/* BOTÓN DE CAMPANA: COBROS A REVENDEDORES Y REGISTRO DE ERRORES */}
                 <button
                   onClick={() => setModalNotificaciones(true)}
                   className="relative px-3.5 py-2 rounded-xl bg-[#142013] hover:bg-[#1E311C] border border-[#66FF00]/50 flex items-center gap-1.5 text-xs font-extrabold text-white cursor-pointer"
@@ -434,7 +429,6 @@ export default function MossCRM() {
           </header>
 
           <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
-            {/* TARJETAS FINANCIERAS */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
@@ -474,7 +468,6 @@ export default function MossCRM() {
               </div>
             </div>
 
-            {/* BARRA DE 6 PESTAÑAS */}
             <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 bg-[#0E170D]/90 p-2 rounded-2xl border border-[#264023] shadow-xl">
               <button
                 onClick={() => setTabActiva("ventas")}
@@ -570,9 +563,12 @@ export default function MossCRM() {
             {tabActiva === "estadisticas" && (
               <ModuloEstadisticas
                 suscripciones={suscripciones}
+                matrices={matrices}
                 movimientosYolo={movimientosYolo}
                 revendedores={revendedores}
                 nombreBilletera={nombreBilletera}
+                recargarTodo={recargarTodo}
+                notificar={notificar}
               />
             )}
 
@@ -592,6 +588,7 @@ export default function MossCRM() {
                 suscripciones={suscripciones}
                 matrices={matrices}
                 proveedores={proveedores}
+                revendedores={revendedores}
                 recargarTodo={recargarTodo}
                 notificar={notificar}
               />
@@ -630,9 +627,6 @@ export default function MossCRM() {
             )}
           </main>
 
-          {/* ============================================================== */}
-          {/* MODAL CAMPANA DE NOTIFICACIONES: COBROS DE STOCK Y ERRORES     */}
-          {/* ============================================================== */}
           {modalNotificaciones && (
             <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
               <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[90vh] overflow-y-auto animate-modal">
@@ -645,7 +639,6 @@ export default function MossCRM() {
                   </button>
                 </div>
 
-                {/* SECCIÓN 1: CUENTAS DE MATRIZ SACADAS POR REVENDEDORES (PARA COBRARLES Y DAR CLIC EN PAGADO) */}
                 <div className="space-y-2.5">
                   <h4 className="text-xs font-extrabold uppercase text-amber-300">
                     🛒 Cuentas de Stock sacadas por Revendedores ({notificaciones.filter((n) => n.tipo === "venta_revendedor").length})
@@ -701,11 +694,23 @@ export default function MossCRM() {
                   )}
                 </div>
 
-                {/* SECCIÓN 2: CONSOLA DE ERRORES CON BOTÓN DE COPIAR PARA GEMINI */}
                 <div className="space-y-2.5 pt-3 border-t border-[#233820]">
-                  <h4 className="text-xs font-extrabold uppercase text-red-400">
-                    🛠️ Registro de Errores del Sistema ({notificaciones.filter((n) => n.tipo === "error").length})
-                  </h4>
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-xs font-extrabold uppercase text-red-400">
+                      🛠️ Registro Técnico de Errores ({notificaciones.filter((n) => n.tipo === "error").length})
+                    </h4>
+                    {notificaciones.some((n) => n.tipo === "error") && (
+                      <button
+                        onClick={async () => {
+                          await supabase.from("notificaciones_sistema").delete().eq("tipo", "error");
+                          await recargarTodo();
+                        }}
+                        className="text-[11px] text-gray-400 hover:text-white underline cursor-pointer"
+                      >
+                        Limpiar todos
+                      </button>
+                    )}
+                  </div>
 
                   {notificaciones.filter((n) => n.tipo === "error").length === 0 ? (
                     <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">

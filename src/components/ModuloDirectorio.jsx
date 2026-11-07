@@ -33,6 +33,7 @@ export default function ModuloDirectorio({
   const [busqueda, setBusqueda] = useState("");
   const [filtroPlataforma, setFiltroPlataforma] = useState("Todas");
   const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [filtroRevendedorId, setFiltroRevendedorId] = useState("todos");
 
   const [mensajeActivo, setMensajeActivo] = useState(null);
 
@@ -83,34 +84,46 @@ export default function ModuloDirectorio({
     setMensajeActivo(msg);
   };
 
-  const suscripcionesFiltradas = suscripciones.filter((s) => {
-    if (filtroEstado === "papelera") {
-      if (!s.en_papelera) return false;
-    } else {
-      if (s.en_papelera) return false;
-    }
+  // Filtradas y ordenadas por hora exacta de registro (la última venta arriba)
+  const suscripcionesFiltradas = suscripciones
+    .filter((s) => {
+      if (filtroEstado === "papelera") {
+        if (!s.en_papelera) return false;
+      } else {
+        if (s.en_papelera) return false;
+      }
 
-    if (filtroPlataforma !== "Todas" && s.plataforma !== filtroPlataforma) return false;
+      if (filtroPlataforma !== "Todas" && s.plataforma !== filtroPlataforma) return false;
 
-    const dias = calcularDiasRestantes(s.fecha_corte);
-    if (filtroEstado === "vence_3" && (dias > 3 || s.estado !== "Activa")) return false;
-    if (filtroEstado === "vence_1" && (dias > 1 || s.estado !== "Activa")) return false;
-    if (filtroEstado === "caidos" && s.estado !== "Caida") return false;
-    if (filtroEstado === "revendedores" && s.tipo_comprador !== "revendedor") return false;
-    if (filtroEstado === "reembolsados" && s.estado !== "Reembolsada") return false;
+      const dias = calcularDiasRestantes(s.fecha_corte);
+      if (filtroEstado === "vence_3" && (dias > 3 || s.estado !== "Activa")) return false;
+      if (filtroEstado === "vence_1" && (dias > 1 || s.estado !== "Activa")) return false;
+      if (filtroEstado === "caidos" && s.estado !== "Caida") return false;
+      if (filtroEstado === "revendedores" && s.tipo_comprador !== "revendedor") return false;
+      if (filtroEstado === "reembolsados" && s.estado !== "Reembolsada") return false;
 
-    if (busqueda.trim() !== "") {
-      const q = busqueda.toLowerCase();
-      const coincide =
-        (s.nombre_cliente || "").toLowerCase().includes(q) ||
-        (s.telefono_cliente || "").toLowerCase().includes(q) ||
-        (s.correo_cuenta || "").toLowerCase().includes(q) ||
-        (s.nombre_perfil || "").toLowerCase().includes(q) ||
-        (s.nombre_proveedor || "").toLowerCase().includes(q);
-      if (!coincide) return false;
-    }
-    return true;
-  });
+      if (filtroRevendedorId !== "todos") {
+        const revObj = revendedores.find((r) => r.id === filtroRevendedorId);
+        const coincide =
+          s.revendedor_id === filtroRevendedorId || (revObj && s.telefono_cliente === revObj.telefono);
+        if (!coincide) return false;
+      }
+
+      if (busqueda.trim() !== "") {
+        const q = busqueda.toLowerCase();
+        const coincide =
+          (s.nombre_cliente || "").toLowerCase().includes(q) ||
+          (s.telefono_cliente || "").toLowerCase().includes(q) ||
+          (s.nombre_cliente_final || "").toLowerCase().includes(q) ||
+          (s.telefono_cliente_final || "").toLowerCase().includes(q) ||
+          (s.correo_cuenta || "").toLowerCase().includes(q) ||
+          (s.nombre_perfil || "").toLowerCase().includes(q) ||
+          (s.nombre_proveedor || "").toLowerCase().includes(q);
+        if (!coincide) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
 
   const toggleCaido = async (s) => {
     const nuevo = s.estado === "Caida" ? "Activa" : "Caida";
@@ -189,13 +202,15 @@ export default function ModuloDirectorio({
       .single();
 
     if (Number(costoReemp) > 0) {
-      await supabase.from("movimientos_yolo").insert([{
-        tipo: "Costo Proveedor",
-        monto: -Math.abs(Number(costoReemp)),
-        afecta_ganancia_neta: true,
-        descripcion: `Costo reemplazo a ${subReemplazo.nombre_cliente}`,
-        referencia_id: subReemplazo.id
-      }]);
+      await supabase.from("movimientos_yolo").insert([
+        {
+          tipo: "Costo Proveedor",
+          monto: -Math.abs(Number(costoReemp)),
+          afecta_ganancia_neta: true,
+          descripcion: `Costo reemplazo a ${subReemplazo.nombre_cliente}`,
+          referencia_id: subReemplazo.id
+        }
+      ]);
     }
 
     setSubReemplazo(null);
@@ -204,7 +219,6 @@ export default function ModuloDirectorio({
     if (actualizada) abrirMensajeDeSuscripcion(actualizada, "REEMPLAZO DE CUENTA");
   };
 
-  // GUARDAR EDICIÓN TOTAL (Incluye Fecha de Venta, Fecha de Corte, Precio y Costo)
   const guardarEdicionManual = async (e) => {
     e.preventDefault();
 
@@ -216,6 +230,9 @@ export default function ModuloDirectorio({
       tipo_cuenta: subEditar.tipo_cuenta || "1 Dispositivo",
       nombre_cliente: subEditar.nombre_cliente,
       telefono_cliente: subEditar.telefono_cliente,
+      nombre_cliente_final: subEditar.nombre_cliente_final || null,
+      telefono_cliente_final: subEditar.telefono_cliente_final || null,
+      precio_venta_revendedor: Number(subEditar.precio_venta_revendedor || 0),
       correo_cuenta: subEditar.correo_cuenta,
       password_cuenta: subEditar.password_cuenta,
       nombre_perfil: subEditar.nombre_perfil,
@@ -276,7 +293,6 @@ export default function ModuloDirectorio({
       .select()
       .single();
 
-    // Sincronizar también el monto del ingreso en movimientos_yolo si se corrigió el precio
     await supabase
       .from("movimientos_yolo")
       .update({ monto: Math.abs(Number(subEditar.precio_venta)) })
@@ -303,13 +319,15 @@ export default function ModuloDirectorio({
       await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subReembolso.perfil_id);
     }
     await supabase.from("suscripciones").update({ estado: "Reembolsada", perfil_id: null }).eq("id", subReembolso.id);
-    await supabase.from("movimientos_yolo").insert([{
-      tipo: "Reembolso",
-      monto: -Math.abs(Number(montoReembolsoCalc)),
-      afecta_ganancia_neta: true,
-      descripcion: `Reembolso a ${subReembolso.nombre_cliente}`,
-      referencia_id: subReembolso.id
-    }]);
+    await supabase.from("movimientos_yolo").insert([
+      {
+        tipo: "Reembolso",
+        monto: -Math.abs(Number(montoReembolsoCalc)),
+        afecta_ganancia_neta: true,
+        descripcion: `Reembolso a ${subReembolso.nombre_cliente}`,
+        referencia_id: subReembolso.id
+      }
+    ]);
     setSubReembolso(null);
     await recargarTodo();
     notificar(`Reembolso de Bs ${montoReembolsoCalc} aplicado`);
@@ -334,13 +352,15 @@ export default function ModuloDirectorio({
 
   const restaurarDePapelera = async (s) => {
     await supabase.from("suscripciones").update({ en_papelera: false }).eq("id", s.id);
-    await supabase.from("movimientos_yolo").insert([{
-      tipo: "Ingreso Venta",
-      monto: Number(s.precio_venta),
-      afecta_ganancia_neta: true,
-      descripcion: `Venta restaurada (${s.nombre_cliente})`,
-      referencia_id: s.id
-    }]);
+    await supabase.from("movimientos_yolo").insert([
+      {
+        tipo: "Ingreso Venta",
+        monto: Number(s.precio_venta),
+        afecta_ganancia_neta: true,
+        descripcion: `Venta restaurada (${s.nombre_cliente})`,
+        referencia_id: s.id
+      }
+    ]);
     await recargarTodo();
     notificar("Venta restaurada");
   };
@@ -357,14 +377,13 @@ export default function ModuloDirectorio({
 
   return (
     <div className="space-y-5">
-      {/* BUSCADOR Y FILTROS */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 space-y-3">
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="w-4 h-4 text-[#66FF00] absolute left-3.5 top-3" />
             <input
               type="text"
-              placeholder="Buscar por teléfono, cliente, revendedor, correo, perfil o proveedor..."
+              placeholder="Buscar por teléfono, cliente, cliente de revendedor, correo, perfil o proveedor..."
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-sm text-white focus:border-[#66FF00] outline-none"
@@ -381,12 +400,25 @@ export default function ModuloDirectorio({
               <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
             ))}
           </select>
+
+          <select
+            value={filtroRevendedorId}
+            onChange={(e) => setFiltroRevendedorId(e.target.value)}
+            className="bg-[#070B06] border border-purple-500/50 rounded-xl px-3 py-2 text-xs text-purple-200 font-bold"
+          >
+            <option value="todos">-- Filtrar por Revendedor (Todos) --</option>
+            {revendedores.map((r) => (
+              <option key={r.id} value={r.id}>
+                🤝 {r.nombre} ({r.telefono})
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {[
-            { id: "todos", label: `Todos Activos (${suscripciones.filter((s) => !s.en_papelera).length})` },
-            { id: "revendedores", label: "🤝 Ventas a Revendedores" },
+            { id: "todos", label: `Todos por Hora (${suscripciones.filter((s) => !s.en_papelera).length})` },
+            { id: "revendedores", label: "🤝 Solo Revendedores" },
             { id: "vence_3", label: "Por Vencer (≤ 3 días)" },
             { id: "vence_1", label: "Falta 1 Día" },
             { id: "caidos", label: "⚠️ Caídos" },
@@ -408,7 +440,7 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
-      {/* LISTA DE SUSCRIPCIONES */}
+      {/* LISTA DE SUSCRIPCIONES (LA ÚLTIMA REGISTRADA ARRIBA) */}
       <div className="space-y-3">
         {suscripcionesFiltradas.length === 0 ? (
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-sm">
@@ -417,6 +449,14 @@ export default function ModuloDirectorio({
         ) : (
           suscripcionesFiltradas.map((s) => {
             const dias = calcularDiasRestantes(s.fecha_corte);
+            const horaReg = s.creado_en
+              ? new Date(s.creado_en).toLocaleTimeString("es-BO", {
+                  timeZone: "America/La_Paz",
+                  hour: "2-digit",
+                  minute: "2-digit"
+                })
+              : "";
+
             return (
               <div
                 key={s.id}
@@ -462,17 +502,31 @@ export default function ModuloDirectorio({
 
                     <h3 className="font-bold text-base pt-0.5">
                       {s.nombre_cliente} · <span className="text-[#66FF00] font-mono">{s.telefono_cliente}</span>
+                      {s.tipo_comprador === "revendedor" && (
+                        <span className="text-xs text-purple-300 ml-2">
+                          👉 Cliente Final:{" "}
+                          <b>{s.nombre_cliente_final || "Sin anotar"}</b>{" "}
+                          {s.telefono_cliente_final ? `(📞 ${s.telefono_cliente_final})` : ""}
+                        </span>
+                      )}
                     </h3>
+
                     <p className="text-xs text-gray-300">
                       Correo: <span className="font-mono text-white">{s.correo_cuenta}</span>
                       {s.password_cuenta ? (
                         <> | Clave: <span className="font-mono text-[#66FF00]">{s.password_cuenta}</span></>
                       ) : null}
                     </p>
+
                     <p className="text-xs text-gray-400">
                       {s.nombre_perfil ? `Perfil: ${s.nombre_perfil} · ` : ""}
                       {s.pin_perfil ? `PIN: ${s.pin_perfil} · ` : ""}
-                      Pagó: <b className="text-white">Bs {s.precio_venta}</b>
+                      Te pagó: <b className="text-white">Bs {s.precio_venta}</b>
+                      {s.tipo_comprador === "revendedor" && Number(s.precio_venta_revendedor) > 0 && (
+                        <span className="text-[#66FF00] font-bold ml-2">
+                          · Revendedor la vendió en: Bs {Number(s.precio_venta_revendedor).toFixed(2)}
+                        </span>
+                      )}
                     </p>
                   </div>
 
@@ -481,7 +535,7 @@ export default function ModuloDirectorio({
                       {dias < 0 ? `Venció hace ${Math.abs(dias)}d` : `Quedan ${dias} día(s)`}
                     </p>
                     <p className="text-[11px] text-gray-400">
-                      Venta: <span className="text-gray-300">{formatearFechaDMA(s.fecha_venta)}</span>
+                      Venta: <span className="text-gray-300">{formatearFechaDMA(s.fecha_venta)} {horaReg}</span>
                     </p>
                     <p className="text-[11px] text-gray-400">
                       Corte: <b className="text-gray-200">{formatearFechaDMA(s.fecha_corte)}</b>
@@ -574,9 +628,7 @@ export default function ModuloDirectorio({
         )}
       </div>
 
-      {/* ================================================================= */}
-      {/* VENTANA EMERGENTE: EDICIÓN TOTAL DE LA VENTA (INCLUYE FECHA VENTA) */}
-      {/* ================================================================= */}
+      {/* MODAL EDICIÓN TOTAL */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -591,7 +643,7 @@ export default function ModuloDirectorio({
             </div>
 
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
-              <label className="text-xs font-bold text-[#66FF00]">1. Tipo de Comprador (Cliente o Revendedor):</label>
+              <label className="text-xs font-bold text-[#66FF00]">1. Tipo de Comprador:</label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -616,118 +668,9 @@ export default function ModuloDirectorio({
                   🤝 Revendedor
                 </button>
               </div>
-
-              {subEditar.tipo_comprador === "revendedor" && (
-                <select
-                  value={subEditar.revendedor_id || ""}
-                  onChange={(e) => {
-                    const r = revendedores.find((x) => x.id === e.target.value);
-                    if (r) {
-                      setSubEditar({
-                        ...subEditar,
-                        revendedor_id: r.id,
-                        nombre_cliente: r.nombre,
-                        telefono_cliente: r.telefono
-                      });
-                    }
-                  }}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Seleccionar Revendedor --</option>
-                  {revendedores.map((r) => (
-                    <option key={r.id} value={r.id}>{r.nombre} ({r.telefono})</option>
-                  ))}
-                </select>
-              )}
-            </div>
-
-            <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
-              <label className="text-xs font-bold text-[#66FF00]">2. Origen (Matriz Stock o Proveedor):</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
-                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                    subEditar.origen === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                  }`}
-                >
-                  De mi Matriz Stock
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
-                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                    subEditar.origen === "proveedor" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                  }`}
-                >
-                  De Proveedor Externo
-                </button>
-              </div>
-
-              {subEditar.origen === "stock" ? (
-                <select
-                  value={matrizNuevaEdicionId}
-                  onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
-                  {matrices
-                    .filter((m) => !m.en_papelera && m.estado === "Activa")
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.plataforma} — {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
-                      </option>
-                    ))}
-                </select>
-              ) : (
-                <select
-                  value={subEditar.proveedor_id || ""}
-                  onChange={(e) => {
-                    const prov = proveedores.find((p) => p.id === e.target.value);
-                    if (prov) {
-                      setSubEditar({
-                        ...subEditar,
-                        proveedor_id: prov.id,
-                        nombre_proveedor: prov.nombre,
-                        telefono_proveedor: prov.telefono
-                      });
-                    }
-                  }}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Seleccionar Proveedor --</option>
-                  {proveedores.map((p) => (
-                    <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
-                  ))}
-                </select>
-              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="text-[11px] text-gray-400">Plataforma</label>
-                <select
-                  value={subEditar.plataforma}
-                  onChange={(e) => setSubEditar({ ...subEditar, plataforma: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                >
-                  {plataformasList.map((p) => (
-                    <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[11px] text-gray-400">Modalidad</label>
-                <select
-                  value={subEditar.tipo_cuenta || "1 Dispositivo"}
-                  onChange={(e) => setSubEditar({ ...subEditar, tipo_cuenta: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                >
-                  <option value="1 Dispositivo">1 Dispositivo</option>
-                  <option value="Cuenta Completa">Cuenta Completa</option>
-                  <option value="Por Invitación">Por Invitación</option>
-                </select>
-              </div>
               <div>
                 <label className="text-[11px] text-gray-400">Nombre Comprador</label>
                 <input
@@ -738,7 +681,7 @@ export default function ModuloDirectorio({
                 />
               </div>
               <div>
-                <label className="text-[11px] text-gray-400">Teléfono</label>
+                <label className="text-[11px] text-gray-400">Teléfono Comprador</label>
                 <input
                   type="text"
                   value={subEditar.telefono_cliente}
@@ -746,6 +689,31 @@ export default function ModuloDirectorio({
                   className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                 />
               </div>
+
+              {subEditar.tipo_comprador === "revendedor" && (
+                <>
+                  <div>
+                    <label className="text-[11px] text-purple-300">Cliente Final del Revendedor</label>
+                    <input
+                      type="text"
+                      value={subEditar.nombre_cliente_final || ""}
+                      onChange={(e) => setSubEditar({ ...subEditar, nombre_cliente_final: e.target.value })}
+                      className="w-full bg-[#070B06] border border-purple-500/40 rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-purple-300">Precio Venta del Revendedor (Bs)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={subEditar.precio_venta_revendedor || 0}
+                      onChange={(e) => setSubEditar({ ...subEditar, precio_venta_revendedor: e.target.value })}
+                      className="w-full bg-[#070B06] border border-purple-500/40 rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                </>
+              )}
+
               <div>
                 <label className="text-[11px] text-gray-400">Correo Cuenta</label>
                 <input
@@ -783,7 +751,7 @@ export default function ModuloDirectorio({
                 />
               </div>
               <div>
-                <label className="text-[11px] text-[#66FF00] font-bold">Precio Venta (Bs)</label>
+                <label className="text-[11px] text-[#66FF00] font-bold">Precio que te pagó (Bs)</label>
                 <input
                   type="number"
                   step="0.01"
@@ -802,12 +770,8 @@ export default function ModuloDirectorio({
                   className="w-full bg-[#070B06] border border-orange-500/40 rounded-lg p-2 text-xs text-white"
                 />
               </div>
-
-              {/* FECHA DE VENTA Y FECHA DE CORTE EDITABLES */}
               <div>
-                <label className="text-[11px] text-[#66FF00] font-bold">
-                  Fecha de Venta ({formatearFechaDMA(subEditar.fecha_venta)})
-                </label>
+                <label className="text-[11px] text-[#66FF00] font-bold">Fecha Venta ({formatearFechaDMA(subEditar.fecha_venta)})</label>
                 <input
                   type="date"
                   value={subEditar.fecha_venta || ""}
@@ -816,9 +780,7 @@ export default function ModuloDirectorio({
                 />
               </div>
               <div>
-                <label className="text-[11px] text-[#66FF00] font-bold">
-                  Fecha de Corte ({formatearFechaDMA(subEditar.fecha_corte)})
-                </label>
+                <label className="text-[11px] text-[#66FF00] font-bold">Fecha Corte ({formatearFechaDMA(subEditar.fecha_corte)})</label>
                 <input
                   type="date"
                   value={subEditar.fecha_corte || ""}
@@ -833,7 +795,7 @@ export default function ModuloDirectorio({
                 Cancelar
               </button>
               <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Guardar y Generar Nuevo Mensaje
+                Guardar y Generar Mensaje
               </button>
             </div>
           </form>
@@ -845,80 +807,32 @@ export default function ModuloDirectorio({
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <form onSubmit={ejecutarReemplazo} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
             <h3 className="font-bold text-[#66FF00]">Dar Reemplazo a {subReemplazo.nombre_cliente}</h3>
-            {subReemplazo.estado === "Caida" && (
-              <p className="text-[11px] text-amber-300 bg-amber-950/50 border border-amber-600/40 p-2 rounded-xl">
-                ⚠️ Como esta cuenta está marcada como <b>Caída</b>, el perfil viejo quedará bloqueado en la matriz hasta que lo marques como resuelto en Stock.
-              </p>
-            )}
             <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setOrigenReemp("stock")}
-                className={`py-2 rounded-xl text-xs font-bold border ${
-                  origenReemp === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                }`}
-              >
+              <button type="button" onClick={() => setOrigenReemp("stock")} className={`py-2 rounded-xl text-xs font-bold border ${origenReemp === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"}`}>
                 De mi Stock
               </button>
-              <button
-                type="button"
-                onClick={() => setOrigenReemp("proveedor")}
-                className={`py-2 rounded-xl text-xs font-bold border ${
-                  origenReemp === "proveedor" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                }`}
-              >
+              <button type="button" onClick={() => setOrigenReemp("proveedor")} className={`py-2 rounded-xl text-xs font-bold border ${origenReemp === "proveedor" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"}`}>
                 De Proveedor
               </button>
             </div>
-
             {origenReemp === "stock" ? (
-              <select
-                value={matrizReempId}
-                onChange={(e) => setMatrizReempId(e.target.value)}
-                className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
-              >
+              <select value={matrizReempId} onChange={(e) => setMatrizReempId(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white">
                 <option value="">-- Selecciona Matriz con espacio --</option>
-                {matrices
-                  .filter((m) => !m.en_papelera && m.estado === "Activa")
-                  .map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.plataforma} - {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
-                    </option>
-                  ))}
+                {matrices.filter((m) => !m.en_papelera && m.estado === "Activa").map((m) => (
+                  <option key={m.id} value={m.id}>{m.plataforma} - {m.correo}</option>
+                ))}
               </select>
             ) : (
-              <div className="space-y-2">
-                <select
-                  value={provReempId}
-                  onChange={(e) => setProvReempId(e.target.value)}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Mantener proveedor actual --</option>
-                  {proveedores.map((p) => (
-                    <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
-                  ))}
-                </select>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="text" placeholder="Nuevo Correo" value={correoReemp} onChange={(e) => setCorreoReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
-                  <input type="text" placeholder="Nueva Clave" value={passReemp} onChange={(e) => setPassReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
-                  <input type="text" placeholder="Perfil" value={perfilReemp} onChange={(e) => setPerfilReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
-                  <input type="text" placeholder="PIN" value={pinReemp} onChange={(e) => setPinReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
-                </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input type="text" placeholder="Nuevo Correo" value={correoReemp} onChange={(e) => setCorreoReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
+                <input type="text" placeholder="Nueva Clave" value={passReemp} onChange={(e) => setPassReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
+                <input type="text" placeholder="Perfil" value={perfilReemp} onChange={(e) => setPerfilReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
+                <input type="text" placeholder="PIN" value={pinReemp} onChange={(e) => setPinReemp(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white" />
               </div>
             )}
-
-            <div>
-              <label className="text-xs text-gray-400">Costo del Reemplazo (Bs)</label>
-              <input type="number" step="0.01" value={costoReemp} onChange={(e) => setCostoReemp(e.target.value)} className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white" />
-            </div>
-
             <div className="flex gap-2">
-              <button type="button" onClick={() => setSubReemplazo(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
-                Cancelar
-              </button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Confirmar y Ver Mensaje
-              </button>
+              <button type="button" onClick={() => setSubReemplazo(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
+              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">Confirmar</button>
             </div>
           </form>
         </div>
@@ -932,13 +846,13 @@ export default function ModuloDirectorio({
             <input type="number" step="0.01" value={montoReembolsoCalc} onChange={(e) => setMontoReembolsoCalc(e.target.value)} className="w-full bg-[#070B06] border border-purple-500 rounded-xl p-2.5 text-white font-bold" />
             <div className="flex gap-2">
               <button onClick={() => setSubReembolso(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
-              <button onClick={ejecutarReembolsoConfirmado} className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold cursor-pointer">Confirmar Reembolso</button>
+              <button onClick={ejecutarReembolsoConfirmado} className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold cursor-pointer">Confirmar</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL DE MENSAJE DISPONIBLE EN CUALQUIER MOMENTO */}
+      {/* MODAL DE MENSAJE */}
       {mensajeActivo && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">
@@ -946,32 +860,15 @@ export default function ModuloDirectorio({
               <h3 className="text-[#66FF00] font-black text-base flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5" /> Mensaje para {mensajeActivo.cliente}
               </h3>
-              <button onClick={() => setMensajeActivo(null)} className="text-gray-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setMensajeActivo(null)} className="text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
             <textarea readOnly rows={10} value={mensajeActivo.completo} className="w-full bg-[#070B06] border border-[#2A4226] rounded-2xl p-3 text-xs text-gray-200 font-mono" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(mensajeActivo.completo);
-                  notificar("¡Mensaje copiado!");
-                }}
-                className="py-3 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
-              >
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => { navigator.clipboard.writeText(mensajeActivo.completo); notificar("¡Mensaje copiado!"); }} className="py-3 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer">
                 <Copy className="w-4 h-4" /> Copiar Mensaje
               </button>
-              <button
-                onClick={() => {
-                  if (navigator.share) navigator.share({ text: mensajeActivo.resumido });
-                  else {
-                    navigator.clipboard.writeText(mensajeActivo.resumido);
-                    notificar("Resumen copiado");
-                  }
-                }}
-                className="py-3 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Share2 className="w-4 h-4" /> Compartir (Celular)
+              <button onClick={() => { if (navigator.share) navigator.share({ text: mensajeActivo.resumido }); else navigator.clipboard.writeText(mensajeActivo.resumido); }} className="py-3 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer">
+                <Share2 className="w-4 h-4" /> Compartir
               </button>
             </div>
           </div>

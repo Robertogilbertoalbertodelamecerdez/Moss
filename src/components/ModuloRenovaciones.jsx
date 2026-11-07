@@ -1,21 +1,25 @@
 "use client";
 import React, { useState } from "react";
 import { supabase, formatearFechaDMA } from "@/config";
-import { extraerDatosProveedor } from "@/utils/extractorProveedor";
-import { generarMensajeRenovacionCorto } from "@/utils/mensajesMoss";
+import {
+  generarMensajeRenovacionCorto,
+  generarMensajeLoteRenovacionRevendedor
+} from "@/utils/mensajesMoss";
 import {
   Copy,
   Share2,
   Check,
   RefreshCw,
   XCircle,
-  X
+  X,
+  Users
 } from "lucide-react";
 
 export default function ModuloRenovaciones({
   suscripciones = [],
   matrices = [],
   proveedores = [],
+  revendedores = [],
   recargarTodo,
   notificar
 }) {
@@ -29,8 +33,6 @@ export default function ModuloRenovaciones({
   const [mesesRenovacion, setMesesRenovacion] = useState(1);
   const [origenRenovacion, setOrigenRenovacion] = useState("misma");
   const [nuevaMatrizId, setNuevaMatrizId] = useState("");
-  const [proveedorRenovId, setProveedorRenovId] = useState("");
-  const [textoProveedorCrudo, setTextoProveedorCrudo] = useState("");
   const [provCorreo, setProvCorreo] = useState("");
   const [provPass, setProvPass] = useState("");
   const [provPerfil, setProvPerfil] = useState("");
@@ -50,7 +52,21 @@ export default function ModuloRenovaciones({
 
   const listaPorAvisar = subsPorVencer.filter((s) => !s.avisado_renovacion);
   const listaAvisados = subsPorVencer.filter((s) => s.avisado_renovacion);
-  const matricesPorVencer = matrices.filter((m) => !m.en_papelera && m.estado === "Activa" && calcularDias(m.fecha_corte_matriz) <= 3);
+  const matricesPorVencer = matrices.filter(
+    (m) => !m.en_papelera && m.estado === "Activa" && calcularDias(m.fecha_corte_matriz) <= 3
+  );
+
+  // Agrupar renovaciones por Revendedor para enviarles todas sus cuentas por vencer en UN SOLO MENSAJE
+  const lotesPorRevendedor = revendedores
+    .map((r) => {
+      const cuentasDeEsteRev = subsPorVencer.filter(
+        (s) =>
+          s.tipo_comprador === "revendedor" &&
+          (s.revendedor_id === r.id || s.telefono_cliente === r.telefono)
+      );
+      return { revendedor: r, cuentas: cuentasDeEsteRev };
+    })
+    .filter((grupo) => grupo.cuentas.length > 0);
 
   const marcarComoAvisado = async (sub, estadoBool) => {
     await supabase.from("suscripciones").update({ avisado_renovacion: estadoBool }).eq("id", sub.id);
@@ -71,15 +87,20 @@ export default function ModuloRenovaciones({
   const ejecutarRenovarMatriz30Dias = async (m) => {
     const nuevaFecha = new Date(m.fecha_corte_matriz + "T12:00:00");
     nuevaFecha.setDate(nuevaFecha.getDate() + 30);
-    await supabase.from("matrices_stock").update({ fecha_corte_matriz: nuevaFecha.toISOString().split("T")[0] }).eq("id", m.id);
+    await supabase
+      .from("matrices_stock")
+      .update({ fecha_corte_matriz: nuevaFecha.toISOString().split("T")[0] })
+      .eq("id", m.id);
     if (Number(m.costo_total) > 0) {
-      await supabase.from("movimientos_yolo").insert([{
-        tipo: "Costo Matriz",
-        monto: -Math.abs(Number(m.costo_total)),
-        afecta_ganancia_neta: true,
-        descripcion: `Renovación matriz ${m.plataforma} (${m.correo})`,
-        referencia_id: m.id
-      }]);
+      await supabase.from("movimientos_yolo").insert([
+        {
+          tipo: "Costo Matriz",
+          monto: -Math.abs(Number(m.costo_total)),
+          afecta_ganancia_neta: true,
+          descripcion: `Renovación matriz ${m.plataforma} (${m.correo})`,
+          referencia_id: m.id
+        }
+      ]);
     }
     setConfirmandoRenovarMatrizId(null);
     await recargarTodo();
@@ -91,8 +112,6 @@ export default function ModuloRenovaciones({
     setPrecioRenovacion(sub.precio_venta);
     setMesesRenovacion(1);
     setOrigenRenovacion("misma");
-    setProveedorRenovId(sub.proveedor_id || proveedores[0]?.id || "");
-    setTextoProveedorCrudo("");
     setProvCorreo(sub.correo_cuenta);
     setProvPass(sub.password_cuenta || "");
     setProvPerfil(sub.nombre_perfil || "");
@@ -150,13 +169,15 @@ export default function ModuloRenovaciones({
     }
 
     await supabase.from("suscripciones").update(datosUpdate).eq("id", subRenovar.id);
-    await supabase.from("movimientos_yolo").insert([{
-      tipo: "Renovacion",
-      monto: Math.abs(Number(precioRenovacion)),
-      afecta_ganancia_neta: true,
-      descripcion: `Renovación ${subRenovar.plataforma} - ${subRenovar.nombre_cliente}`,
-      referencia_id: subRenovar.id
-    }]);
+    await supabase.from("movimientos_yolo").insert([
+      {
+        tipo: "Renovacion",
+        monto: Math.abs(Number(precioRenovacion)),
+        afecta_ganancia_neta: true,
+        descripcion: `Renovación ${subRenovar.plataforma} - ${subRenovar.nombre_cliente}`,
+        referencia_id: subRenovar.id
+      }
+    ]);
 
     setSubRenovar(null);
     await recargarTodo();
@@ -176,6 +197,18 @@ export default function ModuloRenovaciones({
         >
           Por Avisar ({listaPorAvisar.length})
         </button>
+
+        <button
+          onClick={() => setSubTab("lote_revendedores")}
+          className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border flex items-center gap-1.5 cursor-pointer ${
+            subTab === "lote_revendedores"
+              ? "bg-purple-500 text-white border-purple-400"
+              : "bg-[#111A10] text-purple-300 border-purple-600/40"
+          }`}
+        >
+          <Users className="w-4 h-4" /> Lote por Revendedor ({lotesPorRevendedor.length})
+        </button>
+
         <button
           onClick={() => setSubTab("avisados")}
           className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
@@ -184,6 +217,7 @@ export default function ModuloRenovaciones({
         >
           Ya Avisados ({listaAvisados.length})
         </button>
+
         <button
           onClick={() => setSubTab("matrices")}
           className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
@@ -194,7 +228,70 @@ export default function ModuloRenovaciones({
         </button>
       </div>
 
-      {subTab === "matrices" ? (
+      {/* PESTAÑA DE LOTE POR REVENDEDOR: COPIA TODAS SUS CUENTAS EN 1 SOLO MENSAJE */}
+      {subTab === "lote_revendedores" ? (
+        <div className="space-y-4">
+          {lotesPorRevendedor.length === 0 ? (
+            <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs">
+              Ningún revendedor tiene cuentas próximas a vencer en los siguientes 3 días.
+            </div>
+          ) : (
+            lotesPorRevendedor.map(({ revendedor: rev, cuentas }) => {
+              const msgLote = generarMensajeLoteRenovacionRevendedor(rev.nombre, cuentas);
+              return (
+                <div key={rev.id} className="bg-[#111A10] border-2 border-purple-500/60 rounded-3xl p-5 space-y-3">
+                  <div className="flex flex-wrap justify-between items-center gap-3">
+                    <div>
+                      <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-purple-950 text-purple-300 border border-purple-500/40">
+                        🤝 Revendedor: {rev.nombre} (📞 {rev.telefono})
+                      </span>
+                      <h3 className="text-base font-black text-white mt-1">
+                        Tiene {cuentas.length} cuenta(s) por vencer para avisar a sus clientes
+                      </h3>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(msgLote);
+                          notificar(`¡Lista de ${cuentas.length} cuentas copiada en un solo mensaje para ${rev.nombre}!`);
+                        }}
+                        className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-[0_0_20px_rgba(102,255,0,0.3)]"
+                      >
+                        <Copy className="w-4 h-4" /> Copiar las {cuentas.length} Renovaciones Juntas
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          if (navigator.share) navigator.share({ text: msgLote });
+                          else navigator.clipboard.writeText(msgLote);
+                        }}
+                        className="px-3 py-2.5 bg-purple-600 text-white font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                      >
+                        <Share2 className="w-4 h-4" /> Compartir
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-[#1E331A]">
+                    {cuentas.map((c, i) => (
+                      <div key={c.id} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2.5 text-xs">
+                        <p className="font-bold text-[#66FF00]">
+                          #{i + 1} {c.plataforma} — Cliente: {c.nombre_cliente_final || "Sin anotar"} (📞 {c.telefono_cliente_final || "S/N"})
+                        </p>
+                        <p className="text-gray-300 font-mono text-[11px]">{c.correo_cuenta} ({c.nombre_perfil})</p>
+                        <p className="text-gray-400 text-[11px]">
+                          Pagó: Bs {Number(c.precio_venta_revendedor || c.precio_venta).toFixed(2)} · {c.meses_contratados || 1}M · Corte: {formatearFechaDMA(c.fecha_corte)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      ) : subTab === "matrices" ? (
         <div className="space-y-3">
           {matricesPorVencer.map((m) => (
             <div key={m.id} className="bg-[#111A10] border border-yellow-500/70 rounded-2xl p-4 flex justify-between items-center">
@@ -236,9 +333,14 @@ export default function ModuloRenovaciones({
                       <span className="ml-2 text-xs font-bold text-orange-400">{textoDias}</span>
                       <h3 className="font-bold text-base mt-1">
                         {s.nombre_cliente} — <span className="text-[#66FF00] font-mono">{s.telefono_cliente}</span>
+                        {s.nombre_cliente_final && (
+                          <span className="text-xs text-purple-300 ml-2">
+                            (Cliente final: {s.nombre_cliente_final} · 📞 {s.telefono_cliente_final})
+                          </span>
+                        )}
                       </h3>
                       <p className="text-xs text-gray-300">
-                        Cuenta actual: <b className="text-white">{s.correo_cuenta}</b> ({s.nombre_perfil}) · Corte: {formatearFechaDMA(s.fecha_corte)}
+                        Cuenta: <b className="text-white">{s.correo_cuenta}</b> ({s.nombre_perfil}) · Corte: {formatearFechaDMA(s.fecha_corte)}
                       </p>
                     </div>
 

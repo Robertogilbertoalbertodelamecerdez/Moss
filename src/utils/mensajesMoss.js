@@ -1,6 +1,6 @@
 import { formatearFechaDMA } from "@/config";
 
-// 1. Mensaje de Entrega / Reemplazo / Edición (Distingue Cliente Final vs Revendedor)
+// 1. Mensaje de Entrega / Reemplazo / Edición
 export function generarMensajeEntrega(
   nombre,
   tel,
@@ -12,9 +12,6 @@ export function generarMensajeEntrega(
   const esCombo = listaItems.length > 1;
   const totalCobrado = listaItems.reduce((acc, i) => acc + Number(i.precioVenta || 0), 0);
 
-  // ==========================================================
-  // FORMATO GENÉRICO PARA REVENDEDOR (Sin nombre, sin MOSS y sin link de grupo)
-  // ==========================================================
   if (esRevendedor) {
     const bloquesRev = listaItems
       .map((item, idx) => {
@@ -58,18 +55,9 @@ export function generarMensajeEntrega(
         : `\n\n🛠️ *Soporte:* 78953018`;
 
     const msgRevendedor = `${encabezadoRev}\n\n${bloquesRev}${lineaSoporte}`;
-
-    return {
-      completo: msgRevendedor,
-      resumido: msgRevendedor,
-      telefono: tel,
-      cliente: nombre
-    };
+    return { completo: msgRevendedor, resumido: msgRevendedor, telefono: tel, cliente: nombre };
   }
 
-  // ==========================================================
-  // FORMATO NORMAL PARA CLIENTE FINAL (Con saludo, MOSS y link de grupo)
-  // ==========================================================
   const bloqueOfertas = linkWhatsappMoss?.trim()
     ? `\n\n🎁 *Comunidad MOSS:*\n${linkWhatsappMoss.trim()}`
     : "";
@@ -128,7 +116,7 @@ export function generarMensajeEntrega(
   return { completo, resumido, telefono: tel, cliente: nombre };
 }
 
-// 2. Mensaje Corto de Renovación (SIN mostrar cuánto pagó la última vez)
+// 2. Mensaje Corto Individual de Renovación (Sin precio para el cliente final)
 export function generarMensajeRenovacionCorto(s, textoDias) {
   const corteDMA = formatearFechaDMA(s.fecha_corte);
   const esRev = s.tipo_comprador === "revendedor";
@@ -144,7 +132,31 @@ export function generarMensajeRenovacionCorto(s, textoDias) {
   return `${encabezado}\n📧 *Correo:* ${s.correo_cuenta}${lineaPerfil}\n📅 *Vence:* ${corteDMA} (${textoDias})\n\n¿Deseas renovar tu cuenta para mantenerla activa?`;
 }
 
-// 3. Mensaje Corto Morado de Cambio de Contraseña o PIN
+// 3. NUEVO: Mensaje Consolidado en LOTE para enviar a un Revendedor todas sus cuentas por vencer
+export function generarMensajeLoteRenovacionRevendedor(nombreRevendedor, listaSubs) {
+  const items = listaSubs
+    .map((s, idx) => {
+      const cliNombre = s.nombre_cliente_final || "Cliente sin anotar";
+      const cliTel = s.telefono_cliente_final || s.telefono_cliente || "S/N";
+      const m = Number(s.meses_contratados || 1);
+      const textoMeses = m === 12 ? "1 año" : m === 1 ? "1 mes" : `${m} meses`;
+      const montoCliente =
+        Number(s.precio_venta_revendedor) > 0
+          ? `Bs ${Number(s.precio_venta_revendedor).toFixed(2)} (Tu costo: Bs ${s.precio_venta})`
+          : `Costo revendedor: Bs ${s.precio_venta}`;
+      const perfil =
+        s.nombre_perfil && !["1 Dispositivo", "Cuenta / Invitación"].includes(s.nombre_perfil)
+          ? ` | 👤 ${s.nombre_perfil}`
+          : "";
+
+      return `*${idx + 1}. ${s.plataforma}*${perfil}\n👤 *Cliente:* ${cliNombre} | 📞 *Tel:* ${cliTel}\n📧 *Cuenta:* ${s.correo_cuenta}\n⏳ *Compró:* ${textoMeses} | 💰 *Último pago:* ${montoCliente}\n📅 *Corte:* ${formatearFechaDMA(s.fecha_corte)}`;
+    })
+    .join("\n\n──────────────────\n\n");
+
+  return `📋 *LISTA DE RENOVACIONES PENDIENTES (${listaSubs.length} CUENTAS)*\n🤝 *Revendedor:* ${nombreRevendedor}\n\n${items}\n\n_Confírmame cuáles de tus clientes van a renovar para mantenerles el cupo activo._`;
+}
+
+// 4. Mensaje Corto Morado de Cambio de Contraseña o PIN
 export function generarMensajeCambioCredencial(tipoCambio, plataforma, correo, password, perfil, pin) {
   const lineaPass = password ? `\n🔑 *Contraseña:* ${password}` : "";
   const lineaPerfil = perfil ? `\n👤 *Perfil:* ${perfil}` : "";
