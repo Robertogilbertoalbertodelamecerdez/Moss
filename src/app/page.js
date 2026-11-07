@@ -1,6 +1,13 @@
 "use client";
 import React, { useState, useEffect, useCallback } from "react";
-import { supabase, AUTH_CONFIG, PLATAFORMAS, formatearFechaDMA } from "@/config";
+import {
+  supabase,
+  AUTH_CONFIG,
+  PLATAFORMAS,
+  formatearFechaDMA,
+  obtenerFechaBoliviaISO,
+  extraerFechaLocalISO
+} from "@/config";
 import ModuloVentas from "@/components/ModuloVentas";
 import ModuloStock from "@/components/ModuloStock";
 import ModuloRenovaciones from "@/components/ModuloRenovaciones";
@@ -211,14 +218,50 @@ export default function MossCRM() {
     notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
   };
 
-  const ingresoBrutoTotal = movimientosYolo
-    .filter((m) => m.monto > 0 && m.afecta_ganancia_neta)
-    .reduce((acc, m) => acc + Number(m.monto), 0);
+  // ==============================================================
+  // TARJETAS DE ARRIBA: INGRESO Y GANANCIA SOLO DE HOY (BOLIVIA)
+  // Y SALDO DE BANCO TOTAL ACUMULADO
+  // ==============================================================
+  const hoyBolivia = obtenerFechaBoliviaISO();
 
-  const gananciaNeta = movimientosYolo
-    .filter((m) => m.afecta_ganancia_neta)
-    .reduce((acc, m) => acc + Number(m.monto), 0);
+  const calcularGananciaDeVentaHoy = (s) => {
+    const cobrado = Number(s.precio_venta || 0);
+    if (s.origen === "stock" && s.matriz_id) {
+      const mat = matrices.find((m) => m.id === s.matriz_id);
+      if (mat && Number(mat.costo_total) > 0) {
+        const costoCupo = Number(mat.costo_total) / Math.max(1, Number(mat.capacidad_total || 5));
+        return cobrado - costoCupo;
+      }
+      return cobrado;
+    }
+    return cobrado - Number(s.costo_proveedor || 0);
+  };
 
+  const ventasRegistradasHoy = suscripciones.filter(
+    (s) => !s.en_papelera && extraerFechaLocalISO(s.fecha_venta) === hoyBolivia
+  );
+
+  // Ingreso de Hoy
+  const ingresoDeHoy = ventasRegistradasHoy.reduce(
+    (acc, s) => acc + Number(s.precio_venta || 0),
+    0
+  );
+
+  // Ganancia Neta de Hoy (ganancia de las ventas de hoy + ajustes manuales hechos hoy que afecten ganancia)
+  const ajustesManualesHoy = movimientosYolo
+    .filter(
+      (m) =>
+        m.tipo === "Ajuste Manual" &&
+        m.afecta_ganancia_neta &&
+        extraerFechaLocalISO(m.fecha) === hoyBolivia
+    )
+    .reduce((acc, m) => acc + Number(m.monto || 0), 0);
+
+  const gananciaNetaDeHoy =
+    ventasRegistradasHoy.reduce((acc, s) => acc + calcularGananciaDeVentaHoy(s), 0) +
+    ajustesManualesHoy;
+
+  // Saldo Total en Banco / Billetera (se mantiene siempre en el total real que tienes)
   const saldoActualYolo = movimientosYolo.reduce((acc, m) => acc + Number(m.monto), 0);
 
   let cantidadPorRenovar = 0;
@@ -430,11 +473,17 @@ export default function MossCRM() {
           </header>
 
           <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
+            {/* ============================================================== */}
+            {/* TARJETAS SUPERIORES: INGRESO Y GANANCIA DE HOY + SALDO BANCO    */}
+            {/* ============================================================== */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Ingreso Total (Ventas)</p>
-                  <p className="text-3xl font-black text-white mt-1">Bs {ingresoBrutoTotal.toFixed(2)}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                    Ingreso de Hoy ({formatearFechaDMA(hoyBolivia).slice(0, 5)})
+                  </p>
+                  <p className="text-3xl font-black text-white mt-1">Bs {ingresoDeHoy.toFixed(2)}</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">{ventasRegistradasHoy.length} venta(s) hoy</p>
                 </div>
                 <div className="w-12 h-12 rounded-2xl bg-[#66FF00]/10 border border-[#66FF00]/30 flex items-center justify-center">
                   <DollarSign className="w-6 h-6 text-[#66FF00]" />
@@ -443,10 +492,13 @@ export default function MossCRM() {
 
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Ganancia Neta (Negocio)</p>
-                  <p className={`text-3xl font-black mt-1 ${gananciaNeta >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
-                    Bs {gananciaNeta.toFixed(2)}
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                    Ganancia Neta de Hoy ({formatearFechaDMA(hoyBolivia).slice(0, 5)})
                   </p>
+                  <p className={`text-3xl font-black mt-1 ${gananciaNetaDeHoy >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
+                    Bs {gananciaNetaDeHoy.toFixed(2)}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">Libre del día de hoy</p>
                 </div>
                 <div className="w-12 h-12 rounded-2xl bg-[#66FF00]/10 border border-[#66FF00]/30 flex items-center justify-center">
                   <TrendingUp className="w-6 h-6 text-[#66FF00]" />
@@ -459,6 +511,7 @@ export default function MossCRM() {
                     <span className="w-2 h-2 rounded-full bg-[#66FF00] animate-ping" /> Saldo en {nombreBilletera}
                   </p>
                   <p className="text-3xl font-black text-white mt-1">Bs {saldoActualYolo.toFixed(2)}</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">Saldo total acumulado</p>
                 </div>
                 <button
                   onClick={() => setModalYolo(true)}
@@ -798,7 +851,7 @@ export default function MossCRM() {
                     checked={afectaGanancia}
                     onChange={(e) => setAfectaGanancia(e.target.checked)}
                   />
-                  ¿Afecta también la Ganancia Neta del negocio?
+                  ¿Afecta también la Ganancia Neta de hoy?
                 </label>
                 <div className="flex gap-2 pt-2">
                   <button type="button" onClick={() => setModalYolo(false)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
