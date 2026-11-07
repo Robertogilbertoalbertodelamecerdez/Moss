@@ -9,14 +9,16 @@ export const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "s
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Fecha exacta en zona horaria Bolivia (America/La_Paz UTC-4)
-export const obtenerFechaBoliviaISO = (dateObj = new Date()) => {
+// Fecha exacta en zona horaria Bolivia (America/La_Paz UTC-4) protegida para el build de Next.js 16
+export const obtenerFechaBoliviaISO = (dateObj = null) => {
+  if (typeof window === "undefined" && !dateObj) return "2026-11-07";
+  const target = dateObj || new Date();
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/La_Paz",
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
-  }).format(dateObj);
+  }).format(target);
 };
 
 export const sumarDiasBoliviaISO = (dias = 0, fechaBaseISO = null) => {

@@ -72,7 +72,7 @@ export default function MossCRM() {
           tipo: "error",
           titulo: `⚠️ Error en ${origen} (${usuarioNombre})`,
           mensaje: String(mensajeError),
-          detalle_tecnico: `Origen: ${origen} | Usuario: ${usuarioNombre} | Fecha: ${new Date().toISOString()} | Error: ${mensajeError}`
+          detalle_tecnico: `Origen: ${origen} | Usuario: ${usuarioNombre} | Error: ${mensajeError}`
         }
       ]);
     } catch {
@@ -94,20 +94,7 @@ export default function MossCRM() {
     [registrarErrorSistema, sesionActual]
   );
 
-  useEffect(() => {
-    setMontado(true);
-    const guardada = localStorage.getItem("moss_sesion_v3");
-    if (guardada) {
-      try {
-        setSesionActual(JSON.parse(guardada));
-      } catch {
-        localStorage.removeItem("moss_sesion_v3");
-      }
-    }
-    recargarTodo();
-  }, []);
-
-  const recargarTodo = async () => {
+  const recargarTodo = useCallback(async () => {
     const [mRes, sRes, cRes, pRes, revRes, yRes, movRevRes, platRes, ajuRes, notRes] = await Promise.all([
       supabase.from("matrices_stock").select("*, perfiles_matriz(*)").order("creado_en", { ascending: false }),
       supabase.from("suscripciones").select("*").order("creado_en", { ascending: false }),
@@ -152,7 +139,23 @@ export default function MossCRM() {
       if (bDB?.valor) setNombreBilletera(bDB.valor);
       if (lDB?.valor !== undefined) setLinkWhatsappMoss(lDB.valor);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    setMontado(true);
+    const guardada = localStorage.getItem("moss_sesion_v3");
+    if (guardada) {
+      try {
+        setSesionActual(JSON.parse(guardada));
+      } catch {
+        localStorage.removeItem("moss_sesion_v3");
+      }
+    }
+    recargarTodo();
+  }, [recargarTodo]);
+
+  // CORTE TEMPRANO PARA EVITAR ERROR DE PRERENDER CON NEW DATE() EN NEXT.JS 16
+  if (!montado) return null;
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -218,10 +221,6 @@ export default function MossCRM() {
     notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
   };
 
-  // ==============================================================
-  // TARJETAS DE ARRIBA: INGRESO Y GANANCIA SOLO DE HOY (BOLIVIA)
-  // Y SALDO DE BANCO TOTAL ACUMULADO
-  // ==============================================================
   const hoyBolivia = obtenerFechaBoliviaISO();
 
   const calcularGananciaDeVentaHoy = (s) => {
@@ -241,13 +240,11 @@ export default function MossCRM() {
     (s) => !s.en_papelera && extraerFechaLocalISO(s.fecha_venta) === hoyBolivia
   );
 
-  // Ingreso de Hoy
   const ingresoDeHoy = ventasRegistradasHoy.reduce(
     (acc, s) => acc + Number(s.precio_venta || 0),
     0
   );
 
-  // Ganancia Neta de Hoy (ganancia de las ventas de hoy + ajustes manuales hechos hoy que afecten ganancia)
   const ajustesManualesHoy = movimientosYolo
     .filter(
       (m) =>
@@ -261,20 +258,15 @@ export default function MossCRM() {
     ventasRegistradasHoy.reduce((acc, s) => acc + calcularGananciaDeVentaHoy(s), 0) +
     ajustesManualesHoy;
 
-  // Saldo Total en Banco / Billetera (se mantiene siempre en el total real que tienes)
   const saldoActualYolo = movimientosYolo.reduce((acc, m) => acc + Number(m.monto), 0);
 
-  let cantidadPorRenovar = 0;
-  if (montado) {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    cantidadPorRenovar = suscripciones.filter((s) => {
-      if (s.en_papelera || s.estado !== "Activa") return false;
-      const corte = new Date(s.fecha_corte + "T00:00:00");
-      const dias = Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
-      return dias <= 3 && !s.avisado_renovacion;
-    }).length;
-  }
+  const hoy = new Date(hoyBolivia + "T00:00:00-04:00");
+  const cantidadPorRenovar = suscripciones.filter((s) => {
+    if (s.en_papelera || s.estado !== "Activa") return false;
+    const corte = new Date(s.fecha_corte + "T00:00:00-04:00");
+    const dias = Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
+    return dias <= 3 && !s.avisado_renovacion;
+  }).length;
 
   const cantidadCaidos = suscripciones.filter((s) => !s.en_papelera && s.estado === "Caida").length;
 
@@ -303,8 +295,6 @@ export default function MossCRM() {
     await recargarTodo();
     notificar(`Saldo de ${nombreBilletera} actualizado`);
   };
-
-  if (!montado) return null;
 
   const revendedorLogueadoObj =
     sesionActual?.rol === "revendedor"
@@ -473,9 +463,6 @@ export default function MossCRM() {
           </header>
 
           <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
-            {/* ============================================================== */}
-            {/* TARJETAS SUPERIORES: INGRESO Y GANANCIA DE HOY + SALDO BANCO    */}
-            {/* ============================================================== */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
