@@ -45,7 +45,7 @@ export default function ModuloConfig({
   const [busquedaRev, setBusquedaRev] = useState("");
   const [busquedaPlat, setBusquedaPlat] = useState("");
 
-  // Nueva Plataforma + Ambos Precios
+  // Nueva Plataforma + Ambos Precios y Propiedades
   const [nuevaPlatNombre, setNuevaPlatNombre] = useState("");
   const [esPorInvitacion, setEsPorInvitacion] = useState(false);
   const [nuevaPlatCupos, setNuevaPlatCupos] = useState(5);
@@ -68,11 +68,25 @@ export default function ModuloConfig({
   const [stockPermRev, setStockPermRev] = useState(false);
   const [editRev, setEditRev] = useState(null);
 
+  const seleccionarModoInvitacionCrear = (modoInv) => {
+    setEsPorInvitacion(modoInv);
+    if (modoInv) {
+      setNuevaPlatPidePass(false);
+      setNuevaPlatPidePerfil(false);
+      setNuevaPlatPidePin(false);
+      setNuevaPlatCupos(1);
+    } else {
+      setNuevaPlatPidePass(true);
+      setNuevaPlatPidePerfil(true);
+      setNuevaPlatCupos(5);
+    }
+  };
+
   const agregarNuevaPlataforma = async (e) => {
     e.preventDefault();
     const limpio = nuevaPlatNombre.trim();
     if (!limpio) return notificar("Escribe el nombre de la app", "error");
-    await supabase.from("plataformas").upsert(
+    const { error } = await supabase.from("plataformas").upsert(
       [
         {
           nombre: limpio,
@@ -87,18 +101,74 @@ export default function ModuloConfig({
       ],
       { onConflict: "nombre" }
     );
+    if (error) return notificar("Error: " + error.message, "error");
     setNuevaPlatNombre("");
     await recargarTodo();
     notificar(`App ${limpio} guardada`);
   };
 
-  const actualizarPreciosPlataforma = async (nombrePlat, campoDB, nuevoPrecio) => {
-    await supabase
-      .from("plataformas")
-      .update({ [campoDB]: Number(nuevoPrecio || 0) })
-      .eq("nombre", nombrePlat);
+  // Alternar cualquier propiedad (Pide Clave / Invitación, Pide Perfil, Pide PIN) en plataformas ya creadas
+  const toggleRequisitoPlataforma = async (plat, propiedad) => {
+    const nuevoPass =
+      propiedad === "pidePass" ? (plat.pidePass === false ? true : false) : plat.pidePass !== false;
+    const nuevoPerfil =
+      propiedad === "pidePerfil"
+        ? plat.pidePerfil === false
+          ? true
+          : false
+        : !nuevoPass
+        ? false
+        : plat.pidePerfil !== false;
+    const nuevoPin =
+      propiedad === "pidePin"
+        ? plat.pidePin === false
+          ? true
+          : false
+        : !nuevoPass
+        ? false
+        : plat.pidePin !== false;
+
+    const { error } = await supabase.from("plataformas").upsert(
+      [
+        {
+          nombre: plat.nombre,
+          perfiles_default: Number(plat.perfilesDefault ?? 5),
+          tiene_extra_2020: Boolean(plat.tieneExtra2020),
+          precio_cliente: Number(plat.precioCliente ?? 20),
+          precio_revendedor: Number(plat.precioRevendedor ?? 10),
+          pide_pass: nuevoPass,
+          pide_perfil: nuevoPerfil,
+          pide_pin: nuevoPin
+        }
+      ],
+      { onConflict: "nombre" }
+    );
+
+    if (error) return notificar("Error al actualizar: " + error.message, "error");
     await recargarTodo();
-    notificar(`Atajo de precio de ${nombrePlat} actualizado`);
+    notificar(`Configuración de ${plat.nombre} actualizada`);
+  };
+
+  // Actualizar Precios o Cupos por defecto de una plataforma ya existente
+  const actualizarCampoNumericoPlataforma = async (plat, columnaDB, nuevoValor) => {
+    const payload = {
+      nombre: plat.nombre,
+      perfiles_default:
+        columnaDB === "perfiles_default" ? Number(nuevoValor || 1) : Number(plat.perfilesDefault ?? 5),
+      tiene_extra_2020: Boolean(plat.tieneExtra2020),
+      precio_cliente:
+        columnaDB === "precio_cliente" ? Number(nuevoValor || 0) : Number(plat.precioCliente ?? 20),
+      precio_revendedor:
+        columnaDB === "precio_revendedor" ? Number(nuevoValor || 0) : Number(plat.precioRevendedor ?? 10),
+      pide_pass: plat.pidePass !== false,
+      pide_perfil: plat.pidePerfil !== false,
+      pide_pin: plat.pidePin !== false
+    };
+
+    const { error } = await supabase.from("plataformas").upsert([payload], { onConflict: "nombre" });
+    if (error) return notificar("Error: " + error.message, "error");
+    await recargarTodo();
+    notificar(`Datos de ${plat.nombre} guardados`);
   };
 
   const eliminarPlataforma = async (nombrePlat) => {
@@ -200,7 +270,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_4.5_CATALOGO_Y_BOLSA",
+      version: "MOSS_CRM_4.6",
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
       proveedores: prRes.data || [],
@@ -254,7 +324,7 @@ export default function ModuloConfig({
             <h3 className="font-black text-white text-sm flex items-center gap-2">
               <Tv className="w-4 h-4 text-[#66FF00]" /> Catálogo y Atajos ({plataformasList.length})
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Precios Cliente y Revendedor</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Editar Clave, Perfil, PIN y Precios</p>
           </div>
           <button onClick={() => setModalPlataformas(true)} className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
             Administrar
@@ -355,63 +425,237 @@ export default function ModuloConfig({
         </div>
       </div>
 
-      {/* MODAL PLATAFORMAS + ATAJOS DE PRECIO CATÁLOGO Y REVENTA */}
+      {/* ========================================================================= */}
+      {/* MODAL PLATAFORMAS: EDITAR CLAVE, PERFIL, PIN, CUPOS Y PRECIOS EN VIVO     */}
+      {/* ========================================================================= */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
-            <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00]">Catálogo de Plataformas y Atajos de Precio ({plataformasList.length})</h3>
-              <button onClick={() => setModalPlataformas(false)} className="text-gray-400"><X className="w-5 h-5" /></button>
+            <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+              <div>
+                <h3 className="font-black text-[#66FF00] text-base">
+                  Catálogo de Plataformas y Datos que Piden ({plataformasList.length})
+                </h3>
+                <p className="text-[11px] text-gray-400">
+                  Toca los botones de cualquier app abajo para activar o quitar Contraseña, Perfil o PIN en cualquier momento.
+                </p>
+              </div>
+              <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
+            {/* CREAR NUEVA PLATAFORMA */}
             <form onSubmit={agregarNuevaPlataforma} className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-3">
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setEsPorInvitacion(false)} className={`py-2 rounded-xl text-xs font-bold border ${!esPorInvitacion ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#2A4226]"}`}>
+                <button
+                  type="button"
+                  onClick={() => seleccionarModoInvitacionCrear(false)}
+                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
+                    !esPorInvitacion ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
                   <KeyRound className="w-3.5 h-3.5 inline mr-1" /> Con Clave
                 </button>
-                <button type="button" onClick={() => setEsPorInvitacion(true)} className={`py-2 rounded-xl text-xs font-bold border ${esPorInvitacion ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#2A4226]"}`}>
-                  <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación
+                <button
+                  type="button"
+                  onClick={() => seleccionarModoInvitacionCrear(true)}
+                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
+                    esPorInvitacion ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
+                  <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación (Solo Correo)
                 </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                <input type="text" placeholder="Nombre App" value={nuevaPlatNombre} onChange={(e) => setNuevaPlatNombre(e.target.value)} className="sm:col-span-2 bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-                <input type="number" step="0.5" placeholder="Catálogo (Bs)" value={nuevaPlatPrecioCli} onChange={(e) => setNuevaPlatPrecioCli(e.target.value)} className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold" />
-                <input type="number" step="0.5" placeholder="Revendedor (Bs)" value={nuevaPlatPrecioRev} onChange={(e) => setNuevaPlatPrecioRev(e.target.value)} className="bg-[#111A10] border border-purple-500 rounded-xl p-2 text-xs text-white font-bold" />
+
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <input
+                  type="text"
+                  placeholder="Nombre de la App *"
+                  value={nuevaPlatNombre}
+                  onChange={(e) => setNuevaPlatNombre(e.target.value)}
+                  className="col-span-2 bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Cupos"
+                  value={nuevaPlatCupos}
+                  onChange={(e) => setNuevaPlatCupos(e.target.value)}
+                  className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                  title="Cupos por defecto al crear Matriz"
+                />
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="Catálogo Bs"
+                  value={nuevaPlatPrecioCli}
+                  onChange={(e) => setNuevaPlatPrecioCli(e.target.value)}
+                  className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+                  title="Precio Catálogo Cliente"
+                />
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="Reventa Bs"
+                  value={nuevaPlatPrecioRev}
+                  onChange={(e) => setNuevaPlatPrecioRev(e.target.value)}
+                  className="bg-[#111A10] border border-purple-500 rounded-xl p-2 text-xs text-white font-bold"
+                  title="Precio Revendedor"
+                />
               </div>
-              <button type="submit" className="w-full py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer">+ Guardar Plataforma</button>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                {!esPorInvitacion ? (
+                  <div className="flex flex-wrap gap-3 text-xs text-gray-200">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={nuevaPlatPidePass}
+                        onChange={(e) => setNuevaPlatPidePass(e.target.checked)}
+                      />
+                      Pide Contraseña
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={nuevaPlatPidePerfil}
+                        onChange={(e) => setNuevaPlatPidePerfil(e.target.checked)}
+                      />
+                      Pide Perfil
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={nuevaPlatPidePin}
+                        onChange={(e) => setNuevaPlatPidePin(e.target.checked)}
+                      />
+                      Pide PIN
+                    </label>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-[#66FF00] font-bold">
+                    ✓ Modo Invitación: Solo pedirá correo del cliente.
+                  </span>
+                )}
+
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer ml-auto"
+                >
+                  + Guardar Nueva App
+                </button>
+              </div>
             </form>
 
-            <input type="text" placeholder="Buscar app..." value={busquedaPlat} onChange={(e) => setBusquedaPlat(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-            <div className="grid grid-cols-1 gap-2 max-h-72 overflow-y-auto">
+            <input
+              type="text"
+              placeholder="Buscar plataforma para editar qué pide o sus precios..."
+              value={busquedaPlat}
+              onChange={(e) => setBusquedaPlat(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+            />
+
+            {/* LISTA DE PLATAFORMAS CON BOTONES EDITABLES PARA CLAVE, PERFIL Y PIN */}
+            <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
               {plataformasList
                 .filter((p) => !busquedaPlat.trim() || p.nombre.toLowerCase().includes(busquedaPlat.toLowerCase()))
-                .map((p) => (
-                  <div key={p.nombre} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-3 flex flex-wrap justify-between items-center text-xs gap-2">
-                    <div>
-                      <p className="font-bold text-white">{p.nombre}</p>
-                      <span className="text-[10px] text-gray-400">{p.pidePass === false ? "📩 Invitación" : "🔑 Clave"}</span>
+                .map((p) => {
+                  const usaClave = p.pidePass !== false;
+                  const usaPerfil = p.pidePerfil !== false && usaClave;
+                  const usaPin = p.pidePin !== false && usaClave;
+
+                  return (
+                    <div
+                      key={p.nombre}
+                      className="bg-[#070B06] border border-[#1E331A] hover:border-[#66FF00]/50 rounded-2xl p-3 space-y-2.5 text-xs transition"
+                    >
+                      <div className="flex flex-wrap justify-between items-center gap-2">
+                        <span className="font-black text-white text-sm">{p.nombre}</span>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] text-gray-400">Cupos:</span>
+                          <input
+                            type="number"
+                            min="1"
+                            defaultValue={p.perfilesDefault ?? 5}
+                            onBlur={(e) => actualizarCampoNumericoPlataforma(p, "perfiles_default", e.target.value)}
+                            className="w-11 bg-[#111A10] border border-[#2A4226] rounded-lg px-1 py-1 text-xs text-white text-center"
+                            title="Cupos por defecto al crear Matriz"
+                          />
+
+                          <span className="text-[10px] text-[#66FF00] font-bold">Catálogo Bs:</span>
+                          <input
+                            type="number"
+                            step="0.5"
+                            defaultValue={p.precioCliente ?? 20}
+                            onBlur={(e) => actualizarCampoNumericoPlataforma(p, "precio_cliente", e.target.value)}
+                            className="w-14 bg-[#111A10] border border-[#66FF00]/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
+                          />
+
+                          <span className="text-[10px] text-purple-300 font-bold">Rev Bs:</span>
+                          <input
+                            type="number"
+                            step="0.5"
+                            defaultValue={p.precioRevendedor ?? 10}
+                            onBlur={(e) => actualizarCampoNumericoPlataforma(p, "precio_revendedor", e.target.value)}
+                            className="w-14 bg-[#111A10] border border-purple-500/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => eliminarPlataforma(p.nombre)}
+                            className="text-gray-500 hover:text-red-400 p-1 cursor-pointer"
+                            title="Eliminar plataforma"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* BOTONES INTERACTIVOS PARA ACTIVAR / DESACTIVAR CLAVE, PERFIL Y PIN */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[#152213]">
+                        <span className="text-[10px] text-gray-400 font-bold">Datos que pide (Toca para cambiar):</span>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleRequisitoPlataforma(p, "pidePass")}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
+                            usaClave
+                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                              : "bg-blue-950 text-blue-300 border-blue-500/50"
+                          }`}
+                        >
+                          {usaClave ? "🔑 Pide Contraseña (Activa)" : "📩 Por Invitación (Sin Clave)"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleRequisitoPlataforma(p, "pidePerfil")}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
+                            usaPerfil
+                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                              : "bg-gray-900 text-gray-400 border-gray-700"
+                          }`}
+                        >
+                          {usaPerfil ? "👤 Pide Perfil: SÍ" : "👤 Sin Perfil (Tocar p/activar)"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleRequisitoPlataforma(p, "pidePin")}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
+                            usaPin
+                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                              : "bg-gray-900 text-gray-400 border-gray-700"
+                          }`}
+                        >
+                          {usaPin ? "📌 Pide PIN: SÍ" : "📌 Sin PIN (Tocar p/activar)"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-[#66FF00]">Cliente Bs:</span>
-                      <input
-                        type="number"
-                        defaultValue={p.precioCliente ?? 20}
-                        onBlur={(e) => actualizarPreciosPlataforma(p.nombre, "precio_cliente", e.target.value)}
-                        className="w-14 bg-[#111A10] border border-[#66FF00]/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
-                      />
-                      <span className="text-[10px] text-purple-300">Rev Bs:</span>
-                      <input
-                        type="number"
-                        defaultValue={p.precioRevendedor ?? 10}
-                        onBlur={(e) => actualizarPreciosPlataforma(p.nombre, "precio_revendedor", e.target.value)}
-                        className="w-14 bg-[#111A10] border border-purple-500/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
-                      />
-                      <button onClick={() => eliminarPlataforma(p.nombre)} className="text-gray-500 hover:text-red-400 ml-1">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           </div>
         </div>
