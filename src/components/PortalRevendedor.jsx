@@ -32,7 +32,7 @@ import {
   Trophy,
   Trash2,
   TrendingUp,
-  Sparkles
+  Calendar
 } from "lucide-react";
 
 export default function PortalRevendedor({
@@ -48,12 +48,15 @@ export default function PortalRevendedor({
   const [tabRev, setTabRev] = useState("mis_clientes");
   const [busqueda, setBusqueda] = useState("");
 
+  // Filtro superior para las tarjetas del Revendedor ('hoy' | 'semana' | 'mes' | 'siempre')
+  const [filtroTarjetasRev, setFiltroTarjetasRev] = useState("siempre");
+
   const hoyISO = obtenerFechaBoliviaISO();
+  const hace7DiasISO = sumarDiasBoliviaISO(-6, hoyISO);
   const [periodoEst, setPeriodoEst] = useState("mes");
   const [fechaDiaEst, setFechaDiaEst] = useState(hoyISO);
   const [mesEst, setMesEst] = useState(hoyISO.slice(0, 7));
 
-  // Punto interactivo en la Gráfica Bursátil del Revendedor
   const [puntoActivoIdx, setPuntoActivoIdx] = useState(null);
 
   const [nombreBanca, setNombreBanca] = useState(revendedor.nombre_billetera || "Mi Billetera");
@@ -81,6 +84,7 @@ export default function PortalRevendedor({
 
   const [mensajeModal, setMensajeModal] = useState(null);
 
+  // Todas las ventas históricas de este revendedor
   const misVentas = useMemo(() => {
     return suscripciones
       .filter((s) => {
@@ -91,6 +95,18 @@ export default function PortalRevendedor({
       .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
   }, [suscripciones, revendedor]);
 
+  // Ventas filtradas para las 3 tarjetas superiores del Revendedor (Hoy / Esta Semana / Este Mes / Siempre)
+  const misVentasTarjetasTop = useMemo(() => {
+    return misVentas.filter((s) => {
+      const f = extraerFechaLocalISO(s.fecha_venta);
+      if (filtroTarjetasRev === "hoy") return f === hoyISO;
+      if (filtroTarjetasRev === "semana") return f >= hace7DiasISO && f <= hoyISO;
+      if (filtroTarjetasRev === "mes") return f.startsWith(hoyISO.slice(0, 7));
+      return true;
+    });
+  }, [misVentas, filtroTarjetasRev, hoyISO, hace7DiasISO]);
+
+  // Ventas filtradas en su pestaña de Estadísticas
   const misVentasEstadisticas = useMemo(() => {
     return misVentas.filter((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
@@ -100,19 +116,39 @@ export default function PortalRevendedor({
     });
   }, [misVentas, periodoEst, fechaDiaEst, mesEst]);
 
-  const totalCobradoClientes = misVentas.reduce((acc, s) => acc + Number(s.precio_venta_revendedor || 0), 0);
-  const totalCostoAdmin = misVentas.reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
-  const miGananciaNeta = totalCobradoClientes - totalCostoAdmin;
+  // Métricas de las tarjetas superiores según el filtro elegido (Hoy / Semana / Mes / Siempre)
+  const cobradoPeriodoTop = misVentasTarjetasTop.reduce(
+    (acc, s) => acc + Number(s.precio_venta_revendedor || 0),
+    0
+  );
+  const costoAdminPeriodoTop = misVentasTarjetasTop.reduce(
+    (acc, s) => acc + Number(s.precio_venta || 0),
+    0
+  );
+  const gananciaNetaPeriodoTop = cobradoPeriodoTop - costoAdminPeriodoTop;
+
+  // Saldo Total Acumulado en la Billetera del Revendedor (siempre muestra su total general real)
+  const gananciaHistoricaTotal = misVentas.reduce(
+    (acc, s) => acc + (Number(s.precio_venta_revendedor || 0) - Number(s.precio_venta || 0)),
+    0
+  );
+  const ajustesManualesBanca = movimientosRevendedor.reduce((acc, m) => acc + Number(m.monto || 0), 0);
+  const saldoBilleteraRevendedor = gananciaHistoricaTotal + ajustesManualesBanca;
+
   const deudaPendienteAdmin = misVentas
     .filter((s) => s.pagado_al_admin === false)
     .reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
 
-  const ajustesManualesBanca = movimientosRevendedor.reduce((acc, m) => acc + Number(m.monto || 0), 0);
-  const saldoBilleteraRevendedor = miGananciaNeta + ajustesManualesBanca;
+  const etiquetaFiltroRev =
+    filtroTarjetasRev === "hoy"
+      ? "DE HOY"
+      : filtroTarjetasRev === "semana"
+      ? "ESTA SEMANA"
+      : filtroTarjetasRev === "mes"
+      ? "ESTE MES"
+      : "HISTÓRICO";
 
-  // =========================================================================
-  // SERIE BURSÁTIL + PREDICCIÓN IA PARA EL REVENDEDOR
-  // =========================================================================
+  // Serie Bursátil + Predicción IA para el Revendedor
   const { serieRevBursatil, previsionMensualRev } = useMemo(() => {
     const mapa = {};
     misVentasEstadisticas.forEach((s) => {
@@ -161,7 +197,6 @@ export default function PortalRevendedor({
     };
   }, [misVentasEstadisticas]);
 
-  // Geometría SVG de la curva del revendedor
   const svgWidth = 680;
   const svgHeight = 205;
   const padX = 32;
@@ -200,9 +235,8 @@ export default function PortalRevendedor({
       : puntosRealesSVG[puntosRealesSVG.length - 1] || null;
 
   const calcularDias = (fechaCorte) => {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const corte = new Date(fechaCorte + "T00:00:00");
+    const hoy = new Date(hoyISO + "T00:00:00-04:00");
+    const corte = new Date(fechaCorte + "T00:00:00-04:00");
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
@@ -433,7 +467,7 @@ export default function PortalRevendedor({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {revendedor.mostrar_bono_semanal && (
         <div className="bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-[#111A10] border-2 border-amber-400 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-[0_0_30px_rgba(251,191,36,0.2)]">
           <div className="flex items-center gap-3">
@@ -465,24 +499,52 @@ export default function PortalRevendedor({
         </div>
       )}
 
+      {/* BARRA DE FILTRO RÁPIDO PARA LAS TARJETAS DEL REVENDEDOR */}
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0E170D]/90 px-4 py-2.5 rounded-2xl border border-[#233820]">
+        <span className="text-xs text-gray-400 font-bold flex items-center gap-1.5">
+          <Calendar className="w-3.5 h-3.5 text-[#66FF00]" /> Mis métricas superiores mostrando:
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { id: "hoy", label: "Hoy" },
+            { id: "semana", label: "Esta Semana" },
+            { id: "mes", label: "Este Mes" },
+            { id: "siempre", label: "Siempre (Total)" }
+          ].map((op) => (
+            <button
+              key={op.id}
+              type="button"
+              onClick={() => setFiltroTarjetasRev(op.id)}
+              className={`px-3 py-1 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                filtroTarjetasRev === op.id
+                  ? "bg-[#66FF00] text-black border-[#66FF00]"
+                  : "bg-[#070B06] text-gray-300 border-[#2A4226] hover:border-[#66FF00]/50"
+              }`}
+            >
+              {op.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* TARJETAS FINANCIERAS DEL REVENDEDOR */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Total Cobrado</p>
-          <p className="text-2xl font-black text-white mt-1">Bs {totalCobradoClientes.toFixed(2)}</p>
-          <p className="text-[10px] text-gray-500">{misVentas.length} ventas registradas</p>
+          <p className="text-[11px] text-gray-400 uppercase font-bold">Total Cobrado ({etiquetaFiltroRev})</p>
+          <p className="text-2xl font-black text-white mt-1">Bs {cobradoPeriodoTop.toFixed(2)}</p>
+          <p className="text-[10px] text-gray-500">{misVentasTarjetasTop.length} venta(s) en periodo</p>
         </div>
 
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Mi Costo Base</p>
-          <p className="text-2xl font-black text-orange-300 mt-1">Bs {totalCostoAdmin.toFixed(2)}</p>
+          <p className="text-[11px] text-gray-400 uppercase font-bold">Mi Costo Base ({etiquetaFiltroRev})</p>
+          <p className="text-2xl font-black text-orange-300 mt-1">Bs {costoAdminPeriodoTop.toFixed(2)}</p>
           <p className="text-[10px] text-gray-500">Por Pagar a Admin: Bs {deudaPendienteAdmin.toFixed(0)}</p>
         </div>
 
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-[#66FF00] uppercase font-extrabold">Mi Ganancia Neta</p>
-          <p className={`text-2xl font-black mt-1 ${miGananciaNeta >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
-            Bs {miGananciaNeta.toFixed(2)}
+          <p className="text-[11px] text-[#66FF00] uppercase font-extrabold">Mi Ganancia Neta ({etiquetaFiltroRev})</p>
+          <p className={`text-2xl font-black mt-1 ${gananciaNetaPeriodoTop >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
+            Bs {gananciaNetaPeriodoTop.toFixed(2)}
           </p>
           <p className="text-[10px] text-cyan-300 font-bold">
             Previsión 30d: Bs {previsionMensualRev.toFixed(0)}
@@ -850,9 +912,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PESTAÑA 4: ESTADÍSTICAS CON GRÁFICA BURSÁTIL + PREDICCIÓN IA PARA ÉL      */}
-      {/* ========================================================================= */}
+      {/* PESTAÑA 4: ESTADÍSTICAS CON GRÁFICA BURSÁTIL + PREDICCIÓN IA */}
       {tabRev === "estadisticas" && (
         <div className="space-y-5">
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
@@ -912,7 +972,6 @@ export default function PortalRevendedor({
             </div>
           </div>
 
-          {/* MISMA GRÁFICA BURSÁTIL INTERACTIVA + PREDICCIÓN IA QUE EL ADMIN */}
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-4">
             <div className="flex flex-wrap justify-between items-center gap-2">
               <div>
@@ -1056,7 +1115,6 @@ export default function PortalRevendedor({
             )}
           </div>
 
-          {/* HISTORIAL DE MOVIMIENTOS DE LA BILLETERA DEL REVENDEDOR */}
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
