@@ -31,7 +31,8 @@ import {
   Wallet,
   Trophy,
   Trash2,
-  Phone
+  TrendingUp,
+  Sparkles
 } from "lucide-react";
 
 export default function PortalRevendedor({
@@ -47,32 +48,30 @@ export default function PortalRevendedor({
   const [tabRev, setTabRev] = useState("mis_clientes");
   const [busqueda, setBusqueda] = useState("");
 
-  // Filtros de estadísticas del revendedor
   const hoyISO = obtenerFechaBoliviaISO();
   const [periodoEst, setPeriodoEst] = useState("mes");
   const [fechaDiaEst, setFechaDiaEst] = useState(hoyISO);
   const [mesEst, setMesEst] = useState(hoyISO.slice(0, 7));
 
-  // Billetera propia del revendedor
+  // Punto interactivo en la Gráfica Bursátil del Revendedor
+  const [puntoActivoIdx, setPuntoActivoIdx] = useState(null);
+
   const [nombreBanca, setNombreBanca] = useState(revendedor.nombre_billetera || "Mi Billetera");
   const [modalAjusteBanca, setModalAjusteBanca] = useState(false);
   const [montoBanca, setMontoBanca] = useState("");
   const [descBanca, setDescBanca] = useState("");
 
-  // Modal Anotar / Editar Cliente Final
   const [subAnotar, setSubAnotar] = useState(null);
   const [nomFinal, setNomFinal] = useState("");
   const [telFinal, setTelFinal] = useState("");
   const [precioFinal, setPrecioFinal] = useState("");
 
-  // Modal Personita en Matriz (para editar su propio cliente y PIN)
-  const [perfilPropioModal, setPerfilPropioModal] = useState(null); // { perfil, matriz, subOcupante }
+  const [perfilPropioModal, setPerfilPropioModal] = useState(null);
   const [pinEditRev, setPinEditRev] = useState("");
   const [nomCliEditRev, setNomCliEditRev] = useState("");
   const [telCliEditRev, setTelCliEditRev] = useState("");
   const [precioCliEditRev, setPrecioCliEditRev] = useState("");
 
-  // Modal Sacar de Stock
   const [matrizVender, setMatrizVender] = useState(null);
   const [nomVentaStock, setNomVentaStock] = useState("");
   const [telVentaStock, setTelVentaStock] = useState("");
@@ -82,7 +81,6 @@ export default function PortalRevendedor({
 
   const [mensajeModal, setMensajeModal] = useState(null);
 
-  // Todas las ventas de este revendedor (Ordenadas por hora de registro: la última arriba)
   const misVentas = useMemo(() => {
     return suscripciones
       .filter((s) => {
@@ -93,7 +91,6 @@ export default function PortalRevendedor({
       .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
   }, [suscripciones, revendedor]);
 
-  // Ventas filtradas en su pestaña de Estadísticas
   const misVentasEstadisticas = useMemo(() => {
     return misVentas.filter((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
@@ -103,7 +100,6 @@ export default function PortalRevendedor({
     });
   }, [misVentas, periodoEst, fechaDiaEst, mesEst]);
 
-  // Métricas financieras del revendedor
   const totalCobradoClientes = misVentas.reduce((acc, s) => acc + Number(s.precio_venta_revendedor || 0), 0);
   const totalCostoAdmin = misVentas.reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
   const miGananciaNeta = totalCobradoClientes - totalCostoAdmin;
@@ -111,26 +107,97 @@ export default function PortalRevendedor({
     .filter((s) => s.pagado_al_admin === false)
     .reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
 
-  // Saldo en la Billetera propia del Revendedor (Ganancia neta de sus ventas + sus ajustes/gastos manuales)
   const ajustesManualesBanca = movimientosRevendedor.reduce((acc, m) => acc + Number(m.monto || 0), 0);
   const saldoBilleteraRevendedor = miGananciaNeta + ajustesManualesBanca;
 
-  // Gráfica por día para el revendedor
-  const graficaDiasRev = useMemo(() => {
+  // =========================================================================
+  // SERIE BURSÁTIL + PREDICCIÓN IA PARA EL REVENDEDOR
+  // =========================================================================
+  const { serieRevBursatil, previsionMensualRev } = useMemo(() => {
     const mapa = {};
     misVentasEstadisticas.forEach((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
-      if (!mapa[f]) mapa[f] = { fecha: f, ventas: 0, cobrado: 0, ganancia: 0 };
+      if (!mapa[f]) mapa[f] = { fecha: f, ventas: 0, ingreso: 0, ganancia: 0, esPrediccion: false };
       const cobro = Number(s.precio_venta_revendedor || 0);
       const costo = Number(s.precio_venta || 0);
       mapa[f].ventas += 1;
-      mapa[f].cobrado += cobro;
+      mapa[f].ingreso += cobro > 0 ? cobro : costo;
       mapa[f].ganancia += cobro > 0 ? cobro - costo : 0;
     });
-    return Object.values(mapa).sort((a, b) => a.fecha.localeCompare(b.fecha)).slice(-12);
+
+    const reales = Object.values(mapa)
+      .sort((a, b) => a.fecha.localeCompare(b.fecha))
+      .slice(-12);
+
+    if (reales.length === 0) return { serieRevBursatil: [], previsionMensualRev: 0 };
+
+    const n = reales.length;
+    const promGan = reales.reduce((a, b) => a + b.ganancia, 0) / n;
+    const promIng = reales.reduce((a, b) => a + b.ingreso, 0) / n;
+    const promVtas = Math.max(1, Math.round(reales.reduce((a, b) => a + b.ventas, 0) / n));
+
+    let pendiente = 0;
+    if (n >= 2) {
+      pendiente = (reales[n - 1].ganancia - reales[Math.max(0, n - 3)].ganancia) / Math.min(3, n);
+    }
+
+    const ultFecha = reales[n - 1].fecha;
+    const proyecciones = [1, 2, 3].map((d) => {
+      const fFutura = sumarDiasBoliviaISO(d, ultFecha);
+      const ganEst = Math.max(promGan * 0.6, promGan + pendiente * d * 0.45);
+      const ingEst = Math.max(ganEst, promIng + pendiente * d * 0.5);
+      return {
+        fecha: fFutura,
+        ventas: promVtas,
+        ingreso: Number(ingEst.toFixed(2)),
+        ganancia: Number(ganEst.toFixed(2)),
+        esPrediccion: true
+      };
+    });
+
+    return {
+      serieRevBursatil: [...reales, ...proyecciones],
+      previsionMensualRev: promGan * 30
+    };
   }, [misVentasEstadisticas]);
 
-  const maxValorGrafica = Math.max(...graficaDiasRev.map((d) => Math.max(d.cobrado, d.ganancia, 1)), 1);
+  // Geometría SVG de la curva del revendedor
+  const svgWidth = 680;
+  const svgHeight = 205;
+  const padX = 32;
+  const padY = 24;
+  const maxValRev = Math.max(
+    ...serieRevBursatil.map((d) => Math.max(d.ingreso, d.ganancia, 10)),
+    10
+  );
+
+  const puntosSVG = serieRevBursatil.map((d, i) => {
+    const total = Math.max(1, serieRevBursatil.length - 1);
+    const x = padX + (i / total) * (svgWidth - padX * 2);
+    const yGan = svgHeight - padY - (Math.max(0, d.ganancia) / maxValRev) * (svgHeight - padY * 2);
+    return { ...d, idx: i, x, yGan };
+  });
+
+  const puntosRealesSVG = puntosSVG.filter((p) => !p.esPrediccion);
+  const puntosPredSVG = puntosSVG.filter((p, idx) => p.esPrediccion || idx === puntosRealesSVG.length - 1);
+
+  const rutaLineaReal = puntosRealesSVG
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.yGan.toFixed(1)}`)
+    .join(" ");
+
+  const rutaAreaReal =
+    puntosRealesSVG.length > 0
+      ? `${rutaLineaReal} L ${puntosRealesSVG[puntosRealesSVG.length - 1].x.toFixed(1)} ${svgHeight - padY} L ${puntosRealesSVG[0].x.toFixed(1)} ${svgHeight - padY} Z`
+      : "";
+
+  const rutaLineaPrediccion = puntosPredSVG
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.yGan.toFixed(1)}`)
+    .join(" ");
+
+  const puntoSeleccionado =
+    puntoActivoIdx !== null && puntosSVG[puntoActivoIdx]
+      ? puntosSVG[puntoActivoIdx]
+      : puntosRealesSVG[puntosRealesSVG.length - 1] || null;
 
   const calcularDias = (fechaCorte) => {
     const hoy = new Date();
@@ -143,7 +210,7 @@ export default function PortalRevendedor({
 
   const obtenerPrecioRevendedorPlat = (nombrePlat) => {
     const p = plataformasList.find((x) => x.nombre === nombrePlat);
-    return Number(p?.precioRevendedor ?? 15);
+    return Number(p?.precioRevendedor ?? 10);
   };
 
   const abrirModalAnotarCliente = (s) => {
@@ -155,7 +222,6 @@ export default function PortalRevendedor({
     );
   };
 
-  // Guarda el cliente final del revendedor y TAMBIÉN lo sincroniza en la tabla general 'clientes' del Admin
   const guardarDatosClienteFinal = async (e) => {
     e.preventDefault();
     if (!nomFinal.trim() || !telFinal.trim() || precioFinal === "") {
@@ -188,7 +254,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // Editar desde la personita de la matriz (Solo para los perfiles que son suyos)
   const guardarEdicionDesdePersonitaMatriz = async (e) => {
     e.preventDefault();
     if (!perfilPropioModal) return;
@@ -224,7 +289,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // Auto-venta desde Stock por el Revendedor
   const venderPerfilDeMatriz = async (e) => {
     e.preventDefault();
     if (!matrizVender) return;
@@ -246,7 +310,6 @@ export default function PortalRevendedor({
       const diasTotales = Number(mesesStock) === 12 ? 365 : Number(mesesStock) * 30;
       const fechaCorte = sumarDiasBoliviaISO(diasTotales, hoyISO);
 
-      // Registrar también en la tabla general de clientes del Admin
       await supabase
         .from("clientes")
         .upsert([{ telefono: telVentaStock.trim(), nombre: `${nomVentaStock.trim()} (Cliente de ${revendedor.nombre})` }], {
@@ -371,7 +434,6 @@ export default function PortalRevendedor({
 
   return (
     <div className="space-y-6">
-      {/* BANNER DORADO DE BONO SEMANAL 5% (SOLO SALE SI MATEUS LO HABILITÓ EN ESTADÍSTICAS) */}
       {revendedor.mostrar_bono_semanal && (
         <div className="bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-[#111A10] border-2 border-amber-400 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-[0_0_30px_rgba(251,191,36,0.2)]">
           <div className="flex items-center gap-3">
@@ -380,13 +442,13 @@ export default function PortalRevendedor({
             </div>
             <div>
               <span className="px-2.5 py-0.5 text-[10px] font-black uppercase rounded-full bg-amber-400 text-black">
-                🏆 Mejor Revendedor de la Semana (Premio 5%)
+                🏆 Mejor Revendedor de la Semana
               </span>
               <h3 className="text-base sm:text-lg font-black text-white mt-1">
                 ¡Felicidades {revendedor.nombre}! Generaste Bs {Number(revendedor.ganancia_generada_semana || 0).toFixed(2)} de ganancia esta semana.
               </h3>
               <p className="text-xs text-amber-200">
-                Te corresponde un bono del 5% equivalente a{" "}
+                Te corresponde un bono equivalente a{" "}
                 <b className="text-white text-sm">Bs {Number(revendedor.monto_bono_semanal || 0).toFixed(2)}</b>.
               </p>
             </div>
@@ -422,7 +484,9 @@ export default function PortalRevendedor({
           <p className={`text-2xl font-black mt-1 ${miGananciaNeta >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
             Bs {miGananciaNeta.toFixed(2)}
           </p>
-          <p className="text-[10px] text-gray-400">De mis ventas</p>
+          <p className="text-[10px] text-cyan-300 font-bold">
+            Previsión 30d: Bs {previsionMensualRev.toFixed(0)}
+          </p>
         </div>
 
         <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-2xl p-4 flex flex-col justify-between">
@@ -441,7 +505,7 @@ export default function PortalRevendedor({
         </div>
       </div>
 
-      {/* BARRA DE PESTAÑAS DEL REVENDEDOR */}
+      {/* BARRA DE PESTAÑAS */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#0E170D] p-2 rounded-2xl border border-[#264023]">
         <button
           onClick={() => setTabRev("mis_clientes")}
@@ -482,7 +546,7 @@ export default function PortalRevendedor({
         </button>
       </div>
 
-      {/* PESTAÑA 1: MIS VENTAS (ORDENADAS CON LA ÚLTIMA REGISTRADA ARRIBA) */}
+      {/* PESTAÑA 1: MIS VENTAS */}
       {tabRev === "mis_clientes" && (
         <div className="space-y-4">
           <input
@@ -625,7 +689,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 2: MATRICES Y STOCK (MUESTRA NOMBRE Y TELÉFONO REAL DE SUS CLIENTES EN CADA PERSONITA) */}
+      {/* PESTAÑA 2: MATRICES Y STOCK */}
       {tabRev === "stock_disponible" && revendedor.puede_ver_matrices && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {matrices
@@ -666,7 +730,6 @@ export default function PortalRevendedor({
                     )}
                   </div>
 
-                  {/* PERSONITAS: SI EL PERFIL ES DE ESTE REVENDEDOR, VE NOMBRE + TELÉFONO REAL Y PUEDE CLICKEAR PARA EDITAR */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                     {perfiles.map((p) => {
                       const subOcupante = suscripciones.find(
@@ -736,7 +799,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 3: RENOVACIONES DEL REVENDEDOR */}
+      {/* PESTAÑA 3: RENOVACIONES */}
       {tabRev === "renovaciones" && (
         <div className="space-y-3">
           {misRenovaciones.length === 0 ? (
@@ -787,10 +850,11 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 4: ESTADÍSTICAS, GRÁFICAS Y BILLETERA PROPIA DEL REVENDEDOR */}
+      {/* ========================================================================= */}
+      {/* PESTAÑA 4: ESTADÍSTICAS CON GRÁFICA BURSÁTIL + PREDICCIÓN IA PARA ÉL      */}
+      {/* ========================================================================= */}
       {tabRev === "estadisticas" && (
         <div className="space-y-5">
-          {/* FILTROS */}
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex gap-2">
               {[
@@ -800,7 +864,10 @@ export default function PortalRevendedor({
               ].map((p) => (
                 <button
                   key={p.id}
-                  onClick={() => setPeriodoEst(p.id)}
+                  onClick={() => {
+                    setPeriodoEst(p.id);
+                    setPuntoActivoIdx(null);
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
                     periodoEst === p.id
                       ? "bg-[#66FF00] text-black border-[#66FF00]"
@@ -845,31 +912,146 @@ export default function PortalRevendedor({
             </div>
           </div>
 
-          {/* GRÁFICA DE BARRAS DEL REVENDEDOR */}
-          <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
-            <h3 className="text-sm font-black text-[#66FF00] uppercase">
-              Gráfica de Mis Ventas y Mi Ganancia por Día ({misVentasEstadisticas.length} ventas)
-            </h3>
-            {graficaDiasRev.length === 0 ? (
-              <p className="text-xs text-gray-500 py-8 text-center">Sin ventas en este período.</p>
+          {/* MISMA GRÁFICA BURSÁTIL INTERACTIVA + PREDICCIÓN IA QUE EL ADMIN */}
+          <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-4">
+            <div className="flex flex-wrap justify-between items-center gap-2">
+              <div>
+                <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4" /> Mi Curva Bursátil de Ganancias & Predicción IA
+                </h3>
+                <p className="text-[11px] text-gray-400">
+                  Toca cualquier punto o pico para ver tu ganancia exacta y tu proyección de los próximos 3 días. Previsión a 30 días:{" "}
+                  <b className="text-cyan-300">Bs {previsionMensualRev.toFixed(2)}</b>.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 text-[11px]">
+                <span className="flex items-center gap-1 text-[#66FF00] font-bold">
+                  <span className="w-3 h-1 bg-[#66FF00] inline-block rounded" /> Mi Ganancia Real
+                </span>
+                <span className="flex items-center gap-1 text-cyan-300 font-bold">
+                  <span className="w-3 h-1 bg-cyan-400 inline-block rounded" /> Mi Predicción (+3d)
+                </span>
+              </div>
+            </div>
+
+            {puntoSeleccionado && (
+              <div
+                className={`rounded-2xl p-3 border flex flex-wrap justify-between items-center gap-2 text-xs ${
+                  puntoSeleccionado.esPrediccion
+                    ? "bg-cyan-950/30 border-cyan-500/60 text-cyan-200"
+                    : "bg-[#070B06] border-[#66FF00]/60 text-white"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${
+                      puntoSeleccionado.esPrediccion ? "bg-cyan-400 text-black" : "bg-[#66FF00] text-black"
+                    }`}
+                  >
+                    {puntoSeleccionado.esPrediccion ? "🔮 Mi Predicción Futura" : "📈 Mi Pico Real"}
+                  </span>
+                  <span className="font-mono font-bold text-sm">{formatearFechaDMA(puntoSeleccionado.fecha)}</span>
+                </div>
+
+                <div className="flex flex-wrap gap-4">
+                  <span>Mis ventas: <b>{puntoSeleccionado.ventas}</b></span>
+                  <span>Cobrado: <b>Bs {puntoSeleccionado.ingreso.toFixed(2)}</b></span>
+                  <span className={puntoSeleccionado.esPrediccion ? "text-cyan-300 font-black" : "text-[#66FF00] font-black"}>
+                    {puntoSeleccionado.esPrediccion ? "Ganancia Proyectada:" : "Mi Ganancia Neta:"} Bs{" "}
+                    {puntoSeleccionado.ganancia.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {puntosSVG.length === 0 ? (
+              <p className="text-xs text-gray-500 py-8 text-center">
+                Aún no hay ventas con precio anotado en este período.
+              </p>
             ) : (
-              <div className="h-48 flex items-end gap-2 pt-6 pb-2 overflow-x-auto border-b border-[#1E331A]">
-                {graficaDiasRev.map((d) => {
-                  const hCobro = Math.max(8, Math.round((d.cobrado / maxValorGrafica) * 130));
-                  const hGan = Math.max(6, Math.round((Math.max(0, d.ganancia) / maxValorGrafica) * 130));
-                  return (
-                    <div key={d.fecha} className="flex-1 min-w-[48px] flex flex-col items-center gap-1">
-                      <span className="text-[10px] text-[#66FF00] font-bold">+Bs {d.ganancia.toFixed(0)}</span>
-                      <div className="w-full flex items-end justify-center gap-1 h-32">
-                        <div style={{ height: `${hCobro}px` }} className="w-3 bg-[#2D5A27] rounded-t" />
-                        <div style={{ height: `${hGan}px` }} className="w-3 bg-[#66FF00] rounded-t" />
-                      </div>
-                      <span className="text-[10px] text-gray-400 font-mono">
-                        {formatearFechaDMA(d.fecha).slice(0, 5)}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="relative w-full overflow-x-auto">
+                <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-52 select-none overflow-visible">
+                  <defs>
+                    <linearGradient id="revPortalGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#66FF00" stopOpacity="0.42" />
+                      <stop offset="100%" stopColor="#66FF00" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+
+                  {[0.2, 0.5, 0.8].map((pct, i) => (
+                    <line
+                      key={i}
+                      x1={padX}
+                      y1={padY + pct * (svgHeight - padY * 2)}
+                      x2={svgWidth - padX}
+                      y2={padY + pct * (svgHeight - padY * 2)}
+                      stroke="#1E331A"
+                      strokeDasharray="3 3"
+                      strokeWidth="1"
+                    />
+                  ))}
+
+                  {rutaAreaReal && <path d={rutaAreaReal} fill="url(#revPortalGrad)" />}
+                  {rutaLineaReal && (
+                    <path d={rutaLineaReal} fill="none" stroke="#66FF00" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                  )}
+                  {rutaLineaPrediccion && (
+                    <path d={rutaLineaPrediccion} fill="none" stroke="#22D3EE" strokeWidth="2.5" strokeDasharray="6 4" strokeLinecap="round" />
+                  )}
+
+                  {puntoSeleccionado && (
+                    <line
+                      x1={puntoSeleccionado.x}
+                      y1={padY / 2}
+                      x2={puntoSeleccionado.x}
+                      y2={svgHeight - padY}
+                      stroke={puntoSeleccionado.esPrediccion ? "#22D3EE" : "#66FF00"}
+                      strokeWidth="1.2"
+                      strokeDasharray="2 2"
+                    />
+                  )}
+
+                  {puntosSVG.map((p) => {
+                    const esActivo = puntoSeleccionado && puntoSeleccionado.idx === p.idx;
+                    return (
+                      <g
+                        key={p.fecha}
+                        onMouseEnter={() => setPuntoActivoIdx(p.idx)}
+                        onClick={() => setPuntoActivoIdx(p.idx)}
+                        className="cursor-pointer"
+                      >
+                        <circle cx={p.x} cy={p.yGan} r="16" fill="transparent" />
+                        <circle
+                          cx={p.x}
+                          cy={p.yGan}
+                          r={esActivo ? "6.5" : "4"}
+                          fill={p.esPrediccion ? "#22D3EE" : "#66FF00"}
+                          stroke="#070B06"
+                          strokeWidth="2"
+                        />
+                        <text
+                          x={p.x}
+                          y={p.yGan - 10}
+                          textAnchor="middle"
+                          fill={p.esPrediccion ? "#67E8F9" : "#66FF00"}
+                          fontSize="9"
+                          fontWeight="bold"
+                        >
+                          {p.ganancia.toFixed(0)}
+                        </text>
+                        <text
+                          x={p.x}
+                          y={svgHeight - 6}
+                          textAnchor="middle"
+                          fill={p.esPrediccion ? "#22D3EE" : "#9CA3AF"}
+                          fontSize="9"
+                        >
+                          {formatearFechaDMA(p.fecha).slice(0, 5)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
               </div>
             )}
           </div>
@@ -925,7 +1107,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL PERSONITA EN MATRIZ (PARA QUE EL REVENDEDOR EDITE SU CLIENTE, PRECIO Y PIN) */}
+      {/* MODAL PERSONITA EN MATRIZ */}
       {perfilPropioModal && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form

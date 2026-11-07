@@ -84,7 +84,41 @@ export default function ModuloDirectorio({
     setMensajeActivo(msg);
   };
 
-  // Filtradas y ordenadas por hora exacta de registro (la última venta arriba)
+  // Cuando cambias la Plataforma en el modal de Editar (ej. de Spotify Asignada a Spotify Invitación), ajusta modalidad y campos automáticamente
+  const handleCambiarPlataformaEnEdicion = (nuevaPlatNombre) => {
+    const cfg = plataformasList.find((p) => p.nombre === nuevaPlatNombre);
+    const esInvitacion =
+      (cfg && cfg.pidePass === false) ||
+      nuevaPlatNombre.toLowerCase().includes("invitaci");
+
+    if (esInvitacion) {
+      setSubEditar({
+        ...subEditar,
+        plataforma: nuevaPlatNombre,
+        tipo_cuenta: "Por Invitación",
+        origen: "proveedor",
+        password_cuenta: "",
+        nombre_perfil: "Por Invitación",
+        pin_perfil: ""
+      });
+    } else {
+      const nuevaModalidad =
+        subEditar.tipo_cuenta === "Por Invitación"
+          ? "1 Dispositivo"
+          : subEditar.tipo_cuenta || "1 Dispositivo";
+      const nuevoPerfil =
+        subEditar.nombre_perfil === "Por Invitación"
+          ? "1 Dispositivo"
+          : subEditar.nombre_perfil;
+      setSubEditar({
+        ...subEditar,
+        plataforma: nuevaPlatNombre,
+        tipo_cuenta: nuevaModalidad,
+        nombre_perfil: nuevoPerfil
+      });
+    }
+  };
+
   const suscripcionesFiltradas = suscripciones
     .filter((s) => {
       if (filtroEstado === "papelera") {
@@ -234,9 +268,18 @@ export default function ModuloDirectorio({
       telefono_cliente_final: subEditar.telefono_cliente_final || null,
       precio_venta_revendedor: Number(subEditar.precio_venta_revendedor || 0),
       correo_cuenta: subEditar.correo_cuenta,
-      password_cuenta: subEditar.password_cuenta,
-      nombre_perfil: subEditar.nombre_perfil,
-      pin_perfil: subEditar.pin_perfil,
+      password_cuenta:
+        subEditar.tipo_cuenta === "Por Invitación" ? "" : subEditar.password_cuenta,
+      nombre_perfil:
+        subEditar.tipo_cuenta === "Por Invitación"
+          ? "Por Invitación"
+          : subEditar.tipo_cuenta === "Cuenta Completa"
+          ? "Cuenta Completa"
+          : subEditar.nombre_perfil,
+      pin_perfil:
+        subEditar.tipo_cuenta === "Por Invitación" || subEditar.tipo_cuenta === "Cuenta Completa"
+          ? ""
+          : subEditar.pin_perfil,
       precio_venta: Number(subEditar.precio_venta),
       costo_proveedor: Number(subEditar.costo_proveedor || 0),
       fecha_venta: subEditar.fecha_venta,
@@ -265,6 +308,7 @@ export default function ModuloDirectorio({
 
       payload = {
         ...payload,
+        plataforma: mat.plataforma,
         matriz_id: mat.id,
         perfil_id: slot.id,
         correo_cuenta: mat.correo,
@@ -295,14 +339,17 @@ export default function ModuloDirectorio({
 
     await supabase
       .from("movimientos_yolo")
-      .update({ monto: Math.abs(Number(subEditar.precio_venta)) })
+      .update({
+        monto: Math.abs(Number(subEditar.precio_venta)),
+        descripcion: `Venta ${payload.plataforma} a ${payload.nombre_cliente}`
+      })
       .eq("referencia_id", subEditar.id)
       .eq("tipo", "Ingreso Venta");
 
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("Cambios guardados y mensaje actualizado");
+    notificar("Plataforma y datos actualizados con éxito");
     if (editada) abrirMensajeDeSuscripcion(editada, "DATOS ACTUALIZADOS");
   };
 
@@ -440,7 +487,7 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
-      {/* LISTA DE SUSCRIPCIONES (LA ÚLTIMA REGISTRADA ARRIBA) */}
+      {/* LISTA DE SUSCRIPCIONES */}
       <div className="space-y-3">
         {suscripcionesFiltradas.length === 0 ? (
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-sm">
@@ -469,6 +516,10 @@ export default function ModuloDirectorio({
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="px-2.5 py-0.5 text-xs font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                         {s.plataforma}
+                      </span>
+
+                      <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
+                        {s.tipo_cuenta || "1 Dispositivo"}
                       </span>
 
                       <span className={`px-2.5 py-0.5 text-xs font-extrabold rounded-full ${
@@ -562,7 +613,7 @@ export default function ModuloDirectorio({
                       }}
                       className="px-3 py-1.5 bg-[#1A2B18] hover:bg-[#253D22] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                     >
-                      <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo
+                      <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Plataforma / Datos)
                     </button>
 
                     <button
@@ -628,7 +679,9 @@ export default function ModuloDirectorio({
         )}
       </div>
 
-      {/* MODAL EDICIÓN TOTAL */}
+      {/* ========================================================================= */}
+      {/* MODAL EDICIÓN TOTAL: CAMBIAR PLATAFORMA (EJ: SPOTIFY ASIGNADA <-> INVIT.) */}
+      {/* ========================================================================= */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -642,8 +695,49 @@ export default function ModuloDirectorio({
               </button>
             </div>
 
+            {/* 1. CAMBIAR PLATAFORMA Y MODALIDAD CON AJUSTE AUTOMÁTICO */}
+            <div className="bg-[#0B120A] border-2 border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
+              <label className="text-xs font-extrabold text-[#66FF00]">
+                1. Cambiar Plataforma o Modalidad (Ej: Spotify Asignada ↔ Spotify Invitación):
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-[11px] text-gray-400">Plataforma</label>
+                  <select
+                    value={subEditar.plataforma}
+                    onChange={(e) => handleCambiarPlataformaEnEdicion(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+                  >
+                    {plataformasList.map((p) => (
+                      <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-gray-400">Modalidad de Entrega</label>
+                  <select
+                    value={subEditar.tipo_cuenta || "1 Dispositivo"}
+                    onChange={(e) =>
+                      setSubEditar({
+                        ...subEditar,
+                        tipo_cuenta: e.target.value,
+                        origen: e.target.value === "Por Invitación" ? "proveedor" : subEditar.origen
+                      })
+                    }
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+                  >
+                    <option value="1 Dispositivo">👤 1 Dispositivo / Perfil</option>
+                    <option value="Cuenta Completa">👑 Cuenta Completa</option>
+                    <option value="Por Invitación">📩 Por Invitación (Solo Correo)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. CAMBIAR ENTRE CLIENTE Y REVENDEDOR */}
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
-              <label className="text-xs font-bold text-[#66FF00]">1. Tipo de Comprador:</label>
+              <label className="text-xs font-bold text-[#66FF00]">2. Tipo de Comprador:</label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -668,6 +762,92 @@ export default function ModuloDirectorio({
                   🤝 Revendedor
                 </button>
               </div>
+
+              {subEditar.tipo_comprador === "revendedor" && (
+                <select
+                  value={subEditar.revendedor_id || ""}
+                  onChange={(e) => {
+                    const r = revendedores.find((x) => x.id === e.target.value);
+                    if (r) {
+                      setSubEditar({
+                        ...subEditar,
+                        revendedor_id: r.id,
+                        nombre_cliente: r.nombre,
+                        telefono_cliente: r.telefono
+                      });
+                    }
+                  }}
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+                >
+                  <option value="">-- Seleccionar Revendedor --</option>
+                  {revendedores.map((r) => (
+                    <option key={r.id} value={r.id}>{r.nombre} ({r.telefono})</option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* 3. CAMBIAR ENTRE MATRIZ DE STOCK Y PROVEEDOR EXTERNO */}
+            <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
+              <label className="text-xs font-bold text-[#66FF00]">3. Origen (Matriz Stock o Proveedor):</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
+                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
+                    subEditar.origen === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
+                  De mi Matriz Stock
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
+                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
+                    subEditar.origen === "proveedor" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
+                  De Proveedor Externo
+                </button>
+              </div>
+
+              {subEditar.origen === "stock" ? (
+                <select
+                  value={matrizNuevaEdicionId}
+                  onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+                >
+                  <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
+                  {matrices
+                    .filter((m) => !m.en_papelera && m.estado === "Activa")
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.plataforma} — {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <select
+                  value={subEditar.proveedor_id || ""}
+                  onChange={(e) => {
+                    const prov = proveedores.find((p) => p.id === e.target.value);
+                    if (prov) {
+                      setSubEditar({
+                        ...subEditar,
+                        proveedor_id: prov.id,
+                        nombre_proveedor: prov.nombre,
+                        telefono_proveedor: prov.telefono
+                      });
+                    }
+                  }}
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+                >
+                  <option value="">-- Seleccionar Proveedor --</option>
+                  {proveedores.map((p) => (
+                    <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">
@@ -714,8 +894,10 @@ export default function ModuloDirectorio({
                 </>
               )}
 
-              <div>
-                <label className="text-[11px] text-gray-400">Correo Cuenta</label>
+              <div className={subEditar.tipo_cuenta === "Por Invitación" ? "col-span-2" : ""}>
+                <label className="text-[11px] text-gray-400">
+                  {subEditar.tipo_cuenta === "Por Invitación" ? "Correo del Cliente (Invitación)" : "Correo Cuenta"}
+                </label>
                 <input
                   type="text"
                   value={subEditar.correo_cuenta}
@@ -723,33 +905,39 @@ export default function ModuloDirectorio({
                   className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                 />
               </div>
-              <div>
-                <label className="text-[11px] text-gray-400">Contraseña</label>
-                <input
-                  type="text"
-                  value={subEditar.password_cuenta || ""}
-                  onChange={(e) => setSubEditar({ ...subEditar, password_cuenta: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] text-gray-400">Perfil</label>
-                <input
-                  type="text"
-                  value={subEditar.nombre_perfil || ""}
-                  onChange={(e) => setSubEditar({ ...subEditar, nombre_perfil: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] text-gray-400">PIN</label>
-                <input
-                  type="text"
-                  value={subEditar.pin_perfil || ""}
-                  onChange={(e) => setSubEditar({ ...subEditar, pin_perfil: e.target.value })}
-                  className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                />
-              </div>
+
+              {subEditar.tipo_cuenta !== "Por Invitación" && (
+                <>
+                  <div>
+                    <label className="text-[11px] text-gray-400">Contraseña</label>
+                    <input
+                      type="text"
+                      value={subEditar.password_cuenta || ""}
+                      onChange={(e) => setSubEditar({ ...subEditar, password_cuenta: e.target.value })}
+                      className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400">Perfil</label>
+                    <input
+                      type="text"
+                      value={subEditar.nombre_perfil || ""}
+                      onChange={(e) => setSubEditar({ ...subEditar, nombre_perfil: e.target.value })}
+                      className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400">PIN</label>
+                    <input
+                      type="text"
+                      value={subEditar.pin_perfil || ""}
+                      onChange={(e) => setSubEditar({ ...subEditar, pin_perfil: e.target.value })}
+                      className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                </>
+              )}
+
               <div>
                 <label className="text-[11px] text-[#66FF00] font-bold">Precio que te pagó (Bs)</label>
                 <input

@@ -12,7 +12,6 @@ import {
   TrendingUp,
   Award,
   Users,
-  Wallet,
   Trophy,
   Eye,
   EyeOff,
@@ -21,6 +20,44 @@ import {
   X,
   Sparkles
 } from "lucide-react";
+
+// Motor reutilizable para construir serie bursátil + 3 días de predicción IA
+function armarSerieConPrediccion(mapaPorFecha) {
+  const reales = Object.values(mapaPorFecha)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha))
+    .slice(-12);
+
+  if (reales.length === 0) return { serie: [], prevision30d: 0 };
+
+  const n = reales.length;
+  const promGan = reales.reduce((a, b) => a + b.ganancia, 0) / n;
+  const promIng = reales.reduce((a, b) => a + b.ingreso, 0) / n;
+  const promVtas = Math.max(1, Math.round(reales.reduce((a, b) => a + b.ventas, 0) / n));
+
+  let pendiente = 0;
+  if (n >= 2) {
+    pendiente = (reales[n - 1].ganancia - reales[Math.max(0, n - 3)].ganancia) / Math.min(3, n);
+  }
+
+  const ultFecha = reales[n - 1].fecha;
+  const proyecciones = [1, 2, 3].map((d) => {
+    const fFutura = sumarDiasBoliviaISO(d, ultFecha);
+    const ganEst = Math.max(promGan * 0.6, promGan + pendiente * d * 0.45);
+    const ingEst = Math.max(ganEst, promIng + pendiente * d * 0.5);
+    return {
+      fecha: fFutura,
+      ventas: promVtas,
+      ingreso: Number(ingEst.toFixed(2)),
+      ganancia: Number(ganEst.toFixed(2)),
+      esPrediccion: true
+    };
+  });
+
+  return {
+    serie: [...reales, ...proyecciones],
+    prevision30d: promGan * 30
+  };
+}
 
 export default function ModuloEstadisticas({
   suscripciones = [],
@@ -44,12 +81,14 @@ export default function ModuloEstadisticas({
   const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos");
   const [revendedorSeleccionado, setRevendedorSeleccionado] = useState("todos");
 
-  // Modal Emergente de Bono Semanal + Porcentaje Editable
+  // Selector independiente para la Segunda Gráfica (Ganancias de Revendedores)
+  const [revendedorGraficaDos, setRevendedorGraficaDos] = useState("todos");
+
   const [modalBonoAbierto, setModalBonoAbierto] = useState(false);
   const [porcentajeBono, setPorcentajeBono] = useState(5);
 
-  // Punto seleccionado en la Gráfica Bursátil Interactiva (Mouse o Touch en Celular)
   const [puntoActivoIdx, setPuntoActivoIdx] = useState(null);
+  const [puntoActivoRevIdx, setPuntoActivoRevIdx] = useState(null);
 
   useEffect(() => {
     const guardado = localStorage.getItem("moss_pct_bono");
@@ -69,7 +108,7 @@ export default function ModuloEstadisticas({
     return ingresoQueMePago - Number(s.costo_proveedor || 0);
   };
 
-  // Ranking Semanal con Porcentaje Editable (por defecto 5%)
+  // Ranking Semanal Bono
   const rankingSemanalBono = useMemo(() => {
     const pct = Number(porcentajeBono || 0) / 100;
     const mapa = {};
@@ -197,9 +236,9 @@ export default function ModuloEstadisticas({
   const saldoTotalBilletera = movimientosYolo.reduce((acc, m) => acc + Number(m.monto || 0), 0);
 
   // =========================================================================
-  // SERIE TEMPORAL + PREDICCIÓN LINEAL DE PROFIT (ESTILO BOLSA DE VALORES)
+  // 1. GRÁFICA BURSÁTIL PRINCIPAL (TUS GANANCIAS + PREDICCIÓN)
   // =========================================================================
-  const serieBursatil = useMemo(() => {
+  const { serie: serieBursatil, prevision30d: previsionMensualProfit } = useMemo(() => {
     const mapa = {};
     ventasFiltradas.forEach((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
@@ -208,93 +247,79 @@ export default function ModuloEstadisticas({
       mapa[f].ingreso += Number(s.precio_venta || 0);
       mapa[f].ganancia += calcularGananciaAdminDeVenta(s);
     });
-
-    const reales = Object.values(mapa)
-      .sort((a, b) => a.fecha.localeCompare(b.fecha))
-      .slice(-12);
-
-    if (reales.length === 0) return [];
-
-    // Calcular pendiente de tendencia (Regresión Lineal / Media Móvil Ponderada) para proyectar los próximos 3 días
-    const n = reales.length;
-    const promedioGanancia = reales.reduce((a, b) => a + b.ganancia, 0) / n;
-    const promedioIngreso = reales.reduce((a, b) => a + b.ingreso, 0) / n;
-    const promedioVentas = Math.max(1, Math.round(reales.reduce((a, b) => a + b.ventas, 0) / n));
-
-    let pendienteGan = 0;
-    if (n >= 2) {
-      const ult = reales[n - 1].ganancia;
-      const ant = reales[Math.max(0, n - 3)].ganancia;
-      pendienteGan = (ult - ant) / Math.min(3, n);
-    }
-
-    const ultimaFechaReal = reales[n - 1].fecha;
-    const proyecciones = [1, 2, 3].map((d) => {
-      const fechaFutura = sumarDiasBoliviaISO(d, ultimaFechaReal);
-      const ganEstimada = Math.max(
-        promedioGanancia * 0.6,
-        promedioGanancia + pendienteGan * d * 0.45
-      );
-      const ingEstimado = Math.max(ganEstimada, promedioIngreso + pendienteGan * d * 0.5);
-      return {
-        fecha: fechaFutura,
-        ventas: promedioVentas,
-        ingreso: Number(ingEstimado.toFixed(2)),
-        ganancia: Number(ganEstimada.toFixed(2)),
-        esPrediccion: true
-      };
-    });
-
-    return [...reales, ...proyecciones];
+    return armarSerieConPrediccion(mapa);
   }, [ventasFiltradas, matrices]);
 
-  // Previsión estimada a 30 días según el ritmo diario real
-  const previsionMensualProfit = useMemo(() => {
-    const reales = serieBursatil.filter((x) => !x.esPrediccion);
-    if (reales.length === 0) return 0;
-    const promDiario = reales.reduce((a, b) => a + b.ganancia, 0) / reales.length;
-    return promDiario * 30;
-  }, [serieBursatil]);
+  // =========================================================================
+  // 2. SEGUNDA GRÁFICA BURSÁTIL (GANANCIAS DE TUS REVENDEDORES + PREDICCIÓN)
+  // =========================================================================
+  const { serie: serieRevendedores, prevision30d: previsionRevendedores30d } = useMemo(() => {
+    const mapa = {};
+    suscripciones
+      .filter((s) => {
+        if (s.en_papelera || s.tipo_comprador !== "revendedor") return false;
+        const f = extraerFechaLocalISO(s.fecha_venta);
+        if (periodo === "dia" && f !== fechaEspecifica) return false;
+        if (periodo === "mes" && !f.startsWith(mesEspecifico)) return false;
+        if (periodo === "anio" && !f.startsWith(anioEspecifico)) return false;
 
-  // Geometría SVG para la gráfica estilo Trading / Bolsa de Valores
-  const svgWidth = 680;
-  const svgHeight = 210;
-  const padX = 32;
-  const padY = 24;
+        if (revendedorGraficaDos !== "todos") {
+          const rObj = revendedores.find((r) => r.id === revendedorGraficaDos);
+          const coincide =
+            s.revendedor_id === revendedorGraficaDos ||
+            (rObj && s.telefono_cliente === rObj.telefono);
+          if (!coincide) return false;
+        }
+        return true;
+      })
+      .forEach((s) => {
+        const f = extraerFechaLocalISO(s.fecha_venta);
+        if (!mapa[f]) mapa[f] = { fecha: f, ventas: 0, ingreso: 0, ganancia: 0, esPrediccion: false };
+        const loQueCobroElRev = Number(s.precio_venta_revendedor || 0);
+        const loQueTePagoATi = Number(s.precio_venta || 0);
+        const gananciaDeEl = loQueCobroElRev > 0 ? loQueCobroElRev - loQueTePagoATi : 0;
 
-  const maxValorSerie = Math.max(
-    ...serieBursatil.map((d) => Math.max(d.ingreso, d.ganancia, 10)),
-    10
-  );
+        mapa[f].ventas += 1;
+        mapa[f].ingreso += loQueCobroElRev > 0 ? loQueCobroElRev : loQueTePagoATi;
+        mapa[f].ganancia += gananciaDeEl;
+      });
 
-  const puntosSVG = serieBursatil.map((d, i) => {
-    const total = Math.max(1, serieBursatil.length - 1);
-    const x = padX + (i / total) * (svgWidth - padX * 2);
-    const yGan = svgHeight - padY - (Math.max(0, d.ganancia) / maxValorSerie) * (svgHeight - padY * 2);
-    const yIng = svgHeight - padY - (Math.max(0, d.ingreso) / maxValorSerie) * (svgHeight - padY * 2);
-    return { ...d, idx: i, x, yGan, yIng };
-  });
+    return armarSerieConPrediccion(mapa);
+  }, [suscripciones, periodo, fechaEspecifica, mesEspecifico, anioEspecifico, revendedorGraficaDos, revendedores]);
 
-  const puntosRealesSVG = puntosSVG.filter((p) => !p.esPrediccion);
-  const puntosPredSVG = puntosSVG.filter((p, idx) => p.esPrediccion || idx === puntosRealesSVG.length - 1);
+  // Helper para renderizar cualquier serie SVG bursátil
+  const construirGeometriaSVG = (serie, activeIdx) => {
+    const svgWidth = 680;
+    const svgHeight = 200;
+    const padX = 32;
+    const padY = 24;
+    const maxVal = Math.max(...serie.map((d) => Math.max(d.ingreso, d.ganancia, 10)), 10);
 
-  const rutaLineaReal = puntosRealesSVG
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.yGan.toFixed(1)}`)
-    .join(" ");
+    const puntos = serie.map((d, i) => {
+      const total = Math.max(1, serie.length - 1);
+      const x = padX + (i / total) * (svgWidth - padX * 2);
+      const yGan = svgHeight - padY - (Math.max(0, d.ganancia) / maxVal) * (svgHeight - padY * 2);
+      return { ...d, idx: i, x, yGan };
+    });
 
-  const rutaAreaReal =
-    puntosRealesSVG.length > 0
-      ? `${rutaLineaReal} L ${puntosRealesSVG[puntosRealesSVG.length - 1].x.toFixed(1)} ${svgHeight - padY} L ${puntosRealesSVG[0].x.toFixed(1)} ${svgHeight - padY} Z`
-      : "";
+    const reales = puntos.filter((p) => !p.esPrediccion);
+    const preds = puntos.filter((p, idx) => p.esPrediccion || idx === reales.length - 1);
 
-  const rutaLineaPrediccion = puntosPredSVG
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.yGan.toFixed(1)}`)
-    .join(" ");
+    const rutaReal = reales.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.yGan.toFixed(1)}`).join(" ");
+    const rutaArea =
+      reales.length > 0
+        ? `${rutaReal} L ${reales[reales.length - 1].x.toFixed(1)} ${svgHeight - padY} L ${reales[0].x.toFixed(1)} ${svgHeight - padY} Z`
+        : "";
+    const rutaPred = preds.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.yGan.toFixed(1)}`).join(" ");
 
-  const puntoSeleccionado =
-    puntoActivoIdx !== null && puntosSVG[puntoActivoIdx]
-      ? puntosSVG[puntoActivoIdx]
-      : puntosRealesSVG[puntosRealesSVG.length - 1] || null;
+    const seleccionado =
+      activeIdx !== null && puntos[activeIdx] ? puntos[activeIdx] : reales[reales.length - 1] || null;
+
+    return { svgWidth, svgHeight, padX, padY, puntos, rutaReal, rutaArea, rutaPred, seleccionado };
+  };
+
+  const geoAdmin = construirGeometriaSVG(serieBursatil, puntoActivoIdx);
+  const geoRev = construirGeometriaSVG(serieRevendedores, puntoActivoRevIdx);
 
   const rankingPlataformas = useMemo(() => {
     const mapa = {};
@@ -308,7 +333,7 @@ export default function ModuloEstadisticas({
 
   return (
     <div className="space-y-6">
-      {/* BARRA DE FILTROS DE TIEMPO + BOTÓN DISCRETO DE BONO SEMANAL EMERGENTE */}
+      {/* BARRA DE FILTROS + BOTÓN EMERGENTE DE BONO SEMANAL */}
       <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 space-y-4 shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -316,7 +341,7 @@ export default function ModuloEstadisticas({
               <BarChart3 className="w-6 h-6 text-[#66FF00]" /> Estadísticas & Trading de Profit MOSS
             </h2>
             <p className="text-xs text-gray-400">
-              Hoy en Santa Cruz: <b className="text-[#66FF00]">{formatearFechaDMA(hoyISO)}</b> · Toca cualquier pico de la gráfica para inspeccionarlo.
+              Hoy en Santa Cruz: <b className="text-[#66FF00]">{formatearFechaDMA(hoyISO)}</b> · Toca cualquier pico de las gráficas para ver el detalle.
             </p>
           </div>
 
@@ -367,7 +392,6 @@ export default function ModuloEstadisticas({
               />
             )}
 
-            {/* BOTÓN EMERGENTE PARA VER / CONFIGURAR BONO SEMANAL DE REVENDEDOR */}
             <button
               type="button"
               onClick={() => setModalBonoAbierto(true)}
@@ -415,7 +439,7 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* RESUMEN DE TARJETAS + PREVISIÓN MENSUAL DE PROFIT */}
+      {/* RESUMEN DE TARJETAS */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
           <p className="text-[11px] text-gray-400 font-bold uppercase">Cuentas Vendidas</p>
@@ -443,15 +467,13 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* GRÁFICA BURSÁTIL INTERACTIVA (BOLSA DE VALORES) + PREDICCIÓN DE PROFIT     */}
-      {/* ========================================================================= */}
+      {/* GRÁFICA 1 (TU PROFIT) + TOP PLATAFORMAS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-4">
           <div className="flex flex-wrap justify-between items-center gap-2">
             <div>
               <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
-                <TrendingUp className="w-4 h-4" /> Curva Bursátil de Profit & Predicción IA
+                <TrendingUp className="w-4 h-4" /> 1. Mi Curva Bursátil de Profit & Predicción IA
               </h3>
               <p className="text-[11px] text-gray-400">
                 Pasa el mouse o toca cualquier punto en tu celular para ver el pico exacto y la predicción.
@@ -462,16 +484,15 @@ export default function ModuloEstadisticas({
                 <span className="w-3 h-1 bg-[#66FF00] inline-block rounded" /> Ganancia Real
               </span>
               <span className="flex items-center gap-1 text-cyan-300 font-bold">
-                <span className="w-3 h-1 bg-cyan-400 inline-block rounded border-b border-dashed" /> Predicción (+3 días)
+                <span className="w-3 h-1 bg-cyan-400 inline-block rounded" /> Predicción (+3 días)
               </span>
             </div>
           </div>
 
-          {/* PANEL INTERACTIVO DEL PICO SELECCIONADO */}
-          {puntoSeleccionado && (
+          {geoAdmin.seleccionado && (
             <div
               className={`rounded-2xl p-3 border flex flex-wrap justify-between items-center gap-2 text-xs ${
-                puntoSeleccionado.esPrediccion
+                geoAdmin.seleccionado.esPrediccion
                   ? "bg-cyan-950/30 border-cyan-500/60 text-cyan-200"
                   : "bg-[#070B06] border-[#66FF00]/60 text-white"
               }`}
@@ -479,39 +500,32 @@ export default function ModuloEstadisticas({
               <div className="flex items-center gap-2">
                 <span
                   className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${
-                    puntoSeleccionado.esPrediccion ? "bg-cyan-400 text-black" : "bg-[#66FF00] text-black"
+                    geoAdmin.seleccionado.esPrediccion ? "bg-cyan-400 text-black" : "bg-[#66FF00] text-black"
                   }`}
                 >
-                  {puntoSeleccionado.esPrediccion ? "🔮 Predicción Futura" : "📈 Pico Real"}
+                  {geoAdmin.seleccionado.esPrediccion ? "🔮 Predicción Futura" : "📈 Pico Real"}
                 </span>
-                <span className="font-mono font-bold text-sm">{formatearFechaDMA(puntoSeleccionado.fecha)}</span>
+                <span className="font-mono font-bold text-sm">{formatearFechaDMA(geoAdmin.seleccionado.fecha)}</span>
               </div>
 
               <div className="flex flex-wrap gap-4">
-                <span>
-                  Ventas: <b>{puntoSeleccionado.ventas}</b>
-                </span>
-                <span>
-                  Ingreso: <b>Bs {puntoSeleccionado.ingreso.toFixed(2)}</b>
-                </span>
-                <span className={puntoSeleccionado.esPrediccion ? "text-cyan-300 font-black" : "text-[#66FF00] font-black"}>
-                  {puntoSeleccionado.esPrediccion ? "Profit Proyectado:" : "Profit Neto:"} Bs{" "}
-                  {puntoSeleccionado.ganancia.toFixed(2)}
+                <span>Ventas: <b>{geoAdmin.seleccionado.ventas}</b></span>
+                <span>Ingreso: <b>Bs {geoAdmin.seleccionado.ingreso.toFixed(2)}</b></span>
+                <span className={geoAdmin.seleccionado.esPrediccion ? "text-cyan-300 font-black" : "text-[#66FF00] font-black"}>
+                  {geoAdmin.seleccionado.esPrediccion ? "Profit Proyectado:" : "Profit Neto:"} Bs{" "}
+                  {geoAdmin.seleccionado.ganancia.toFixed(2)}
                 </span>
               </div>
             </div>
           )}
 
-          {puntosSVG.length === 0 ? (
-            <div className="h-52 flex items-center justify-center text-xs text-gray-500">
-              Sin datos en este período. Cambia el filtro arriba a "Por Mes" o "Histórico".
+          {geoAdmin.puntos.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-xs text-gray-500">
+              Sin datos en este período.
             </div>
           ) : (
             <div className="relative w-full overflow-x-auto">
-              <svg
-                viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                className="w-full h-56 select-none overflow-visible"
-              >
+              <svg viewBox={`0 0 ${geoAdmin.svgWidth} ${geoAdmin.svgHeight}`} className="w-full h-52 select-none overflow-visible">
                 <defs>
                   <linearGradient id="mossStockGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#66FF00" stopOpacity="0.42" />
@@ -519,63 +533,41 @@ export default function ModuloEstadisticas({
                   </linearGradient>
                 </defs>
 
-                {/* Líneas guía horizontales tipo Trading */}
                 {[0.2, 0.5, 0.8].map((pct, i) => (
                   <line
                     key={i}
-                    x1={padX}
-                    y1={padY + pct * (svgHeight - padY * 2)}
-                    x2={svgWidth - padX}
-                    y2={padY + pct * (svgHeight - padY * 2)}
+                    x1={geoAdmin.padX}
+                    y1={geoAdmin.padY + pct * (geoAdmin.svgHeight - geoAdmin.padY * 2)}
+                    x2={geoAdmin.svgWidth - geoAdmin.padX}
+                    y2={geoAdmin.padY + pct * (geoAdmin.svgHeight - geoAdmin.padY * 2)}
                     stroke="#1E331A"
                     strokeDasharray="3 3"
                     strokeWidth="1"
                   />
                 ))}
 
-                {/* Área sombreada bajo la curva real */}
-                {rutaAreaReal && <path d={rutaAreaReal} fill="url(#mossStockGrad)" />}
-
-                {/* Línea de Ganancia Real */}
-                {rutaLineaReal && (
-                  <path
-                    d={rutaLineaReal}
-                    fill="none"
-                    stroke="#66FF00"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
+                {geoAdmin.rutaArea && <path d={geoAdmin.rutaArea} fill="url(#mossStockGrad)" />}
+                {geoAdmin.rutaReal && (
+                  <path d={geoAdmin.rutaReal} fill="none" stroke="#66FF00" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                )}
+                {geoAdmin.rutaPred && (
+                  <path d={geoAdmin.rutaPred} fill="none" stroke="#22D3EE" strokeWidth="2.5" strokeDasharray="6 4" strokeLinecap="round" />
                 )}
 
-                {/* Línea Punteada de Predicción Futura */}
-                {rutaLineaPrediccion && (
-                  <path
-                    d={rutaLineaPrediccion}
-                    fill="none"
-                    stroke="#22D3EE"
-                    strokeWidth="2.5"
-                    strokeDasharray="6 4"
-                    strokeLinecap="round"
-                  />
-                )}
-
-                {/* Línea vertical en el punto activo */}
-                {puntoSeleccionado && (
+                {geoAdmin.seleccionado && (
                   <line
-                    x1={puntoSeleccionado.x}
-                    y1={padY / 2}
-                    x2={puntoSeleccionado.x}
-                    y2={svgHeight - padY}
-                    stroke={puntoSeleccionado.esPrediccion ? "#22D3EE" : "#66FF00"}
+                    x1={geoAdmin.seleccionado.x}
+                    y1={geoAdmin.padY / 2}
+                    x2={geoAdmin.seleccionado.x}
+                    y2={geoAdmin.svgHeight - geoAdmin.padY}
+                    stroke={geoAdmin.seleccionado.esPrediccion ? "#22D3EE" : "#66FF00"}
                     strokeWidth="1.2"
                     strokeDasharray="2 2"
                   />
                 )}
 
-                {/* Puntos interactivos para Mouse (PC) y Touch (Celular) */}
-                {puntosSVG.map((p) => {
-                  const esActivo = puntoSeleccionado && puntoSeleccionado.idx === p.idx;
+                {geoAdmin.puntos.map((p) => {
+                  const esActivo = geoAdmin.seleccionado && geoAdmin.seleccionado.idx === p.idx;
                   return (
                     <g
                       key={p.fecha}
@@ -583,9 +575,7 @@ export default function ModuloEstadisticas({
                       onClick={() => setPuntoActivoIdx(p.idx)}
                       className="cursor-pointer"
                     >
-                      {/* Círculo invisible amplio para facilitar el toque en celular */}
                       <circle cx={p.x} cy={p.yGan} r="16" fill="transparent" />
-
                       <circle
                         cx={p.x}
                         cy={p.yGan}
@@ -594,7 +584,6 @@ export default function ModuloEstadisticas({
                         stroke="#070B06"
                         strokeWidth="2"
                       />
-
                       <text
                         x={p.x}
                         y={p.yGan - 10}
@@ -605,10 +594,9 @@ export default function ModuloEstadisticas({
                       >
                         {p.ganancia.toFixed(0)}
                       </text>
-
                       <text
                         x={p.x}
-                        y={svgHeight - 6}
+                        y={geoAdmin.svgHeight - 6}
                         textAnchor="middle"
                         fill={p.esPrediccion ? "#22D3EE" : "#9CA3AF"}
                         fontSize="9"
@@ -623,7 +611,6 @@ export default function ModuloEstadisticas({
           )}
         </div>
 
-        {/* RANKING DE PLATAFORMAS MÁS VENDIDAS */}
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
           <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
             <Award className="w-4 h-4" /> Cuentas Más Vendidas
@@ -648,7 +635,161 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* REGISTRO EN ORDEN DE HORA (ÚLTIMA VENTA ARRIBA) */}
+      {/* ========================================================================= */}
+      {/* SEGUNDA GRÁFICA BURSÁTIL ABAJO: GANANCIAS DE ELLOS (REVENDEDORES) + PRED. */}
+      {/* ========================================================================= */}
+      <div className="bg-[#111A10] border-2 border-purple-500/40 rounded-3xl p-5 space-y-4 shadow-lg">
+        <div className="flex flex-wrap justify-between items-center gap-3">
+          <div>
+            <h3 className="text-sm sm:text-base font-black text-purple-300 uppercase flex items-center gap-2">
+              <Users className="w-5 h-5 text-purple-400" /> 2. Curva Bursátil de Ganancias de Mis Revendedores & Predicción
+            </h3>
+            <p className="text-[11px] text-gray-400">
+              Muestra cuánto están ganando tus revendedores (su precio de venta menos el costo que te pagan a ti) y su proyección a 30 días:{" "}
+              <b className="text-cyan-300">Bs {previsionRevendedores30d.toFixed(2)} / mes</b>.
+            </p>
+          </div>
+
+          <select
+            value={revendedorGraficaDos}
+            onChange={(e) => {
+              setRevendedorGraficaDos(e.target.value);
+              setPuntoActivoRevIdx(null);
+            }}
+            className="bg-[#070B06] border border-purple-500 rounded-xl px-3.5 py-2 text-xs text-white font-extrabold"
+          >
+            <option value="todos">🤝 Ver Todos los Revendedores Juntos</option>
+            {revendedores.map((r) => (
+              <option key={r.id} value={r.id}>
+                👤 Solo {r.nombre} ({r.telefono})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {geoRev.seleccionado && (
+          <div
+            className={`rounded-2xl p-3 border flex flex-wrap justify-between items-center gap-2 text-xs ${
+              geoRev.seleccionado.esPrediccion
+                ? "bg-cyan-950/30 border-cyan-500/60 text-cyan-200"
+                : "bg-[#070B06] border-purple-500/60 text-white"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${
+                  geoRev.seleccionado.esPrediccion ? "bg-cyan-400 text-black" : "bg-purple-500 text-white"
+                }`}
+              >
+                {geoRev.seleccionado.esPrediccion ? "🔮 Predicción Revendedor" : "📊 Pico de Revendedor"}
+              </span>
+              <span className="font-mono font-bold text-sm">{formatearFechaDMA(geoRev.seleccionado.fecha)}</span>
+            </div>
+
+            <div className="flex flex-wrap gap-4">
+              <span>Ventas de revendedor: <b>{geoRev.seleccionado.ventas}</b></span>
+              <span>Cobrado a sus clientes: <b>Bs {geoRev.seleccionado.ingreso.toFixed(2)}</b></span>
+              <span className={geoRev.seleccionado.esPrediccion ? "text-cyan-300 font-black" : "text-purple-300 font-black"}>
+                {geoRev.seleccionado.esPrediccion ? "Ganancia Proyectada de Ellos:" : "Ganancia Neta de Ellos:"} Bs{" "}
+                {geoRev.seleccionado.ganancia.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {geoRev.puntos.length === 0 ? (
+          <div className="h-44 flex items-center justify-center text-xs text-gray-500">
+            Aún no hay ventas de este revendedor en el período seleccionado.
+          </div>
+        ) : (
+          <div className="relative w-full overflow-x-auto">
+            <svg viewBox={`0 0 ${geoRev.svgWidth} ${geoRev.svgHeight}`} className="w-full h-52 select-none overflow-visible">
+              <defs>
+                <linearGradient id="revStockGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#A855F7" stopOpacity="0.42" />
+                  <stop offset="100%" stopColor="#A855F7" stopOpacity="0.0" />
+                </linearGradient>
+              </defs>
+
+              {[0.2, 0.5, 0.8].map((pct, i) => (
+                <line
+                  key={i}
+                  x1={geoRev.padX}
+                  y1={geoRev.padY + pct * (geoRev.svgHeight - geoRev.padY * 2)}
+                  x2={geoRev.svgWidth - geoRev.padX}
+                  y2={geoRev.padY + pct * (geoRev.svgHeight - geoRev.padY * 2)}
+                  stroke="#1E331A"
+                  strokeDasharray="3 3"
+                  strokeWidth="1"
+                />
+              ))}
+
+              {geoRev.rutaArea && <path d={geoRev.rutaArea} fill="url(#revStockGrad)" />}
+              {geoRev.rutaReal && (
+                <path d={geoRev.rutaReal} fill="none" stroke="#C084FC" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              )}
+              {geoRev.rutaPred && (
+                <path d={geoRev.rutaPred} fill="none" stroke="#22D3EE" strokeWidth="2.5" strokeDasharray="6 4" strokeLinecap="round" />
+              )}
+
+              {geoRev.seleccionado && (
+                <line
+                  x1={geoRev.seleccionado.x}
+                  y1={geoRev.padY / 2}
+                  x2={geoRev.seleccionado.x}
+                  y2={geoRev.svgHeight - geoRev.padY}
+                  stroke={geoRev.seleccionado.esPrediccion ? "#22D3EE" : "#C084FC"}
+                  strokeWidth="1.2"
+                  strokeDasharray="2 2"
+                />
+              )}
+
+              {geoRev.puntos.map((p) => {
+                const esActivo = geoRev.seleccionado && geoRev.seleccionado.idx === p.idx;
+                return (
+                  <g
+                    key={p.fecha}
+                    onMouseEnter={() => setPuntoActivoRevIdx(p.idx)}
+                    onClick={() => setPuntoActivoRevIdx(p.idx)}
+                    className="cursor-pointer"
+                  >
+                    <circle cx={p.x} cy={p.yGan} r="16" fill="transparent" />
+                    <circle
+                      cx={p.x}
+                      cy={p.yGan}
+                      r={esActivo ? "6.5" : "4"}
+                      fill={p.esPrediccion ? "#22D3EE" : "#C084FC"}
+                      stroke="#070B06"
+                      strokeWidth="2"
+                    />
+                    <text
+                      x={p.x}
+                      y={p.yGan - 10}
+                      textAnchor="middle"
+                      fill={p.esPrediccion ? "#67E8F9" : "#D8B4FE"}
+                      fontSize="9"
+                      fontWeight="bold"
+                    >
+                      {p.ganancia.toFixed(0)}
+                    </text>
+                    <text
+                      x={p.x}
+                      y={geoRev.svgHeight - 6}
+                      textAnchor="middle"
+                      fill={p.esPrediccion ? "#22D3EE" : "#9CA3AF"}
+                      fontSize="9"
+                    >
+                      {formatearFechaDMA(p.fecha).slice(0, 5)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        )}
+      </div>
+
+      {/* REGISTRO EN ORDEN DE HORA */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
         <div className="flex justify-between items-center">
           <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
@@ -709,9 +850,7 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* VENTANA EMERGENTE: BONO SEMANAL DE REVENDEDOR CON PORCENTAJE EDITABLE     */}
-      {/* ========================================================================= */}
+      {/* MODAL EMERGENTE: BONO SEMANAL DE REVENDEDOR */}
       {modalBonoAbierto && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-[0_0_50px_rgba(251,191,36,0.25)] animate-modal">
