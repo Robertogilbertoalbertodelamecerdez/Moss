@@ -1,6 +1,12 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
+import {
+  supabase,
+  PLATAFORMAS,
+  formatearFechaDMA,
+  obtenerFechaBoliviaISO,
+  sumarDiasBoliviaISO
+} from "@/config";
 import { extraerDatosProveedor } from "@/utils/extractorProveedor";
 import { generarMensajeEntrega } from "@/utils/mensajesMoss";
 import {
@@ -72,7 +78,7 @@ export default function ModuloVentas({
   const [guardando, setGuardando] = useState(false);
 
   useEffect(() => {
-    setFechaVenta(new Date().toISOString().split("T")[0]);
+    setFechaVenta(obtenerFechaBoliviaISO());
   }, []);
 
   const configPlatActual =
@@ -206,11 +212,10 @@ export default function ModuloVentas({
 
   const seleccionarModoFecha = (modo) => {
     setModoFecha(modo);
-    const d = new Date();
-    if (modo === "hoy") setFechaVenta(d.toISOString().split("T")[0]);
-    else if (modo === "ayer") {
-      d.setDate(d.getDate() - 1);
-      setFechaVenta(d.toISOString().split("T")[0]);
+    if (modo === "hoy") {
+      setFechaVenta(obtenerFechaBoliviaISO());
+    } else if (modo === "ayer") {
+      setFechaVenta(sumarDiasBoliviaISO(-1));
     }
   };
 
@@ -288,10 +293,8 @@ export default function ModuloVentas({
     }
 
     const diasTotales = calcularDiasPorMeses(meses);
-    const fechaBaseStr = fechaVenta || new Date().toISOString().split("T")[0];
-    const fechaObj = new Date(fechaBaseStr + "T12:00:00");
-    fechaObj.setDate(fechaObj.getDate() + diasTotales);
-    const fechaCorte = fechaObj.toISOString().split("T")[0];
+    const fechaBaseStr = fechaVenta || obtenerFechaBoliviaISO();
+    const fechaCorte = sumarDiasBoliviaISO(diasTotales, fechaBaseStr);
 
     return {
       tempId: Date.now() + Math.random(),
@@ -448,8 +451,9 @@ export default function ModuloVentas({
     }
   };
 
+  const hoyBolivia = obtenerFechaBoliviaISO();
   const ventasActivas = suscripciones.filter((s) => !s.en_papelera);
-  const ventasDeHoy = fechaVenta ? ventasActivas.filter((s) => s.fecha_venta === fechaVenta) : [];
+  const ventasDeHoy = ventasActivas.filter((s) => s.fecha_venta === hoyBolivia);
   const ingresoDeHoy = ventasDeHoy.reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
   const cuposLibresTotales = matrices
     .filter((m) => !m.en_papelera && m.estado === "Activa")
@@ -467,7 +471,7 @@ export default function ModuloVentas({
       <div className="bg-gradient-to-r from-[#162914] via-[#101D0E] to-[#0B140A] border-2 border-[#66FF00]/60 rounded-3xl p-6 shadow-lg flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="space-y-2 text-center md:text-left">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-[#66FF00]/20 text-[#66FF00] border border-[#66FF00]/40">
-            <Zap className="w-3.5 h-3.5" /> Ventas a Clientes & Revendedores
+            <Zap className="w-3.5 h-3.5" /> Ventas a Clientes & Revendedores ({formatearFechaDMA(hoyBolivia)})
           </span>
           <h2 className="text-2xl sm:text-3xl font-black text-white">¿Nueva venta o Combo para entregar?</h2>
           <div className="flex flex-wrap justify-center md:justify-start gap-2 pt-2">
@@ -482,6 +486,8 @@ export default function ModuloVentas({
                   type="button"
                   onClick={() => {
                     seleccionarPlataforma(p.nombre, libresPlat);
+                    setFechaVenta(obtenerFechaBoliviaISO());
+                    setModoFecha("hoy");
                     setModalVentaAbierto(true);
                   }}
                   className="px-3 py-1.5 rounded-xl bg-[#070B06]/90 hover:bg-[#66FF00] hover:text-black border border-[#2A4226] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
@@ -498,7 +504,11 @@ export default function ModuloVentas({
 
         <button
           type="button"
-          onClick={() => setModalVentaAbierto(true)}
+          onClick={() => {
+            setFechaVenta(obtenerFechaBoliviaISO());
+            setModoFecha("hoy");
+            setModalVentaAbierto(true);
+          }}
           className="w-full md:w-auto px-8 py-4 bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black font-black text-base rounded-2xl shadow-[0_0_30px_rgba(102,255,0,0.5)] flex items-center justify-center gap-2 shrink-0 cursor-pointer"
         >
           <PlusCircle className="w-6 h-6" /> + REGISTRAR VENTA / COMBO
@@ -508,7 +518,7 @@ export default function ModuloVentas({
       {/* RESUMEN RÁPIDO */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Ventas de Hoy</p>
+          <p className="text-[11px] text-gray-400 uppercase font-bold">Ventas Hoy ({formatearFechaDMA(hoyBolivia).slice(0, 5)})</p>
           <p className="text-2xl font-black text-[#66FF00] mt-1">{ventasDeHoy.length}</p>
         </div>
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
@@ -550,7 +560,9 @@ export default function ModuloVentas({
                     <span className="text-xs font-bold text-white truncate">{v.nombre_cliente}</span>
                   </div>
                   <p className="text-xs text-gray-400 truncate mt-1">{v.correo_cuenta}</p>
-                  <p className="text-[11px] text-gray-500">Bs {v.precio_venta} · Vence: {formatearFechaDMA(v.fecha_corte)}</p>
+                  <p className="text-[11px] text-gray-500">
+                    Bs {v.precio_venta} · Venta: {formatearFechaDMA(v.fecha_venta)} · Vence: {formatearFechaDMA(v.fecha_corte)}
+                  </p>
                 </div>
 
                 <button
@@ -603,7 +615,6 @@ export default function ModuloVentas({
               </button>
             </div>
 
-            {/* SELECTOR: ¿ES CLIENTE O REVENDEDOR? */}
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3.5 space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -714,7 +725,6 @@ export default function ModuloVentas({
               </div>
             )}
 
-            {/* PLATAFORMA, MODALIDAD Y ORIGEN */}
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-[#1E331A]">
               <div className="sm:col-span-4">
                 <label className="text-xs text-gray-400">Plataforma</label>
@@ -921,7 +931,6 @@ export default function ModuloVentas({
               </div>
             )}
 
-            {/* PRECIO, DURACIÓN Y FECHA */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
                 <label className="text-xs text-gray-400">Precio Venta (Bs) *</label>
@@ -959,7 +968,7 @@ export default function ModuloVentas({
               </div>
 
               <div>
-                <label className="text-xs text-gray-400">Fecha ({formatearFechaDMA(fechaVenta)})</label>
+                <label className="text-xs text-[#66FF00] font-bold">Fecha Bolivia ({formatearFechaDMA(fechaVenta)})</label>
                 <div className="flex gap-1 mt-1">
                   <button
                     type="button"

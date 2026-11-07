@@ -16,19 +16,50 @@ export const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "s
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ==========================================
-// 3. FORMATEADOR UNIVERSAL DE FECHA (DÍA/MES/AÑO)
+// 3. FECHA EXACTA DE BOLIVIA (America/La_Paz UTC-4)
 // ==========================================
-export const formatearFechaDMA = (fechaISO) => {
-  if (!fechaISO) return "";
-  const limpia = String(fechaISO).split("T")[0];
+// Devuelve YYYY-MM-DD exacto en hora de Santa Cruz, Bolivia (nunca salta de día a las 8 PM)
+export const obtenerFechaBoliviaISO = (dateObj = new Date()) => {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/La_Paz",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(dateObj);
+};
+
+// Suma o resta días sobre una fecha en zona horaria Bolivia
+export const sumarDiasBoliviaISO = (dias = 0, fechaBaseISO = null) => {
+  const baseStr = fechaBaseISO || obtenerFechaBoliviaISO();
+  const d = new Date(baseStr + "T12:00:00-04:00");
+  d.setDate(d.getDate() + Number(dias));
+  return obtenerFechaBoliviaISO(d);
+};
+
+// Convierte cualquier timestamp UTC de Supabase (ej. movimientos_yolo.fecha) a fecha YYYY-MM-DD de Bolivia
+export const extraerFechaLocalISO = (fechaRaw) => {
+  if (!fechaRaw) return "";
+  const str = String(fechaRaw);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return str.split("T")[0];
+  return obtenerFechaBoliviaISO(d);
+};
+
+// Formateador visual Día/Mes/Año (DD/MM/YYYY)
+export const formatearFechaDMA = (fechaRaw) => {
+  if (!fechaRaw) return "";
+  const limpia = /^\d{4}-\d{2}-\d{2}$/.test(String(fechaRaw))
+    ? String(fechaRaw)
+    : extraerFechaLocalISO(fechaRaw);
   const partes = limpia.split("-");
-  if (partes.length !== 3) return fechaISO;
+  if (partes.length !== 3) return String(fechaRaw);
   const [anio, mes, dia] = partes;
   return `${dia}/${mes}/${anio}`;
 };
 
 // ==========================================
-// 4. CREDENCIALES Y RESPALDO INICIAL
+// 4. CREDENCIALES Y PLATAFORMAS BASE
 // ==========================================
 export const AUTH_CONFIG = {
   usuario: "Mateus",

@@ -1,13 +1,16 @@
 "use client";
 import React, { useState, useMemo } from "react";
-import { formatearFechaDMA } from "@/config";
+import {
+  formatearFechaDMA,
+  obtenerFechaBoliviaISO,
+  extraerFechaLocalISO
+} from "@/config";
 import {
   BarChart3,
   TrendingUp,
   Award,
   Users,
   Wallet,
-  Calendar,
   ArrowUpRight,
   ArrowDownRight
 } from "lucide-react";
@@ -18,23 +21,23 @@ export default function ModuloEstadisticas({
   revendedores = [],
   nombreBilletera = "Yolo"
 }) {
-  const hoyISO = new Date().toISOString().split("T")[0];
-  const mesActualISO = hoyISO.slice(0, 7); // YYYY-MM
-  const anioActualISO = hoyISO.slice(0, 4); // YYYY
+  const hoyISO = obtenerFechaBoliviaISO();
+  const mesActualISO = hoyISO.slice(0, 7); // YYYY-MM en hora de Bolivia
+  const anioActualISO = hoyISO.slice(0, 4); // YYYY en hora de Bolivia
 
-  const [periodo, setPeriodo] = useState("mes"); // 'dia' | 'mes' | 'anio' | 'todo'
+  const [periodo, setPeriodo] = useState("dia"); // 'dia' | 'mes' | 'anio' | 'todo'
   const [fechaEspecifica, setFechaEspecifica] = useState(hoyISO);
   const [mesEspecifico, setMesEspecifico] = useState(mesActualISO);
   const [anioEspecifico, setAnioEspecifico] = useState(anioActualISO);
 
-  const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos"); // 'todos' | 'cliente' | 'revendedor'
+  const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos");
   const [revendedorSeleccionado, setRevendedorSeleccionado] = useState("todos");
 
-  // Filtrar ventas activas según período y tipo de comprador
+  // Filtrar ventas activas según período en hora de Bolivia
   const ventasFiltradas = useMemo(() => {
     return suscripciones.filter((s) => {
       if (s.en_papelera) return false;
-      const f = String(s.fecha_venta || "").split("T")[0];
+      const f = extraerFechaLocalISO(s.fecha_venta);
       if (periodo === "dia" && f !== fechaEspecifica) return false;
       if (periodo === "mes" && !f.startsWith(mesEspecifico)) return false;
       if (periodo === "anio" && !f.startsWith(anioEspecifico)) return false;
@@ -52,10 +55,10 @@ export default function ModuloEstadisticas({
     });
   }, [suscripciones, periodo, fechaEspecifica, mesEspecifico, anioEspecifico, filtroTipoComprador, revendedorSeleccionado, revendedores]);
 
-  // Filtrar movimientos financieros según período
+  // Filtrar movimientos convirtiendo su timestamp UTC a fecha local de Bolivia
   const movimientosFiltrados = useMemo(() => {
     return movimientosYolo.filter((m) => {
-      const f = String(m.fecha || "").split("T")[0];
+      const f = extraerFechaLocalISO(m.fecha);
       if (periodo === "dia" && f !== fechaEspecifica) return false;
       if (periodo === "mes" && !f.startsWith(mesEspecifico)) return false;
       if (periodo === "anio" && !f.startsWith(anioEspecifico)) return false;
@@ -63,7 +66,6 @@ export default function ModuloEstadisticas({
     });
   }, [movimientosYolo, periodo, fechaEspecifica, mesEspecifico, anioEspecifico]);
 
-  // Métricas calculadas
   const totalVendidoPeriodo = ventasFiltradas.reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
   const costoDirectoPeriodo = ventasFiltradas.reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
   const gananciaVentasPeriodo = totalVendidoPeriodo - costoDirectoPeriodo;
@@ -85,11 +87,11 @@ export default function ModuloEstadisticas({
     return Object.values(mapa).sort((a, b) => b.cantidad - a.cantidad);
   }, [ventasFiltradas]);
 
-  // Gráfica por Día (Ventas y Ganancias por fecha)
+  // Gráfica por Día
   const datosPorDia = useMemo(() => {
     const mapa = {};
     ventasFiltradas.forEach((s) => {
-      const f = String(s.fecha_venta || "").split("T")[0];
+      const f = extraerFechaLocalISO(s.fecha_venta);
       if (!mapa[f]) mapa[f] = { fecha: f, ventas: 0, ingreso: 0, ganancia: 0 };
       mapa[f].ventas += 1;
       mapa[f].ingreso += Number(s.precio_venta || 0);
@@ -100,7 +102,7 @@ export default function ModuloEstadisticas({
 
   const maxIngresoDia = Math.max(...datosPorDia.map((d) => Math.max(d.ingreso, d.ganancia, 1)), 1);
 
-  // Estadísticas y Ranking de Revendedores
+  // Ranking de Revendedores
   const rankingRevendedores = useMemo(() => {
     const mapa = {};
     revendedores.forEach((r) => {
@@ -110,7 +112,7 @@ export default function ModuloEstadisticas({
     suscripciones
       .filter((s) => !s.en_papelera && s.tipo_comprador === "revendedor")
       .forEach((s) => {
-        const f = String(s.fecha_venta || "").split("T")[0];
+        const f = extraerFechaLocalISO(s.fecha_venta);
         if (periodo === "dia" && f !== fechaEspecifica) return;
         if (periodo === "mes" && !f.startsWith(mesEspecifico)) return;
         if (periodo === "anio" && !f.startsWith(anioEspecifico)) return;
@@ -149,14 +151,13 @@ export default function ModuloEstadisticas({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-black text-white flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-[#66FF00]" /> Centro de Estadísticas y Rendimiento MOSS
+              <BarChart3 className="w-6 h-6 text-[#66FF00]" /> Centro de Estadísticas MOSS (Hora Bolivia)
             </h2>
             <p className="text-xs text-gray-400">
-              Analiza tus ventas, ganancias por día, plataformas más vendidas y producción de cada revendedor.
+              Hoy en Santa Cruz: <b className="text-[#66FF00]">{formatearFechaDMA(hoyISO)}</b>
             </p>
           </div>
 
-          {/* SELECTOR DE PERÍODO */}
           <div className="flex flex-wrap items-center gap-2">
             {[
               { id: "dia", label: "Por Día" },
@@ -267,7 +268,6 @@ export default function ModuloEstadisticas({
 
       {/* GRÁFICA DE VENTAS Y GANANCIAS POR DÍA + TOP PLATAFORMAS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* GRÁFICA DE BARRAS POR DÍA */}
         <div className="lg:col-span-2 bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
@@ -350,13 +350,13 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* RENDIMIENTO POR REVENDEDOR (CUÁNTO GENERÓ CADA UNO Y CUÁNTAS VENTAS HIZO) */}
+      {/* RENDIMIENTO POR REVENDEDOR */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
         <div className="flex justify-between items-center">
           <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
             <Users className="w-4 h-4" /> Producción y Ranking de Revendedores
           </h3>
-          <span className="text-xs text-gray-400">Ordenado por quién generó más ingresos</span>
+          <span className="text-xs text-gray-400">Toca un revendedor para filtrar sus ventas</span>
         </div>
 
         {rankingRevendedores.length === 0 ? (
