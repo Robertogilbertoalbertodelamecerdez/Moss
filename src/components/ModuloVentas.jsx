@@ -91,7 +91,23 @@ export default function ModuloVentas({
       precioRevendedor: 10
     };
 
-  // ATAJO DE PRECIO: Obtiene el precio sugerido según si es Cliente o Revendedor (pero 100% libre de editar)
+  const perfilesEnCarritoIds = carritoCombo.map((item) => item.perfilIdUsado).filter(Boolean);
+
+  // Calcula cuántos cupos libres reales tiene cualquier plataforma en tus matrices activas
+  const contarCuposLibresPlataforma = (nombrePlat) => {
+    return matrices
+      .filter((m) => !m.en_papelera && m.estado === "Activa" && m.plataforma === nombrePlat)
+      .reduce(
+        (acc, m) =>
+          acc +
+          (m.perfiles_matriz || []).filter(
+            (pf) => !pf.ocupado && !pf.caido && !perfilesEnCarritoIds.includes(pf.id)
+          ).length,
+        0
+      );
+  };
+
+  // ATAJO DE PRECIO: Sugiere el precio según Cliente o Revendedor, 100% libre de editar
   const aplicarAtajoPrecio = (nombrePlat, rolComprador, cantMeses = 1) => {
     const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
     if (!cfg) return;
@@ -178,17 +194,18 @@ export default function ModuloVentas({
     notificar("Proveedor guardado en Supabase");
   };
 
-  const seleccionarPlataforma = (nombrePlat, libresPlat = 0) => {
+  const seleccionarPlataforma = (nombrePlat, libresPlat = null) => {
     setPlataforma(nombrePlat);
     setMatrizSeleccionadaId("");
     aplicarAtajoPrecio(nombrePlat, tipoComprador, meses);
+    const cupos = libresPlat !== null ? libresPlat : contarCuposLibresPlataforma(nombrePlat);
     const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
     if (cfg && cfg.pidePass === false) {
       setTipoCuenta("Por Invitación");
       setOrigen("proveedor");
     } else {
       if (tipoCuenta === "Por Invitación") setTipoCuenta("1 Dispositivo");
-      setOrigen(libresPlat > 0 ? "stock" : "proveedor");
+      setOrigen(cupos > 0 ? "stock" : "proveedor");
     }
   };
 
@@ -233,8 +250,6 @@ export default function ModuloVentas({
       setFechaVenta(sumarDiasBoliviaISO(-1));
     }
   };
-
-  const perfilesEnCarritoIds = carritoCombo.map((item) => item.perfilIdUsado).filter(Boolean);
 
   const obtenerPerfilesLibresDeMatriz = (matriz) => {
     if (!matriz || !matriz.perfiles_matriz) return [];
@@ -326,7 +341,7 @@ export default function ModuloVentas({
       perfilFinal,
       pinFinal,
       costoFinal,
-      precioVenta: Number(precioVenta), // Cobra exactamente lo que está escrito en el campo
+      precioVenta: Number(precioVenta),
       meses: Number(meses),
       diasTotales,
       fechaVenta: fechaBaseStr,
@@ -481,18 +496,27 @@ export default function ModuloVentas({
 
   return (
     <div className="space-y-6">
-      {/* BANNER HERO CON ATAJOS DE PLATAFORMA Y PRECIO */}
+      {/* ===================================================================== */}
+      {/* BANNER HERO: VERDE BRILLANTE SI TIENE CUPOS EN STOCK, APAGADO SI NO   */}
+      {/* ===================================================================== */}
       <div className="bg-gradient-to-r from-[#162914] via-[#101D0E] to-[#0B140A] border-2 border-[#66FF00]/60 rounded-3xl p-6 shadow-lg flex flex-col md:flex-row items-center justify-between gap-6">
-        <div className="space-y-2 text-center md:text-left">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-[#66FF00]/20 text-[#66FF00] border border-[#66FF00]/40">
-            <Zap className="w-3.5 h-3.5" /> Ventas a Clientes & Revendedores ({formatearFechaDMA(hoyBolivia)})
-          </span>
+        <div className="space-y-2.5 text-center md:text-left">
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-[#66FF00]/20 text-[#66FF00] border border-[#66FF00]/40">
+              <Zap className="w-3.5 h-3.5" /> Ventas a Clientes & Revendedores ({formatearFechaDMA(hoyBolivia)})
+            </span>
+            <span className="text-[11px] text-gray-400">
+              🟢 Verde = Con cupos en tu Stock · ⚫ Apagado = Sin stock (Comprar a Proveedor)
+            </span>
+          </div>
+
           <h2 className="text-2xl sm:text-3xl font-black text-white">¿Nueva venta o Combo para entregar?</h2>
+
           <div className="flex flex-wrap justify-center md:justify-start gap-2 pt-2">
             {plataformasList.map((p) => {
-              const libresPlat = matrices
-                .filter((m) => !m.en_papelera && m.estado === "Activa" && m.plataforma === p.nombre)
-                .reduce((acc, m) => acc + (m.perfiles_matriz || []).filter((pf) => !pf.ocupado && !pf.caido).length, 0);
+              const libresPlat = contarCuposLibresPlataforma(p.nombre);
+              const tieneStock = libresPlat > 0;
+              const esInvitacion = p.pidePass === false;
 
               return (
                 <button
@@ -504,12 +528,30 @@ export default function ModuloVentas({
                     setModoFecha("hoy");
                     setModalVentaAbierto(true);
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-[#070B06]/90 hover:bg-[#66FF00] hover:text-black border border-[#2A4226] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                  className={`px-3 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                    tieneStock
+                      ? "bg-[#11240F] hover:bg-[#66FF00] text-white hover:text-black border-[#66FF00] shadow-[0_0_15px_rgba(102,255,0,0.2)]"
+                      : esInvitacion
+                      ? "bg-[#09131C] hover:bg-blue-500 hover:text-black text-blue-200 border-blue-500/40"
+                      : "bg-[#070A07]/70 hover:bg-gray-800 text-gray-500 hover:text-gray-200 border-gray-800 opacity-65 hover:opacity-100"
+                  }`}
                 >
                   <span>{p.nombre}</span>
-                  <span className="px-1.5 py-0.2 rounded text-[10px] bg-[#66FF00]/15 text-[#66FF00]">
-                    Bs {p.precioCliente ?? 20} / Rev {p.precioRevendedor ?? 10}
-                  </span>
+
+                  {/* BADGE DE CUPOS LIBRES O PROVEEDOR */}
+                  {tieneStock ? (
+                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-[#66FF00] text-black">
+                      ● {libresPlat} {libresPlat === 1 ? "libre" : "libres"}
+                    </span>
+                  ) : esInvitacion ? (
+                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-500/30">
+                      📩 Inv. (Prov.)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-gray-900 text-gray-500 border border-gray-800">
+                      0 stock (Prov.)
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -742,17 +784,26 @@ export default function ModuloVentas({
 
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-[#1E331A]">
               <div className="sm:col-span-4">
-                <label className="text-xs text-gray-400">Plataforma</label>
+                <label className="text-xs text-gray-400">Plataforma (Stock / Prov.)</label>
                 <select
                   value={plataforma}
                   onChange={(e) => seleccionarPlataforma(e.target.value)}
                   className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs font-bold"
                 >
-                  {plataformasList.map((p) => (
-                    <option key={p.nombre} value={p.nombre}>
-                      {p.nombre} ({tipoComprador === "revendedor" ? `Rev Bs ${p.precioRevendedor}` : `Bs ${p.precioCliente}`})
-                    </option>
-                  ))}
+                  {plataformasList.map((p) => {
+                    const cLibres = contarCuposLibresPlataforma(p.nombre);
+                    const infoStock =
+                      cLibres > 0
+                        ? `🟢 ${cLibres} libre(s)`
+                        : p.pidePass === false
+                        ? `📩 Invitación`
+                        : `⚫ 0 stock (Prov.)`;
+                    return (
+                      <option key={p.nombre} value={p.nombre}>
+                        {p.nombre} — {infoStock}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -803,7 +854,7 @@ export default function ModuloVentas({
                       origen === "stock" && !esModoInvitacionActual ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                     }`}
                   >
-                    Stock ({matricesDisponibles.length})
+                    Stock ({contarCuposLibresPlataforma(plataforma)})
                   </button>
                   <button
                     type="button"
