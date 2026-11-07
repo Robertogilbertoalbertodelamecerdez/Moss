@@ -86,11 +86,25 @@ export default function ModuloVentas({
       nombre: plataforma,
       pidePass: true,
       pidePerfil: true,
-      pidePin: true
+      pidePin: true,
+      precioCliente: 20,
+      precioRevendedor: 10
     };
+
+  // ATAJO DE PRECIO: Obtiene el precio sugerido según si es Cliente o Revendedor (pero 100% libre de editar)
+  const aplicarAtajoPrecio = (nombrePlat, rolComprador, cantMeses = 1) => {
+    const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
+    if (!cfg) return;
+    const base =
+      rolComprador === "revendedor"
+        ? Number(cfg.precioRevendedor ?? 10)
+        : Number(cfg.precioCliente ?? 20);
+    setPrecioVenta(String(base * Number(cantMeses || 1)));
+  };
 
   const cambiarTipoComprador = (nuevoTipo) => {
     setTipoComprador(nuevoTipo);
+    aplicarAtajoPrecio(plataforma, nuevoTipo, meses);
     if (nuevoTipo === "revendedor") {
       const primerRev = revendedores[0];
       if (primerRev) {
@@ -167,6 +181,7 @@ export default function ModuloVentas({
   const seleccionarPlataforma = (nombrePlat, libresPlat = 0) => {
     setPlataforma(nombrePlat);
     setMatrizSeleccionadaId("");
+    aplicarAtajoPrecio(nombrePlat, tipoComprador, meses);
     const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
     if (cfg && cfg.pidePass === false) {
       setTipoCuenta("Por Invitación");
@@ -311,7 +326,7 @@ export default function ModuloVentas({
       perfilFinal,
       pinFinal,
       costoFinal,
-      precioVenta: Number(precioVenta),
+      precioVenta: Number(precioVenta), // Cobra exactamente lo que está escrito en el campo
       meses: Number(meses),
       diasTotales,
       fechaVenta: fechaBaseStr,
@@ -320,7 +335,6 @@ export default function ModuloVentas({
   };
 
   const limpiarCamposCuentaActual = () => {
-    setPrecioVenta("");
     setTextoProveedorCrudo("");
     setProvCorreo("");
     setProvPassword("");
@@ -467,7 +481,7 @@ export default function ModuloVentas({
 
   return (
     <div className="space-y-6">
-      {/* BANNER HERO */}
+      {/* BANNER HERO CON ATAJOS DE PLATAFORMA Y PRECIO */}
       <div className="bg-gradient-to-r from-[#162914] via-[#101D0E] to-[#0B140A] border-2 border-[#66FF00]/60 rounded-3xl p-6 shadow-lg flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="space-y-2 text-center md:text-left">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-[#66FF00]/20 text-[#66FF00] border border-[#66FF00]/40">
@@ -493,8 +507,8 @@ export default function ModuloVentas({
                   className="px-3 py-1.5 rounded-xl bg-[#070B06]/90 hover:bg-[#66FF00] hover:text-black border border-[#2A4226] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>{p.nombre}</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] ${libresPlat > 0 ? "bg-[#66FF00]/20 text-[#66FF00]" : "bg-gray-800 text-gray-400"}`}>
-                    {p.pidePass === false ? "Inv." : `${libresPlat} stock`}
+                  <span className="px-1.5 py-0.2 rounded text-[10px] bg-[#66FF00]/15 text-[#66FF00]">
+                    Bs {p.precioCliente ?? 20} / Rev {p.precioRevendedor ?? 10}
                   </span>
                 </button>
               );
@@ -507,6 +521,7 @@ export default function ModuloVentas({
           onClick={() => {
             setFechaVenta(obtenerFechaBoliviaISO());
             setModoFecha("hoy");
+            aplicarAtajoPrecio(plataforma, tipoComprador, meses);
             setModalVentaAbierto(true);
           }}
           className="w-full md:w-auto px-8 py-4 bg-gradient-to-r from-[#66FF00] to-[#4CE600] text-black font-black text-base rounded-2xl shadow-[0_0_30px_rgba(102,255,0,0.5)] flex items-center justify-center gap-2 shrink-0 cursor-pointer"
@@ -626,7 +641,7 @@ export default function ModuloVentas({
                       : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <UserCheck className="w-4 h-4" /> Venta a Cliente Final
+                  <UserCheck className="w-4 h-4" /> Venta a Cliente (Catálogo Bs {configPlatActual.precioCliente ?? 20})
                 </button>
                 <button
                   type="button"
@@ -637,7 +652,7 @@ export default function ModuloVentas({
                       : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <Users className="w-4 h-4" /> Venta a Revendedor
+                  <Users className="w-4 h-4" /> Venta a Revendedor (Atajo Bs {configPlatActual.precioRevendedor ?? 10})
                 </button>
               </div>
 
@@ -734,7 +749,9 @@ export default function ModuloVentas({
                   className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs font-bold"
                 >
                   {plataformasList.map((p) => (
-                    <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+                    <option key={p.nombre} value={p.nombre}>
+                      {p.nombre} ({tipoComprador === "revendedor" ? `Rev Bs ${p.precioRevendedor}` : `Bs ${p.precioCliente}`})
+                    </option>
                   ))}
                 </select>
               </div>
@@ -933,7 +950,9 @@ export default function ModuloVentas({
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
-                <label className="text-xs text-gray-400">Precio Venta (Bs) *</label>
+                <label className="text-xs text-[#66FF00] font-bold">
+                  Precio a Cobrar (Bs) * (Atajo libre de editar)
+                </label>
                 <input
                   type="number"
                   step="0.01"
@@ -956,7 +975,10 @@ export default function ModuloVentas({
                     <button
                       key={op.valor}
                       type="button"
-                      onClick={() => setMeses(op.valor)}
+                      onClick={() => {
+                        setMeses(op.valor);
+                        aplicarAtajoPrecio(plataforma, tipoComprador, op.valor);
+                      }}
                       className={`flex-1 py-2 rounded-xl text-[11px] font-extrabold border cursor-pointer ${
                         Number(meses) === op.valor ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                       }`}

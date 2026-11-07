@@ -133,7 +133,8 @@ export default function MossCRM() {
           pidePass: p.pide_pass ?? true,
           pidePerfil: p.pide_perfil ?? true,
           pidePin: p.pide_pin ?? true,
-          precioRevendedor: p.precio_revendedor ?? 15
+          precioCliente: p.precio_cliente ?? 20,
+          precioRevendedor: p.precio_revendedor ?? 10
         }))
       );
     }

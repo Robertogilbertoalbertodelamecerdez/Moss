@@ -45,11 +45,12 @@ export default function ModuloConfig({
   const [busquedaRev, setBusquedaRev] = useState("");
   const [busquedaPlat, setBusquedaPlat] = useState("");
 
-  // Nueva Plataforma + Precio Revendedor
+  // Nueva Plataforma + Ambos Precios
   const [nuevaPlatNombre, setNuevaPlatNombre] = useState("");
   const [esPorInvitacion, setEsPorInvitacion] = useState(false);
   const [nuevaPlatCupos, setNuevaPlatCupos] = useState(5);
-  const [nuevaPlatPrecioRev, setNuevaPlatPrecioRev] = useState(15);
+  const [nuevaPlatPrecioCli, setNuevaPlatPrecioCli] = useState(20);
+  const [nuevaPlatPrecioRev, setNuevaPlatPrecioRev] = useState(10);
   const [nuevaPlatPidePass, setNuevaPlatPidePass] = useState(true);
   const [nuevaPlatPidePerfil, setNuevaPlatPidePerfil] = useState(true);
   const [nuevaPlatPidePin, setNuevaPlatPidePin] = useState(false);
@@ -76,7 +77,8 @@ export default function ModuloConfig({
         {
           nombre: limpio,
           perfiles_default: esPorInvitacion ? 1 : Number(nuevaPlatCupos || 5),
-          precio_revendedor: Number(nuevaPlatPrecioRev || 15),
+          precio_cliente: Number(nuevaPlatPrecioCli || 20),
+          precio_revendedor: Number(nuevaPlatPrecioRev || 10),
           tiene_extra_2020: limpio.toLowerCase().includes("netflix"),
           pide_pass: esPorInvitacion ? false : nuevaPlatPidePass,
           pide_perfil: esPorInvitacion ? false : nuevaPlatPidePerfil,
@@ -90,13 +92,13 @@ export default function ModuloConfig({
     notificar(`App ${limpio} guardada`);
   };
 
-  const actualizarPrecioRevendedorPlat = async (nombrePlat, nuevoPrecio) => {
+  const actualizarPreciosPlataforma = async (nombrePlat, campoDB, nuevoPrecio) => {
     await supabase
       .from("plataformas")
-      .update({ precio_revendedor: Number(nuevoPrecio || 0) })
+      .update({ [campoDB]: Number(nuevoPrecio || 0) })
       .eq("nombre", nombrePlat);
     await recargarTodo();
-    notificar(`Precio revendedor de ${nombrePlat} actualizado`);
+    notificar(`Atajo de precio de ${nombrePlat} actualizado`);
   };
 
   const eliminarPlataforma = async (nombrePlat) => {
@@ -198,7 +200,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_4.0_PORTAL_REVENDEDORES",
+      version: "MOSS_CRM_4.5_CATALOGO_Y_BOLSA",
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
       proveedores: prRes.data || [],
@@ -246,14 +248,13 @@ export default function ModuloConfig({
 
   return (
     <div className="space-y-6">
-      {/* 3 BOTONES EMERGENTES: PLATAFORMAS, PROVEEDORES Y REVENDEDORES */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 flex items-center justify-between">
           <div>
             <h3 className="font-black text-white text-sm flex items-center gap-2">
-              <Tv className="w-4 h-4 text-[#66FF00]" /> Plataformas y Precios ({plataformasList.length})
+              <Tv className="w-4 h-4 text-[#66FF00]" /> Catálogo y Atajos ({plataformasList.length})
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Define precios para revendedores</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Precios Cliente y Revendedor</p>
           </div>
           <button onClick={() => setModalPlataformas(true)} className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
             Administrar
@@ -354,14 +355,12 @@ export default function ModuloConfig({
         </div>
       </div>
 
-      {/* ============================================================== */}
-      {/* MODAL PLATAFORMAS + PRECIO MAYORISTA PARA REVENDEDORES         */}
-      {/* ============================================================== */}
+      {/* MODAL PLATAFORMAS + ATAJOS DE PRECIO CATÁLOGO Y REVENTA */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00]">Plataformas y Precio Revendedor ({plataformasList.length})</h3>
+              <h3 className="font-black text-[#66FF00]">Catálogo de Plataformas y Atajos de Precio ({plataformasList.length})</h3>
               <button onClick={() => setModalPlataformas(false)} className="text-gray-400"><X className="w-5 h-5" /></button>
             </div>
 
@@ -374,31 +373,38 @@ export default function ModuloConfig({
                   <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación
                 </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                 <input type="text" placeholder="Nombre App" value={nuevaPlatNombre} onChange={(e) => setNuevaPlatNombre(e.target.value)} className="sm:col-span-2 bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-                <input type="number" step="0.5" placeholder="Precio Revendedor (Bs)" value={nuevaPlatPrecioRev} onChange={(e) => setNuevaPlatPrecioRev(e.target.value)} className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold" />
+                <input type="number" step="0.5" placeholder="Catálogo (Bs)" value={nuevaPlatPrecioCli} onChange={(e) => setNuevaPlatPrecioCli(e.target.value)} className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold" />
+                <input type="number" step="0.5" placeholder="Revendedor (Bs)" value={nuevaPlatPrecioRev} onChange={(e) => setNuevaPlatPrecioRev(e.target.value)} className="bg-[#111A10] border border-purple-500 rounded-xl p-2 text-xs text-white font-bold" />
               </div>
               <button type="submit" className="w-full py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer">+ Guardar Plataforma</button>
             </form>
 
             <input type="text" placeholder="Buscar app..." value={busquedaPlat} onChange={(e) => setBusquedaPlat(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto">
+            <div className="grid grid-cols-1 gap-2 max-h-72 overflow-y-auto">
               {plataformasList
                 .filter((p) => !busquedaPlat.trim() || p.nombre.toLowerCase().includes(busquedaPlat.toLowerCase()))
                 .map((p) => (
-                  <div key={p.nombre} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-3 flex justify-between items-center text-xs gap-2">
+                  <div key={p.nombre} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-3 flex flex-wrap justify-between items-center text-xs gap-2">
                     <div>
                       <p className="font-bold text-white">{p.nombre}</p>
                       <span className="text-[10px] text-gray-400">{p.pidePass === false ? "📩 Invitación" : "🔑 Clave"}</span>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-orange-300">Rev Bs:</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-[#66FF00]">Cliente Bs:</span>
                       <input
                         type="number"
-                        defaultValue={p.precioRevendedor ?? 15}
-                        onBlur={(e) => actualizarPrecioRevendedorPlat(p.nombre, e.target.value)}
+                        defaultValue={p.precioCliente ?? 20}
+                        onBlur={(e) => actualizarPreciosPlataforma(p.nombre, "precio_cliente", e.target.value)}
                         className="w-14 bg-[#111A10] border border-[#66FF00]/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
-                        title="Cambia el precio para revendedor y haz clic afuera para guardar"
+                      />
+                      <span className="text-[10px] text-purple-300">Rev Bs:</span>
+                      <input
+                        type="number"
+                        defaultValue={p.precioRevendedor ?? 10}
+                        onBlur={(e) => actualizarPreciosPlataforma(p.nombre, "precio_revendedor", e.target.value)}
+                        className="w-14 bg-[#111A10] border border-purple-500/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
                       />
                       <button onClick={() => eliminarPlataforma(p.nombre)} className="text-gray-500 hover:text-red-400 ml-1">
                         <Trash2 className="w-4 h-4" />
@@ -411,9 +417,7 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* ============================================================== */}
-      {/* MODAL PROVEEDORES                                              */}
-      {/* ============================================================== */}
+      {/* MODAL PROVEEDORES */}
       {modalProveedores && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
@@ -455,9 +459,7 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* ============================================================== */}
-      {/* MODAL REVENDEDORES: USUARIO, PIN Y PERMISO DE MATRICES STOCK   */}
-      {/* ============================================================== */}
+      {/* MODAL REVENDEDORES */}
       {modalRevendedores && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
