@@ -35,6 +35,16 @@ import {
   Calendar
 } from "lucide-react";
 
+// Filtro estricto: permite teclado universal (con signos + y -) pero bloquea cualquier letra
+const limpiarMontoConSigno = (val) => {
+  let v = String(val).replace(/,/g, ".").replace(/[^0-9.\-+]/g, "");
+  const signo = v.startsWith("-") ? "-" : v.startsWith("+") ? "+" : "";
+  v = v.replace(/[\-+]/g, "");
+  const partes = v.split(".");
+  if (partes.length > 2) v = partes[0] + "." + partes.slice(1).join("");
+  return signo + v;
+};
+
 export default function PortalRevendedor({
   revendedor,
   suscripciones = [],
@@ -48,7 +58,6 @@ export default function PortalRevendedor({
   const [tabRev, setTabRev] = useState("mis_clientes");
   const [busqueda, setBusqueda] = useState("");
 
-  // Filtro superior para las tarjetas del Revendedor ('hoy' | 'semana' | 'mes' | 'siempre')
   const [filtroTarjetasRev, setFiltroTarjetasRev] = useState("siempre");
 
   const hoyISO = obtenerFechaBoliviaISO();
@@ -61,6 +70,7 @@ export default function PortalRevendedor({
 
   const [nombreBanca, setNombreBanca] = useState(revendedor.nombre_billetera || "Mi Billetera");
   const [modalAjusteBanca, setModalAjusteBanca] = useState(false);
+  const [tipoMovBanca, setTipoMovBanca] = useState("gasto"); // 'gasto' (-) | 'ingreso' (+)
   const [montoBanca, setMontoBanca] = useState("");
   const [descBanca, setDescBanca] = useState("");
 
@@ -84,7 +94,6 @@ export default function PortalRevendedor({
 
   const [mensajeModal, setMensajeModal] = useState(null);
 
-  // Todas las ventas históricas de este revendedor
   const misVentas = useMemo(() => {
     return suscripciones
       .filter((s) => {
@@ -95,7 +104,6 @@ export default function PortalRevendedor({
       .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
   }, [suscripciones, revendedor]);
 
-  // Ventas filtradas para las 3 tarjetas superiores del Revendedor (Hoy / Esta Semana / Este Mes / Siempre)
   const misVentasTarjetasTop = useMemo(() => {
     return misVentas.filter((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
@@ -106,7 +114,6 @@ export default function PortalRevendedor({
     });
   }, [misVentas, filtroTarjetasRev, hoyISO, hace7DiasISO]);
 
-  // Ventas filtradas en su pestaña de Estadísticas
   const misVentasEstadisticas = useMemo(() => {
     return misVentas.filter((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
@@ -116,7 +123,6 @@ export default function PortalRevendedor({
     });
   }, [misVentas, periodoEst, fechaDiaEst, mesEst]);
 
-  // Métricas de las tarjetas superiores según el filtro elegido (Hoy / Semana / Mes / Siempre)
   const cobradoPeriodoTop = misVentasTarjetasTop.reduce(
     (acc, s) => acc + Number(s.precio_venta_revendedor || 0),
     0
@@ -127,7 +133,6 @@ export default function PortalRevendedor({
   );
   const gananciaNetaPeriodoTop = cobradoPeriodoTop - costoAdminPeriodoTop;
 
-  // Saldo Total Acumulado en la Billetera del Revendedor (siempre muestra su total general real)
   const gananciaHistoricaTotal = misVentas.reduce(
     (acc, s) => acc + (Number(s.precio_venta_revendedor || 0) - Number(s.precio_venta || 0)),
     0
@@ -148,7 +153,7 @@ export default function PortalRevendedor({
       ? "ESTE MES"
       : "HISTÓRICO";
 
-  // Serie Bursátil + Predicción IA para el Revendedor
+  // Serie Bursátil + Predicción IA
   const { serieRevBursatil, previsionMensualRev } = useMemo(() => {
     const mapa = {};
     misVentasEstadisticas.forEach((s) => {
@@ -439,15 +444,28 @@ export default function PortalRevendedor({
     }
   };
 
+  // Guarda movimiento en Billetera respetando tanto el signo escrito (- / +) como el botón seleccionado
   const registrarMovimientoPropio = async (e) => {
     e.preventDefault();
-    if (!montoBanca) return;
+    const numBase = parseFloat(montoBanca);
+    if (isNaN(numBase) || numBase === 0) {
+      return notificar("Ingresa un monto numérico válido", "error");
+    }
+    const montoFinal =
+      String(montoBanca).startsWith("-")
+        ? -Math.abs(numBase)
+        : String(montoBanca).startsWith("+")
+        ? Math.abs(numBase)
+        : tipoMovBanca === "gasto"
+        ? -Math.abs(numBase)
+        : Math.abs(numBase);
+
     await supabase.from("movimientos_revendedor").insert([
       {
         revendedor_id: revendedor.id,
-        tipo: Number(montoBanca) >= 0 ? "Ingreso Manual" : "Gasto / Retiro",
-        monto: Number(montoBanca),
-        descripcion: descBanca || "Ajuste manual en mi billetera"
+        tipo: montoFinal >= 0 ? "Ingreso Manual" : "Gasto / Retiro",
+        monto: montoFinal,
+        descripcion: descBanca || (montoFinal >= 0 ? "Ingreso manual" : "Gasto / Retiro")
       }
     ]);
     setMontoBanca("");
@@ -751,113 +769,145 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 2: MATRICES Y STOCK */}
+      {/* ========================================================================= */}
+      {/* PESTAÑA 2: MATRICES Y STOCK CON LOS 3 COLORES DIFERENCIADOS               */}
+      {/* 🟢 Verde = Ocupado Mío | 🟣 Morado = Libre | ⚫ Gris = Ocupado Admin      */}
+      {/* ========================================================================= */}
       {tabRev === "stock_disponible" && revendedor.puede_ver_matrices && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {matrices
-            .filter((m) => !m.en_papelera && m.estado === "Activa")
-            .map((matriz) => {
-              const perfiles = (matriz.perfiles_matriz || []).sort((a, b) => a.numero_slot - b.numero_slot);
-              const libres = perfiles.filter((p) => !p.ocupado && !p.caido);
-              const precioMayorista = obtenerPrecioRevendedorPlat(matriz.plataforma);
+        <div className="space-y-4">
+          {/* LEYENDA DE COLORES CLARA ARRIBA */}
+          <div className="bg-[#111A10] border border-[#233820] rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <span className="text-gray-300 font-bold">Guía rápida de colores de perfiles:</span>
+            <div className="flex flex-wrap items-center gap-4">
+              <span className="flex items-center gap-1.5 text-[#66FF00] font-extrabold">
+                <span className="w-3 h-3 rounded-full bg-[#66FF00] inline-block" /> Verde = Ocupado por Mí (Mi Cliente)
+              </span>
+              <span className="flex items-center gap-1.5 text-purple-300 font-extrabold">
+                <span className="w-3 h-3 rounded-full bg-purple-500 inline-block" /> Morado = Libre para Vender
+              </span>
+              <span className="flex items-center gap-1.5 text-gray-400 font-bold">
+                <span className="w-3 h-3 rounded-full bg-gray-600 inline-block" /> Gris = Ocupado (Admin / Otro)
+              </span>
+            </div>
+          </div>
 
-              return (
-                <div key={matriz.id} className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <span className="px-2.5 py-0.5 text-xs font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
-                        {matriz.plataforma}
-                      </span>
-                      <span className="ml-2 text-xs text-orange-300 font-bold">
-                        Tu Costo: Bs {precioMayorista}
-                      </span>
-                      <p className="text-xs text-gray-300 font-mono mt-1">{matriz.correo}</p>
-                      <p className="text-[11px] text-gray-500">
-                        Vence: {formatearFechaDMA(matriz.fecha_corte_matriz)}
-                      </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {matrices
+              .filter((m) => !m.en_papelera && m.estado === "Activa")
+              .map((matriz) => {
+                const perfiles = (matriz.perfiles_matriz || []).sort((a, b) => a.numero_slot - b.numero_slot);
+                const libres = perfiles.filter((p) => !p.ocupado && !p.caido);
+                const precioMayorista = obtenerPrecioRevendedorPlat(matriz.plataforma);
+
+                return (
+                  <div key={matriz.id} className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="px-2.5 py-0.5 text-xs font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
+                          {matriz.plataforma}
+                        </span>
+                        <span className="ml-2 text-xs text-orange-300 font-bold">
+                          Tu Costo: Bs {precioMayorista}
+                        </span>
+                        <p className="text-xs text-gray-300 font-mono mt-1">{matriz.correo}</p>
+                        <p className="text-[11px] text-gray-500">
+                          Vence: {formatearFechaDMA(matriz.fecha_corte_matriz)}
+                        </p>
+                      </div>
+
+                      {libres.length > 0 ? (
+                        <button
+                          onClick={() => {
+                            setMatrizVender(matriz);
+                            setMesesStock(1);
+                          }}
+                          className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(168,85,247,0.4)]"
+                        >
+                          <PlusCircle className="w-4 h-4" /> Vender Cupo ({libres.length})
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-500 font-bold">Llena</span>
+                      )}
                     </div>
 
-                    {libres.length > 0 ? (
-                      <button
-                        onClick={() => {
-                          setMatrizVender(matriz);
-                          setMesesStock(1);
-                        }}
-                        className="px-4 py-2 bg-[#66FF00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
-                      >
-                        <PlusCircle className="w-4 h-4" /> Vender Cupo ({libres.length})
-                      </button>
-                    ) : (
-                      <span className="text-xs text-gray-500 font-bold">Llena</span>
-                    )}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
+                      {perfiles.map((p) => {
+                        const subOcupante = suscripciones.find(
+                          (s) => s.perfil_id === p.id && s.estado === "Activa" && !s.en_papelera
+                        );
+                        const esMio =
+                          subOcupante &&
+                          (subOcupante.revendedor_id === revendedor.id ||
+                            subOcupante.telefono_cliente === revendedor.telefono);
+
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            disabled={!esMio && (p.ocupado || p.caido)}
+                            onClick={() => {
+                              if (esMio) {
+                                setPerfilPropioModal({ perfil: p, matriz, subOcupante });
+                                setPinEditRev(p.pin || "");
+                                setNomCliEditRev(subOcupante.nombre_cliente_final || "");
+                                setTelCliEditRev(subOcupante.telefono_cliente_final || "");
+                                setPrecioCliEditRev(subOcupante.precio_venta_revendedor || "");
+                              } else if (!p.ocupado && !p.caido) {
+                                setMatrizVender(matriz);
+                              }
+                            }}
+                            className={`p-2.5 rounded-xl border text-left text-xs flex items-center gap-2 transition ${
+                              esMio
+                                ? "bg-[#152912] border-2 border-[#66FF00] cursor-pointer hover:brightness-110 shadow-[0_0_12px_rgba(102,255,0,0.18)]"
+                                : p.ocupado || p.caido
+                                ? "bg-[#111315] border-gray-800 text-gray-500 opacity-50 cursor-not-allowed"
+                                : "bg-purple-950/60 border-2 border-purple-500 hover:bg-purple-900/60 cursor-pointer shadow-[0_0_12px_rgba(168,85,247,0.2)]"
+                            }`}
+                          >
+                            {/* ÍCONO DE PERSONITA CON COLOR DIFERENCIADO */}
+                            <div
+                              className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                                esMio
+                                  ? "bg-[#66FF00]/20 text-[#66FF00] border border-[#66FF00]"
+                                  : p.ocupado || p.caido
+                                  ? "bg-gray-800 text-gray-500 border border-gray-700"
+                                  : "bg-purple-500/25 text-purple-300 border border-purple-400"
+                              }`}
+                            >
+                              {esMio ? (
+                                <UserCheck className="w-3.5 h-3.5" />
+                              ) : p.ocupado || p.caido ? (
+                                <Lock className="w-3.5 h-3.5" />
+                              ) : (
+                                <User className="w-3.5 h-3.5" />
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <p className="font-bold text-white text-[11px] truncate">{p.nombre_perfil}</p>
+                              {esMio ? (
+                                <>
+                                  <p className="text-[10px] text-[#66FF00] font-extrabold truncate">
+                                    {subOcupante.nombre_cliente_final || "Mi Cliente"}
+                                  </p>
+                                  <p className="text-[9px] text-gray-200 font-mono truncate">
+                                    📞 {subOcupante.telefono_cliente_final || "Tocar p/editar"}
+                                  </p>
+                                </>
+                              ) : p.ocupado || p.caido ? (
+                                <p className="text-[10px] text-gray-500 font-semibold">Ocupado (Admin)</p>
+                              ) : (
+                                <p className="text-[10px] text-purple-300 font-extrabold">● Libre (Vender)</p>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
-                    {perfiles.map((p) => {
-                      const subOcupante = suscripciones.find(
-                        (s) => s.perfil_id === p.id && s.estado === "Activa" && !s.en_papelera
-                      );
-                      const esMio =
-                        subOcupante &&
-                        (subOcupante.revendedor_id === revendedor.id ||
-                          subOcupante.telefono_cliente === revendedor.telefono);
-
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          disabled={!esMio && (p.ocupado || p.caido)}
-                          onClick={() => {
-                            if (esMio) {
-                              setPerfilPropioModal({ perfil: p, matriz, subOcupante });
-                              setPinEditRev(p.pin || "");
-                              setNomCliEditRev(subOcupante.nombre_cliente_final || "");
-                              setTelCliEditRev(subOcupante.telefono_cliente_final || "");
-                              setPrecioCliEditRev(subOcupante.precio_venta_revendedor || "");
-                            } else if (!p.ocupado && !p.caido) {
-                              setMatrizVender(matriz);
-                            }
-                          }}
-                          className={`p-2 rounded-xl border text-left text-xs flex items-center gap-2 transition ${
-                            esMio
-                              ? "bg-[#1A2E17] border-[#66FF00] cursor-pointer hover:brightness-110"
-                              : p.ocupado || p.caido
-                              ? "bg-[#070B06] border-gray-800 opacity-55 cursor-not-allowed"
-                              : "bg-[#122010] border-[#66FF00]/40 hover:border-[#66FF00] cursor-pointer"
-                          }`}
-                        >
-                          {esMio ? (
-                            <UserCheck className="w-4 h-4 text-[#66FF00] shrink-0" />
-                          ) : p.ocupado || p.caido ? (
-                            <Lock className="w-4 h-4 text-gray-500 shrink-0" />
-                          ) : (
-                            <User className="w-4 h-4 text-[#66FF00] shrink-0" />
-                          )}
-
-                          <div className="min-w-0 flex-1">
-                            <p className="font-bold text-white text-[11px] truncate">{p.nombre_perfil}</p>
-                            {esMio ? (
-                              <>
-                                <p className="text-[10px] text-orange-300 font-bold truncate">
-                                  {subOcupante.nombre_cliente_final || "Falta anotar"}
-                                </p>
-                                <p className="text-[9px] text-[#66FF00] font-mono truncate">
-                                  📞 {subOcupante.telefono_cliente_final || "Tocar p/anotar"}
-                                </p>
-                              </>
-                            ) : p.ocupado || p.caido ? (
-                              <p className="text-[10px] text-gray-500">Ocupado</p>
-                            ) : (
-                              <p className="text-[10px] text-[#66FF00]">● Libre (Vender)</p>
-                            )}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+          </div>
         </div>
       )}
 
@@ -1203,10 +1253,9 @@ export default function PortalRevendedor({
               <div>
                 <label className="text-xs text-[#66FF00] font-bold">Precio de Venta (Bs)</label>
                 <input
-                  type="number"
-                  step="0.01"
+                  type="text"
                   value={precioCliEditRev}
-                  onChange={(e) => setPrecioCliEditRev(e.target.value)}
+                  onChange={(e) => setPrecioCliEditRev(limpiarMontoConSigno(e.target.value))}
                   className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
                 />
               </div>
@@ -1290,11 +1339,10 @@ export default function PortalRevendedor({
                 ¿En cuánto se lo vendiste? (Bs) * — (Tu costo fue Bs {subAnotar.precio_venta})
               </label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
                 placeholder="Ej: 25"
                 value={precioFinal}
-                onChange={(e) => setPrecioFinal(e.target.value)}
+                onChange={(e) => setPrecioFinal(limpiarMontoConSigno(e.target.value))}
                 className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
               />
             </div>
@@ -1351,10 +1399,9 @@ export default function PortalRevendedor({
                 Precio al que se lo vendiste a tu cliente (Bs) *
               </label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
                 value={precioVentaStock}
-                onChange={(e) => setPrecioVentaStock(e.target.value)}
+                onChange={(e) => setPrecioVentaStock(limpiarMontoConSigno(e.target.value))}
                 className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
               />
             </div>
@@ -1370,7 +1417,9 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL REGISTRAR MOVIMIENTO EN BILLETERA DEL REVENDEDOR */}
+      {/* ========================================================================= */}
+      {/* MODAL REGISTRAR MOVIMIENTO EN BILLETERA (TECLADO UNIVERSAL + BLOQUEO LETRAS) */}
+      {/* ========================================================================= */}
       {modalAjusteBanca && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1385,14 +1434,47 @@ export default function PortalRevendedor({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <input
-              type="number"
-              step="0.01"
-              placeholder="Monto Bs (Usa negativo ej: -10 para gastos)"
-              value={montoBanca}
-              onChange={(e) => setMontoBanca(e.target.value)}
-              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
-            />
+
+            {/* SELECTOR VISUAL RÁPIDO (+ INGRESO / - GASTO) */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setTipoMovBanca("gasto")}
+                className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  tipoMovBanca === "gasto"
+                    ? "bg-red-600 text-white border-red-400"
+                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                }`}
+              >
+                ➖ Gasto / Retiro (-)
+              </button>
+              <button
+                type="button"
+                onClick={() => setTipoMovBanca("ingreso")}
+                className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  tipoMovBanca === "ingreso"
+                    ? "bg-[#66FF00] text-black border-[#66FF00]"
+                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                }`}
+              >
+                ➕ Ingreso Extra (+)
+              </button>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400">
+                Monto (Bs) — (Acepta números y signos + / -, bloquea letras)
+              </label>
+              <input
+                type="text"
+                autoComplete="off"
+                placeholder={tipoMovBanca === "gasto" ? "Ej: 15 o -15" : "Ej: 20 o +20"}
+                value={montoBanca}
+                onChange={(e) => setMontoBanca(limpiarMontoConSigno(e.target.value))}
+                className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-sm text-white font-bold"
+              />
+            </div>
+
             <input
               type="text"
               placeholder="Descripción (Ej: Retiro o publicidad)"

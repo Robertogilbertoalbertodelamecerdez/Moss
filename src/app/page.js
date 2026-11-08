@@ -39,6 +39,15 @@ import {
   Calendar
 } from "lucide-react";
 
+const limpiarMontoConSigno = (val) => {
+  let v = String(val).replace(/,/g, ".").replace(/[^0-9.\-+]/g, "");
+  const signo = v.startsWith("-") ? "-" : v.startsWith("+") ? "+" : "";
+  v = v.replace(/[\-+]/g, "");
+  const partes = v.split(".");
+  if (partes.length > 2) v = partes[0] + "." + partes.slice(1).join("");
+  return signo + v;
+};
+
 export default function MossCRM() {
   const [montado, setMontado] = useState(false);
   const [sesionActual, setSesionActual] = useState(null);
@@ -47,8 +56,6 @@ export default function MossCRM() {
   const [toast, setToast] = useState(null);
 
   const [modalNotificaciones, setModalNotificaciones] = useState(false);
-
-  // Filtro de período para las tarjetas superiores del Admin ('hoy' | 'semana' | 'mes' | 'siempre')
   const [filtroTarjetasTop, setFiltroTarjetasTop] = useState("hoy");
 
   const [tabActiva, setTabActiva] = useState("ventas");
@@ -66,6 +73,7 @@ export default function MossCRM() {
   const [notificaciones, setNotificaciones] = useState([]);
 
   const [modalYolo, setModalYolo] = useState(false);
+  const [tipoAjusteYolo, setTipoAjusteYolo] = useState("gasto"); // 'gasto' | 'ingreso'
   const [montoAjusteYolo, setMontoAjusteYolo] = useState("");
   const [descAjusteYolo, setDescAjusteYolo] = useState("");
   const [afectaGanancia, setAfectaGanancia] = useState(false);
@@ -225,9 +233,6 @@ export default function MossCRM() {
     notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
   };
 
-  // ==============================================================
-  // CÁLCULO DINÁMICO DE LAS TARJETAS SUPERIORES (HOY / SEMANA / MES / SIEMPRE)
-  // ==============================================================
   const hoyBolivia = obtenerFechaBoliviaISO();
   const hace7DiasBolivia = sumarDiasBoliviaISO(-6, hoyBolivia);
   const mesActualBolivia = hoyBolivia.slice(0, 7);
@@ -237,7 +242,7 @@ export default function MossCRM() {
     if (filtroTarjetasTop === "hoy") return f === hoyBolivia;
     if (filtroTarjetasTop === "semana") return f >= hace7DiasBolivia && f <= hoyBolivia;
     if (filtroTarjetasTop === "mes") return f.startsWith(mesActualBolivia);
-    return true; // 'siempre'
+    return true;
   };
 
   const calcularGananciaUnitariaVenta = (s) => {
@@ -279,7 +284,6 @@ export default function MossCRM() {
       : ventasEnPeriodoTop.reduce((acc, s) => acc + calcularGananciaUnitariaVenta(s), 0) +
         ajustesEnPeriodoTop;
 
-  // El Saldo del Banco siempre refleja el total acumulado real que tienes
   const saldoActualYolo = movimientosYolo.reduce((acc, m) => acc + Number(m.monto), 0);
 
   const etiquetaPeriodoTop =
@@ -309,12 +313,23 @@ export default function MossCRM() {
 
   const registrarAjusteYolo = async (e) => {
     e.preventDefault();
-    if (!montoAjusteYolo) return notificar("Ingresa un monto válido", "error");
+    const numBase = parseFloat(montoAjusteYolo);
+    if (isNaN(numBase) || numBase === 0) {
+      return notificar("Ingresa un monto numérico válido", "error");
+    }
+    const montoFinal =
+      String(montoAjusteYolo).startsWith("-")
+        ? -Math.abs(numBase)
+        : String(montoAjusteYolo).startsWith("+")
+        ? Math.abs(numBase)
+        : tipoAjusteYolo === "gasto"
+        ? -Math.abs(numBase)
+        : Math.abs(numBase);
 
     await supabase.from("movimientos_yolo").insert([
       {
         tipo: "Ajuste Manual",
-        monto: Number(montoAjusteYolo),
+        monto: montoFinal,
         afecta_ganancia_neta: afectaGanancia,
         descripcion: descAjusteYolo || `Ajuste / Gasto manual en ${nombreBilletera}`
       }
@@ -494,9 +509,6 @@ export default function MossCRM() {
           </header>
 
           <main className="max-w-6xl mx-auto px-4 pt-5 space-y-5">
-            {/* ============================================================== */}
-            {/* BARRA DE FILTRO RÁPIDO PARA LAS TARJETAS SUPERIORES            */}
-            {/* ============================================================== */}
             <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0E170D]/90 px-4 py-2.5 rounded-2xl border border-[#233820]">
               <span className="text-xs text-gray-400 font-bold flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-[#66FF00]" /> Resumen superior mostrando:
@@ -524,7 +536,6 @@ export default function MossCRM() {
               </div>
             </div>
 
-            {/* TARJETAS FINANCIERAS CON FILTRO (SALDO BANCO SIEMPRE FIJO EN TOTAL) */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
                 <div>
@@ -859,6 +870,7 @@ export default function MossCRM() {
             </div>
           )}
 
+          {/* MODAL AJUSTAR SALDO YOLO CON TECLADO UNIVERSAL + BLOQUEO DE LETRAS */}
           {modalYolo && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <form
@@ -873,15 +885,43 @@ export default function MossCRM() {
                     <X className="w-5 h-5" />
                   </button>
                 </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTipoAjusteYolo("gasto")}
+                    className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      tipoAjusteYolo === "gasto"
+                        ? "bg-red-600 text-white border-red-400"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    ➖ Gasto / Retiro (-)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTipoAjusteYolo("ingreso")}
+                    className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      tipoAjusteYolo === "ingreso"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    ➕ Ingreso Extra (+)
+                  </button>
+                </div>
+
                 <div>
-                  <label className="text-xs text-gray-400">Monto (Bs) — Usa negativo para gastos</label>
+                  <label className="text-xs text-gray-400">
+                    Monto (Bs) — (Acepta números y signos + / -, bloquea letras)
+                  </label>
                   <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Ej: -15.50"
+                    type="text"
+                    autoComplete="off"
+                    placeholder={tipoAjusteYolo === "gasto" ? "Ej: 15.50 o -15.50" : "Ej: 50 o +50"}
                     value={montoAjusteYolo}
-                    onChange={(e) => setMontoAjusteYolo(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white"
+                    onChange={(e) => setMontoAjusteYolo(limpiarMontoConSigno(e.target.value))}
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-white font-bold"
                   />
                 </div>
                 <div>
