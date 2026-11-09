@@ -21,7 +21,6 @@ import {
   Sparkles
 } from "lucide-react";
 
-// Motor reutilizable para construir serie bursátil + 3 días de predicción IA
 function armarSerieConPrediccion(mapaPorFecha) {
   const reales = Object.values(mapaPorFecha)
     .sort((a, b) => a.fecha.localeCompare(b.fecha))
@@ -81,18 +80,27 @@ export default function ModuloEstadisticas({
   const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos");
   const [revendedorSeleccionado, setRevendedorSeleccionado] = useState("todos");
 
-  // Selector independiente para la Segunda Gráfica (Ganancias de Revendedores)
   const [revendedorGraficaDos, setRevendedorGraficaDos] = useState("todos");
 
+  // Configuración del Bono Semanal y Podio (Top 1, Top 2, Top 3 o Todos)
   const [modalBonoAbierto, setModalBonoAbierto] = useState(false);
-  const [porcentajeBono, setPorcentajeBono] = useState(5);
+  const [cantidadGanadoresTop, setCantidadGanadoresTop] = useState(1); // 1 | 2 | 3 | 99
+  const [pctTop1, setPctTop1] = useState(5);
+  const [pctTop2, setPctTop2] = useState(3);
+  const [pctTop3, setPctTop3] = useState(2);
 
   const [puntoActivoIdx, setPuntoActivoIdx] = useState(null);
   const [puntoActivoRevIdx, setPuntoActivoRevIdx] = useState(null);
 
   useEffect(() => {
-    const guardado = localStorage.getItem("moss_pct_bono");
-    if (guardado) setPorcentajeBono(Number(guardado));
+    const gTop = localStorage.getItem("moss_top_count");
+    const p1 = localStorage.getItem("moss_pct_bono_1");
+    const p2 = localStorage.getItem("moss_pct_bono_2");
+    const p3 = localStorage.getItem("moss_pct_bono_3");
+    if (gTop) setCantidadGanadoresTop(Number(gTop));
+    if (p1) setPctTop1(Number(p1));
+    if (p2) setPctTop2(Number(p2));
+    if (p3) setPctTop3(Number(p3));
   }, []);
 
   const calcularGananciaAdminDeVenta = (s) => {
@@ -108,9 +116,8 @@ export default function ModuloEstadisticas({
     return ingresoQueMePago - Number(s.costo_proveedor || 0);
   };
 
-  // Ranking Semanal Bono
+  // Ranking Semanal Completo de Todos los Revendedores con su posición y porcentaje según el puesto
   const rankingSemanalBono = useMemo(() => {
-    const pct = Number(porcentajeBono || 0) / 100;
     const mapa = {};
     revendedores.forEach((r) => {
       mapa[r.id] = {
@@ -118,7 +125,7 @@ export default function ModuloEstadisticas({
         ventasSemana: 0,
         ingresoSemana: 0,
         gananciaNetaParaAdmin: 0,
-        bonoCalculado: 0
+        gananciaDelRevendedorSemana: 0
       };
     });
 
@@ -134,24 +141,44 @@ export default function ModuloEstadisticas({
         }
         if (target) {
           const gananciaMia = calcularGananciaAdminDeVenta(s);
+          const cobroRev = Number(s.precio_venta_revendedor || 0);
+          const gananciaDeEl = cobroRev > 0 ? cobroRev - Number(s.precio_venta || 0) : 0;
+
           target.ventasSemana += 1;
           target.ingresoSemana += Number(s.precio_venta || 0);
           target.gananciaNetaParaAdmin += gananciaMia;
-          target.bonoCalculado = Math.max(0, target.gananciaNetaParaAdmin * pct);
+          target.gananciaDelRevendedorSemana += gananciaDeEl;
         }
       });
 
-    return Object.values(mapa).sort((a, b) =>
+    const ordenados = Object.values(mapa).sort((a, b) =>
       b.ventasSemana !== a.ventasSemana
         ? b.ventasSemana - a.ventasSemana
         : b.gananciaNetaParaAdmin - a.gananciaNetaParaAdmin
     );
-  }, [revendedores, suscripciones, matrices, hace7DiasISO, hoyISO, porcentajeBono]);
 
-  const ganadorSemana =
-    rankingSemanalBono[0] && rankingSemanalBono[0].ventasSemana > 0
-      ? rankingSemanalBono[0]
-      : null;
+    return ordenados.map((item, idx) => {
+      const puesto = idx + 1;
+      const pctAplicado =
+        puesto === 1
+          ? Number(pctTop1 || 0)
+          : puesto === 2
+          ? Number(pctTop2 || 0)
+          : Number(pctTop3 || 0);
+      const entraEnPodio = puesto <= cantidadGanadoresTop && item.ventasSemana > 0;
+      const bonoCalculado = Math.max(0, item.gananciaNetaParaAdmin * (pctAplicado / 100));
+
+      return {
+        ...item,
+        puesto,
+        pctAplicado,
+        entraEnPodio,
+        bonoCalculado
+      };
+    });
+  }, [revendedores, suscripciones, matrices, hace7DiasISO, hoyISO, pctTop1, pctTop2, pctTop3, cantidadGanadoresTop]);
+
+  const ganadoresActivosPodio = rankingSemanalBono.filter((r) => r.entraEnPodio);
 
   const toggleVisibilidadBono = async (revObj) => {
     const nuevoValor = !revObj.mostrar_bono_semanal;
@@ -166,7 +193,7 @@ export default function ModuloEstadisticas({
     await recargarTodo();
     notificar(
       nuevoValor
-        ? `Bono del ${porcentajeBono}% visible en el portal de ${revObj.nombre}`
+        ? `Bono del ${revObj.pctAplicado}% visible en el portal de ${revObj.nombre}`
         : `Bono ocultado del portal de ${revObj.nombre}`
     );
   };
@@ -177,22 +204,27 @@ export default function ModuloEstadisticas({
       .from("revendedores")
       .update({
         bono_semanal_pagado: nuevoPago,
-        monto_bono_semanal: Number(revObj.bonoCalculado.toFixed(2))
+        monto_bono_semanal: Number(revObj.bonoCalculado.toFixed(2)),
+        ganancia_generada_semana: Number(revObj.gananciaNetaParaAdmin.toFixed(2))
       })
       .eq("id", revObj.id);
 
     if (nuevoPago && revObj.bonoCalculado > 0) {
       await supabase.from("movimientos_yolo").insert([
         {
-          tipo: `Bono Revendedor ${porcentajeBono}%`,
+          tipo: `Bono Revendedor #${revObj.puesto} (${revObj.pctAplicado}%)`,
           monto: -Math.abs(Number(revObj.bonoCalculado.toFixed(2))),
           afecta_ganancia_neta: true,
-          descripcion: `Pago Bono Semanal ${porcentajeBono}% a mejor revendedor (${revObj.nombre})`
+          descripcion: `Pago Bono Semanal Puesto #${revObj.puesto} (${revObj.pctAplicado}%) a ${revObj.nombre}`
         }
       ]);
     }
     await recargarTodo();
-    notificar(nuevoPago ? "Bono marcado como Pagado" : "Marcado como No Pagado");
+    notificar(
+      nuevoPago
+        ? `Bono de Bs ${revObj.bonoCalculado.toFixed(2)} pagado a ${revObj.nombre}`
+        : `Bono de ${revObj.nombre} marcado como No Pagado`
+    );
   };
 
   const ventasFiltradas = useMemo(() => {
@@ -235,9 +267,6 @@ export default function ModuloEstadisticas({
     .reduce((acc, m) => acc + Number(m.monto || 0), 0);
   const saldoTotalBilletera = movimientosYolo.reduce((acc, m) => acc + Number(m.monto || 0), 0);
 
-  // =========================================================================
-  // 1. GRÁFICA BURSÁTIL PRINCIPAL (TUS GANANCIAS + PREDICCIÓN)
-  // =========================================================================
   const { serie: serieBursatil, prevision30d: previsionMensualProfit } = useMemo(() => {
     const mapa = {};
     ventasFiltradas.forEach((s) => {
@@ -250,9 +279,6 @@ export default function ModuloEstadisticas({
     return armarSerieConPrediccion(mapa);
   }, [ventasFiltradas, matrices]);
 
-  // =========================================================================
-  // 2. SEGUNDA GRÁFICA BURSÁTIL (GANANCIAS DE TUS REVENDEDORES + PREDICCIÓN)
-  // =========================================================================
   const { serie: serieRevendedores, prevision30d: previsionRevendedores30d } = useMemo(() => {
     const mapa = {};
     suscripciones
@@ -287,7 +313,6 @@ export default function ModuloEstadisticas({
     return armarSerieConPrediccion(mapa);
   }, [suscripciones, periodo, fechaEspecifica, mesEspecifico, anioEspecifico, revendedorGraficaDos, revendedores]);
 
-  // Helper para renderizar cualquier serie SVG bursátil
   const construirGeometriaSVG = (serie, activeIdx) => {
     const svgWidth = 680;
     const svgHeight = 200;
@@ -333,7 +358,7 @@ export default function ModuloEstadisticas({
 
   return (
     <div className="space-y-6">
-      {/* BARRA DE FILTROS + BOTÓN EMERGENTE DE BONO SEMANAL */}
+      {/* BARRA DE FILTROS + BOTÓN EMERGENTE DE BONO Y RANKING SEMANAL */}
       <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 space-y-4 shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -395,9 +420,9 @@ export default function ModuloEstadisticas({
             <button
               type="button"
               onClick={() => setModalBonoAbierto(true)}
-              className="px-3.5 py-2 rounded-xl text-xs font-black bg-amber-400 hover:bg-amber-300 text-black flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl text-xs font-black bg-amber-400 hover:bg-amber-300 text-black flex items-center gap-1.5 cursor-pointer shadow-[0_0_15px_rgba(251,191,36,0.3)]"
             >
-              <Trophy className="w-4 h-4" /> Bono Semanal ({porcentajeBono}%)
+              <Trophy className="w-4 h-4" /> Bono & Ranking Semanal (Top {cantidadGanadoresTop === 99 ? "Todos" : cantidadGanadoresTop})
             </button>
           </div>
         </div>
@@ -635,9 +660,7 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* SEGUNDA GRÁFICA BURSÁTIL ABAJO: GANANCIAS DE ELLOS (REVENDEDORES) + PRED. */}
-      {/* ========================================================================= */}
+      {/* SEGUNDA GRÁFICA BURSÁTIL ABAJO: GANANCIAS DE ELLOS (REVENDEDORES) + PREDICCIÓN */}
       <div className="bg-[#111A10] border-2 border-purple-500/40 rounded-3xl p-5 space-y-4 shadow-lg">
         <div className="flex flex-wrap justify-between items-center gap-3">
           <div>
@@ -645,7 +668,7 @@ export default function ModuloEstadisticas({
               <Users className="w-5 h-5 text-purple-400" /> 2. Curva Bursátil de Ganancias de Mis Revendedores & Predicción
             </h3>
             <p className="text-[11px] text-gray-400">
-              Muestra cuánto están ganando tus revendedores (su precio de venta menos el costo que te pagan a ti) y su proyección a 30 días:{" "}
+              Muestra cuánto están ganando tus revendedores y su proyección a 30 días:{" "}
               <b className="text-cyan-300">Bs {previsionRevendedores30d.toFixed(2)} / mes</b>.
             </p>
           </div>
@@ -850,89 +873,268 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* MODAL EMERGENTE: BONO SEMANAL DE REVENDEDOR */}
+      {/* ========================================================================= */}
+      {/* MODAL EMERGENTE: GANADORES DE LA SEMANA + TABLA DE RANKING AL LADO        */}
+      {/* ========================================================================= */}
       {modalBonoAbierto && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
-          <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-[0_0_50px_rgba(251,191,36,0.25)] animate-modal">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50 overflow-y-auto">
+          <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-5 sm:p-6 max-w-5xl w-full space-y-5 shadow-[0_0_50px_rgba(251,191,36,0.25)] max-h-[94vh] overflow-y-auto animate-modal">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
-              <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
-                <Trophy className="w-5 h-5" /> Bono Semanal al Mejor Revendedor
-              </h3>
+              <div>
+                <h3 className="font-black text-amber-400 text-base sm:text-lg flex items-center gap-2">
+                  <Trophy className="w-5 h-5" /> Bono Semanal & Tabla de Ranking de Revendedores (Últimos 7 Días)
+                </h3>
+                <p className="text-[11px] text-gray-400">
+                  Semana del {formatearFechaDMA(hace7DiasISO)} al {formatearFechaDMA(hoyISO)} · El bono se calcula sobre la Ganancia Neta que te dejó cada uno.
+                </p>
+              </div>
               <button onClick={() => setModalBonoAbierto(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="flex items-center justify-between bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 text-xs">
-              <span className="text-gray-300 font-bold">Porcentaje de Bono sobre tu Ganancia Neta (%):</span>
-              <input
-                type="number"
-                step="0.5"
-                min="0"
-                max="100"
-                value={porcentajeBono}
-                onChange={(e) => {
-                  setPorcentajeBono(e.target.value);
-                  localStorage.setItem("moss_pct_bono", e.target.value);
-                }}
-                className="w-20 bg-[#111A10] border border-amber-400 rounded-xl p-2 text-center text-white font-black"
-              />
-            </div>
-
-            {!ganadorSemana ? (
-              <p className="text-xs text-gray-400 bg-[#070B06] p-4 rounded-xl text-center">
-                Aún no hay ventas de revendedores en los últimos 7 días.
-              </p>
-            ) : (
-              <div className="bg-[#070B06] border border-amber-400/50 rounded-2xl p-4 space-y-3">
-                <span className="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-400 text-black uppercase">
-                  🥇 #1 de la Semana: {ganadorSemana.nombre} ({ganadorSemana.ventasSemana} ventas)
+            {/* BARRA SUPERIOR: ACTIVAR TOP 1, TOP 2, TOP 3 O TODOS + PORCENTAJES POR PUESTO */}
+            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <span className="text-xs text-gray-300 font-bold block">
+                  ¿A cuántos mejores de la semana quieres premiar?
                 </span>
-                <p className="text-xs text-gray-300">
-                  Ingreso total que te pagó: <b>Bs {ganadorSemana.ingresoSemana.toFixed(2)}</b>
-                </p>
-                <p className="text-xs text-gray-300">
-                  Ganancia Neta que te dejó a ti:{" "}
-                  <b className="text-[#66FF00]">Bs {ganadorSemana.gananciaNetaParaAdmin.toFixed(2)}</b>
-                </p>
-                <p className="text-base font-black text-amber-300">
-                  🎁 Bono ({porcentajeBono}%) que le corresponde: Bs {ganadorSemana.bonoCalculado.toFixed(2)}
-                </p>
-
-                <div className="flex flex-col sm:flex-row gap-2 pt-2">
-                  <button
-                    onClick={() => toggleVisibilidadBono(ganadorSemana)}
-                    className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer ${
-                      ganadorSemana.mostrar_bono_semanal
-                        ? "bg-[#66FF00] text-black border-[#66FF00]"
-                        : "bg-[#111A10] text-gray-300 border-gray-700"
-                    }`}
-                  >
-                    {ganadorSemana.mostrar_bono_semanal ? (
-                      <>
-                        <Eye className="w-4 h-4" /> Visible para él (Ocultar)
-                      </>
-                    ) : (
-                      <>
-                        <EyeOff className="w-4 h-4" /> Mostrar en su Portal
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    onClick={() => togglePagoBonoSemanal(ganadorSemana)}
-                    className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer ${
-                      ganadorSemana.bono_semanal_pagado
-                        ? "bg-green-900/50 text-green-300 border-green-500"
-                        : "bg-amber-400 text-black border-amber-400"
-                    }`}
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    {ganadorSemana.bono_semanal_pagado ? "✓ Bono Pagado" : "Marcar Pagado"}
-                  </button>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { n: 1, texto: "🥇 Solo Top 1" },
+                    { n: 2, texto: "🥈 Top 2 Mejores" },
+                    { n: 3, texto: "🥉 Top 3 Mejores" },
+                    { n: 99, texto: "🏆 Todos con ventas" }
+                  ].map((op) => (
+                    <button
+                      key={op.n}
+                      type="button"
+                      onClick={() => {
+                        setCantidadGanadoresTop(op.n);
+                        localStorage.setItem("moss_top_count", String(op.n));
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                        cantidadGanadoresTop === op.n
+                          ? "bg-amber-400 text-black border-amber-400"
+                          : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                      }`}
+                    >
+                      {op.texto}
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
+
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-amber-300 font-bold">🥇 #1 (%):</span>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={pctTop1}
+                    onChange={(e) => {
+                      setPctTop1(e.target.value);
+                      localStorage.setItem("moss_pct_bono_1", e.target.value);
+                    }}
+                    className="w-16 bg-[#111A10] border border-amber-400 rounded-xl p-1.5 text-center text-white font-black"
+                  />
+                </div>
+
+                {cantidadGanadoresTop >= 2 && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-gray-300 font-bold">🥈 #2 (%):</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={pctTop2}
+                      onChange={(e) => {
+                        setPctTop2(e.target.value);
+                        localStorage.setItem("moss_pct_bono_2", e.target.value);
+                      }}
+                      className="w-16 bg-[#111A10] border border-gray-400 rounded-xl p-1.5 text-center text-white font-black"
+                    />
+                  </div>
+                )}
+
+                {cantidadGanadoresTop >= 3 && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-orange-300 font-bold">🥉 #3+ (%):</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={pctTop3}
+                      onChange={(e) => {
+                        setPctTop3(e.target.value);
+                        localStorage.setItem("moss_pct_bono_3", e.target.value);
+                      }}
+                      className="w-16 bg-[#111A10] border border-orange-400 rounded-xl p-1.5 text-center text-white font-black"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* DISEÑO A 2 COLUMNAS: IZQUIERDA (PODIO GANADORES) | DERECHA (TABLA RANKING COMPLETA) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              {/* COLUMNA IZQUIERDA: TARJETAS DE LOS GANADORES SELECCIONADOS */}
+              <div className="lg:col-span-5 space-y-3">
+                <h4 className="text-xs font-black uppercase text-amber-300">
+                  🏆 Premiados Activos ({ganadoresActivosPodio.length})
+                </h4>
+
+                {ganadoresActivosPodio.length === 0 ? (
+                  <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-6 text-center text-xs text-gray-400">
+                    Ningún revendedor registra ventas en los últimos 7 días.
+                  </div>
+                ) : (
+                  ganadoresActivosPodio.map((g) => {
+                    const medalla = g.puesto === 1 ? "🥇 #1" : g.puesto === 2 ? "🥈 #2" : `🥉 #${g.puesto}`;
+                    return (
+                      <div
+                        key={g.id}
+                        className="bg-[#070B06] border-2 border-amber-400/60 rounded-2xl p-4 space-y-2.5"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-400 text-black uppercase">
+                            {medalla} · {g.nombre} ({g.ventasSemana} vtas)
+                          </span>
+                          <span className="text-xs font-extrabold text-amber-300">
+                            Bono {g.pctAplicado}%: Bs {g.bonoCalculado.toFixed(2)}
+                          </span>
+                        </div>
+
+                        <div className="text-xs text-gray-300 space-y-0.5">
+                          <p>
+                            Te pagó: <b>Bs {g.ingresoSemana.toFixed(2)}</b> · Ganancia Neta p/Ti:{" "}
+                            <b className="text-[#66FF00]">Bs {g.gananciaNetaParaAdmin.toFixed(2)}</b>
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => toggleVisibilidadBono(g)}
+                            className={`py-2 px-2.5 rounded-xl text-[11px] font-extrabold border flex items-center justify-center gap-1 cursor-pointer ${
+                              g.mostrar_bono_semanal
+                                ? "bg-[#66FF00] text-black border-[#66FF00]"
+                                : "bg-[#111A10] text-gray-300 border-gray-700"
+                            }`}
+                          >
+                            {g.mostrar_bono_semanal ? (
+                              <>
+                                <Eye className="w-3.5 h-3.5" /> Visible (Ocultar)
+                              </>
+                            ) : (
+                              <>
+                                <EyeOff className="w-3.5 h-3.5" /> Mostrar en Portal
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => togglePagoBonoSemanal(g)}
+                            className={`py-2 px-2.5 rounded-xl text-[11px] font-extrabold border flex items-center justify-center gap-1 cursor-pointer ${
+                              g.bono_semanal_pagado
+                                ? "bg-green-900/50 text-green-300 border-green-500"
+                                : "bg-amber-400 text-black border-amber-400"
+                            }`}
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            {g.bono_semanal_pagado ? "✓ Bono Pagado" : "Pagar Bono"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* COLUMNA DERECHA: TABLA DE RANKING COMPLETA DE TODOS LOS REVENDEDORES */}
+              <div className="lg:col-span-7 bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3">
+                <div className="flex justify-between items-center">
+                  <h4 className="text-xs font-black uppercase text-[#66FF00]">
+                    📊 Tabla de Ranking Semanal (Cuánto generó cada uno)
+                  </h4>
+                  <span className="text-[11px] text-gray-400">
+                    Puedes pagar o mostrar bono a cualquiera desde la tabla
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-[#1E331A] text-[10px] text-gray-400 uppercase">
+                        <th className="py-2 pr-2">#</th>
+                        <th className="py-2 pr-2">Revendedor</th>
+                        <th className="py-2 pr-2 text-center">Ventas</th>
+                        <th className="py-2 pr-2 text-right">Te Pagó</th>
+                        <th className="py-2 pr-2 text-right">Tu Profit Neto</th>
+                        <th className="py-2 pr-2 text-right">Bono</th>
+                        <th className="py-2 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#152213]">
+                      {rankingSemanalBono.map((r) => {
+                        const medalla = r.puesto === 1 ? "🥇 1" : r.puesto === 2 ? "🥈 2" : r.puesto === 3 ? "🥉 3" : `#${r.puesto}`;
+                        return (
+                          <tr
+                            key={r.id}
+                            className={r.entraEnPodio ? "bg-amber-950/15" : ""}
+                          >
+                            <td className="py-2.5 pr-2 font-black text-amber-300">{medalla}</td>
+                            <td className="py-2.5 pr-2">
+                              <p className="font-bold text-white">{r.nombre}</p>
+                              <p className="text-[10px] text-gray-500 font-mono">{r.telefono}</p>
+                            </td>
+                            <td className="py-2.5 pr-2 text-center font-black text-white">
+                              {r.ventasSemana}
+                            </td>
+                            <td className="py-2.5 pr-2 text-right font-semibold text-gray-300">
+                              Bs {r.ingresoSemana.toFixed(2)}
+                            </td>
+                            <td className="py-2.5 pr-2 text-right font-black text-[#66FF00]">
+                              Bs {r.gananciaNetaParaAdmin.toFixed(2)}
+                            </td>
+                            <td className="py-2.5 pr-2 text-right font-black text-amber-300">
+                              Bs {r.bonoCalculado.toFixed(2)}
+                              <span className="block text-[9px] text-gray-400">({r.pctAplicado}%)</span>
+                            </td>
+                            <td className="py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleVisibilidadBono(r)}
+                                  className={`p-1.5 rounded-lg border cursor-pointer ${
+                                    r.mostrar_bono_semanal
+                                      ? "bg-[#66FF00] text-black border-[#66FF00]"
+                                      : "bg-[#111A10] text-gray-400 border-gray-700"
+                                  }`}
+                                  title={r.mostrar_bono_semanal ? "Ocultar de su portal" : "Mostrar en su portal"}
+                                >
+                                  {r.mostrar_bono_semanal ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => togglePagoBonoSemanal(r)}
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-black border cursor-pointer ${
+                                    r.bono_semanal_pagado
+                                      ? "bg-green-900/50 text-green-300 border-green-500"
+                                      : "bg-amber-400 text-black border-amber-400"
+                                  }`}
+                                >
+                                  {r.bono_semanal_pagado ? "✓ Pagado" : "Pagar"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
