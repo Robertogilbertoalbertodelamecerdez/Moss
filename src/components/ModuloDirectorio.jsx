@@ -1,6 +1,11 @@
 "use client";
 import React, { useState } from "react";
-import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
+import {
+  supabase,
+  PLATAFORMAS,
+  formatearFechaDMA,
+  sumarDiasBoliviaISO
+} from "@/config";
 import { generarMensajeEntrega } from "@/utils/mensajesMoss";
 import {
   Search,
@@ -73,6 +78,7 @@ export default function ModuloDirectorio({
           perfilFinal: s.nombre_perfil,
           pinFinal: s.pin_perfil,
           meses: s.meses_contratados || 1,
+          diasTotales: s.dias_totales || Number(s.meses_contratados || 1) * 30,
           fechaCorte: s.fecha_corte,
           precioVenta: s.precio_venta
         }
@@ -84,7 +90,6 @@ export default function ModuloDirectorio({
     setMensajeActivo(msg);
   };
 
-  // Cuando cambias la Plataforma en el modal de Editar (ej. de Spotify Asignada a Spotify Invitación), ajusta modalidad y campos automáticamente
   const handleCambiarPlataformaEnEdicion = (nuevaPlatNombre) => {
     const cfg = plataformasList.find((p) => p.nombre === nuevaPlatNombre);
     const esInvitacion =
@@ -117,6 +122,40 @@ export default function ModuloDirectorio({
         nombre_perfil: nuevoPerfil
       });
     }
+  };
+
+  // En el modal de Edición: Cambiar Meses recalcula Días (90d, 120d...) y suma a la Fecha de Venta
+  const actualizarMesesEnEdicion = (cantMeses) => {
+    const m = Math.max(1, Number(cantMeses || 1));
+    const d = m === 12 ? 365 : m * 30;
+    const baseVenta = subEditar.fecha_venta || new Date().toISOString().split("T")[0];
+    const nuevaCorte = sumarDiasBoliviaISO(d, baseVenta);
+    const mesesProv = m > 3 ? Number(subEditar.meses_pagados_proveedor || 3) : m;
+    const nuevaRenovProv = sumarDiasBoliviaISO(mesesProv * 30, baseVenta);
+
+    setSubEditar({
+      ...subEditar,
+      meses_contratados: m,
+      dias_totales: d,
+      fecha_corte: nuevaCorte,
+      meses_pagados_proveedor: mesesProv,
+      fecha_renovacion_proveedor: nuevaRenovProv
+    });
+  };
+
+  // En el modal de Edición: Cambiar Días directamente (ej. 90, 120, 45) recalcula la Fecha de Corte desde Fecha de Venta
+  const actualizarDiasEnEdicion = (cantDias) => {
+    const d = Math.max(1, Number(cantDias || 30));
+    const mAprox = Math.max(1, Math.round(d / 30));
+    const baseVenta = subEditar.fecha_venta || new Date().toISOString().split("T")[0];
+    const nuevaCorte = sumarDiasBoliviaISO(d, baseVenta);
+
+    setSubEditar({
+      ...subEditar,
+      dias_totales: d,
+      meses_contratados: mAprox,
+      fecha_corte: nuevaCorte
+    });
   };
 
   const suscripcionesFiltradas = suscripciones
@@ -257,6 +296,18 @@ export default function ModuloDirectorio({
     e.preventDefault();
 
     const estabaCaida = subEditar.estado === "Caida";
+    const diasFinal = Number(subEditar.dias_totales || 30);
+    const mesesFinal = Number(subEditar.meses_contratados || Math.max(1, Math.round(diasFinal / 30)));
+    const mesesPagProv =
+      diasFinal > 90
+        ? Number(subEditar.meses_pagados_proveedor || 3)
+        : mesesFinal;
+    const fechaRenovProv =
+      diasFinal > 90
+        ? subEditar.fecha_renovacion_proveedor ||
+          sumarDiasBoliviaISO(mesesPagProv * 30, subEditar.fecha_venta)
+        : subEditar.fecha_corte;
+
     let payload = {
       plataforma: subEditar.plataforma,
       tipo_comprador: subEditar.tipo_comprador || "cliente",
@@ -282,6 +333,10 @@ export default function ModuloDirectorio({
           : subEditar.pin_perfil,
       precio_venta: Number(subEditar.precio_venta),
       costo_proveedor: Number(subEditar.costo_proveedor || 0),
+      meses_contratados: mesesFinal,
+      dias_totales: diasFinal,
+      meses_pagados_proveedor: mesesPagProv,
+      fecha_renovacion_proveedor: fechaRenovProv,
       fecha_venta: subEditar.fecha_venta,
       fecha_corte: subEditar.fecha_corte,
       origen: subEditar.origen,
@@ -341,7 +396,7 @@ export default function ModuloDirectorio({
       .from("movimientos_yolo")
       .update({
         monto: Math.abs(Number(subEditar.precio_venta)),
-        descripcion: `Venta ${payload.plataforma} a ${payload.nombre_cliente}`
+        descripcion: `Venta ${payload.plataforma} (${diasFinal}d) a ${payload.nombre_cliente}`
       })
       .eq("referencia_id", subEditar.id)
       .eq("tipo", "Ingreso Venta");
@@ -349,7 +404,7 @@ export default function ModuloDirectorio({
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("Plataforma y datos actualizados con éxito");
+    notificar("Suscripción y plan actualizados con éxito");
     if (editada) abrirMensajeDeSuscripcion(editada, "DATOS ACTUALIZADOS");
   };
 
@@ -496,6 +551,12 @@ export default function ModuloDirectorio({
         ) : (
           suscripcionesFiltradas.map((s) => {
             const dias = calcularDiasRestantes(s.fecha_corte);
+            const diasPlan = s.dias_totales || Number(s.meses_contratados || 1) * 30;
+            const tieneRenovIntermediaProv =
+              diasPlan > 90 &&
+              s.meses_pagados_proveedor &&
+              Number(s.meses_pagados_proveedor) * 30 < diasPlan;
+
             const horaReg = s.creado_en
               ? new Date(s.creado_en).toLocaleTimeString("es-BO", {
                   timeZone: "America/La_Paz",
@@ -519,7 +580,7 @@ export default function ModuloDirectorio({
                       </span>
 
                       <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
-                        {s.tipo_cuenta || "1 Dispositivo"}
+                        ⏳ Plan: {diasPlan} días
                       </span>
 
                       <span className={`px-2.5 py-0.5 text-xs font-extrabold rounded-full ${
@@ -543,6 +604,13 @@ export default function ModuloDirectorio({
                           </>
                         )}
                       </span>
+
+                      {tieneRenovIntermediaProv && (
+                        <span className="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-500 text-black">
+                          📦 Pagado a Prov: {s.meses_pagados_proveedor}M · Renovar Prov:{" "}
+                          {formatearFechaDMA(s.fecha_renovacion_proveedor)}
+                        </span>
+                      )}
 
                       <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
                         s.estado === "Caida" ? "bg-red-600 text-white" : s.estado === "Reembolsada" ? "bg-purple-600 text-white" : "bg-green-900/40 text-green-300"
@@ -607,13 +675,16 @@ export default function ModuloDirectorio({
                       onClick={() => {
                         setSubEditar({
                           ...s,
+                          meses_contratados: s.meses_contratados || 1,
+                          dias_totales: s.dias_totales || Number(s.meses_contratados || 1) * 30,
+                          meses_pagados_proveedor: s.meses_pagados_proveedor || 3,
                           fecha_venta: s.fecha_venta || new Date().toISOString().split("T")[0]
                         });
                         setMatrizNuevaEdicionId("");
                       }}
                       className="px-3 py-1.5 bg-[#1A2B18] hover:bg-[#253D22] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                     >
-                      <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Plataforma / Datos)
+                      <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Plan / Plataforma / Datos)
                     </button>
 
                     <button
@@ -680,7 +751,7 @@ export default function ModuloDirectorio({
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL EDICIÓN TOTAL: CAMBIAR PLATAFORMA (EJ: SPOTIFY ASIGNADA <-> INVIT.) */}
+      {/* MODAL EDICIÓN TOTAL: INCLUYE PLAN EN MESES O DÍAS + ADELANTO A PROVEEDOR  */}
       {/* ========================================================================= */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -695,10 +766,10 @@ export default function ModuloDirectorio({
               </button>
             </div>
 
-            {/* 1. CAMBIAR PLATAFORMA Y MODALIDAD CON AJUSTE AUTOMÁTICO */}
+            {/* 1. PLATAFORMA Y MODALIDAD */}
             <div className="bg-[#0B120A] border-2 border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
               <label className="text-xs font-extrabold text-[#66FF00]">
-                1. Cambiar Plataforma o Modalidad (Ej: Spotify Asignada ↔ Spotify Invitación):
+                1. Cambiar Plataforma o Modalidad:
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
@@ -735,120 +806,197 @@ export default function ModuloDirectorio({
               </div>
             </div>
 
-            {/* 2. CAMBIAR ENTRE CLIENTE Y REVENDEDOR */}
-            <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
-              <label className="text-xs font-bold text-[#66FF00]">2. Tipo de Comprador:</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSubEditar({ ...subEditar, tipo_comprador: "cliente", revendedor_id: null })}
-                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                    (subEditar.tipo_comprador || "cliente") === "cliente"
-                      ? "bg-[#66FF00] text-black border-[#66FF00]"
-                      : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                  }`}
-                >
-                  👤 Cliente Final
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSubEditar({ ...subEditar, tipo_comprador: "revendedor" })}
-                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                    subEditar.tipo_comprador === "revendedor"
-                      ? "bg-[#66FF00] text-black border-[#66FF00]"
-                      : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                  }`}
-                >
-                  🤝 Revendedor
-                </button>
+            {/* 2. DURACIÓN EN MESES O DÍAS EXACTOS (RECALCULA FECHA DE CORTE AUTOMÁTICAMENTE) */}
+            <div className="bg-[#0B120A] border-2 border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-extrabold text-[#66FF00]">
+                  2. Plan Contratado ({subEditar.dias_totales || 30} días):
+                </label>
+                <span className="text-[11px] text-gray-300">
+                  Suma desde Fecha Venta ({formatearFechaDMA(subEditar.fecha_venta)}) 👉 Corte:{" "}
+                  <b className="text-[#66FF00]">{formatearFechaDMA(subEditar.fecha_corte)}</b>
+                </span>
               </div>
 
-              {subEditar.tipo_comprador === "revendedor" && (
-                <select
-                  value={subEditar.revendedor_id || ""}
-                  onChange={(e) => {
-                    const r = revendedores.find((x) => x.id === e.target.value);
-                    if (r) {
-                      setSubEditar({
-                        ...subEditar,
-                        revendedor_id: r.id,
-                        nombre_cliente: r.nombre,
-                        telefono_cliente: r.telefono
-                      });
-                    }
-                  }}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Seleccionar Revendedor --</option>
-                  {revendedores.map((r) => (
-                    <option key={r.id} value={r.id}>{r.nombre} ({r.telefono})</option>
-                  ))}
-                </select>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { m: 1, texto: "1 Mes (30d)" },
+                  { m: 2, texto: "2 Meses (60d)" },
+                  { m: 3, texto: "3 Meses (90d)" },
+                  { m: 4, texto: "4 Meses (120d)" },
+                  { m: 6, texto: "6 Meses (180d)" },
+                  { m: 12, texto: "1 Año (365d)" }
+                ].map((op) => (
+                  <button
+                    key={op.m}
+                    type="button"
+                    onClick={() => actualizarMesesEnEdicion(op.m)}
+                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-extrabold border cursor-pointer ${
+                      Number(subEditar.meses_contratados) === op.m
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    {op.texto}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-gray-400">O escribe cantidad de Meses:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={subEditar.meses_contratados || 1}
+                    onChange={(e) => actualizarMesesEnEdicion(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-[#66FF00] font-bold">
+                    O escribe cantidad exacta de Días (Ej: 90):
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={subEditar.dias_totales || 30}
+                    onChange={(e) => actualizarDiasEnEdicion(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-black"
+                  />
+                </div>
+              </div>
+
+              {/* CASILLA DE MESES CANCELADOS AL PROVEEDOR SI EL PLAN SUPERA LOS 90 DÍAS */}
+              {Number(subEditar.dias_totales) > 90 && (
+                <div className="bg-amber-950/40 border border-amber-500/60 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-amber-300">
+                      📦 Adelanto al Proveedor (Plan de {subEditar.dias_totales} días):
+                    </p>
+                    <p className="text-[11px] text-gray-300">
+                      Próxima renovación con proveedor:{" "}
+                      <b className="text-white">
+                        {formatearFechaDMA(
+                          subEditar.fecha_renovacion_proveedor ||
+                            sumarDiasBoliviaISO(Number(subEditar.meses_pagados_proveedor || 3) * 30, subEditar.fecha_venta)
+                        )}
+                      </b>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-amber-300 font-bold">Meses pagados a Prov:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={subEditar.meses_pagados_proveedor || 3}
+                      onChange={(e) => {
+                        const mp = Number(e.target.value || 1);
+                        setSubEditar({
+                          ...subEditar,
+                          meses_pagados_proveedor: mp,
+                          fecha_renovacion_proveedor: sumarDiasBoliviaISO(mp * 30, subEditar.fecha_venta)
+                        });
+                      }}
+                      className="w-16 bg-[#070B06] border border-amber-400 rounded-lg p-1.5 text-center text-white font-black text-xs"
+                    />
+                  </div>
+                </div>
               )}
             </div>
 
-            {/* 3. CAMBIAR ENTRE MATRIZ DE STOCK Y PROVEEDOR EXTERNO */}
-            <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
-              <label className="text-xs font-bold text-[#66FF00]">3. Origen (Matriz Stock o Proveedor):</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
-                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                    subEditar.origen === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                  }`}
-                >
-                  De mi Matriz Stock
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
-                  className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
-                    subEditar.origen === "proveedor" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                  }`}
-                >
-                  De Proveedor Externo
-                </button>
+            {/* 3. TIPO DE COMPRADOR Y ORIGEN */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
+                <label className="text-xs font-bold text-[#66FF00]">3. Comprador:</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, tipo_comprador: "cliente", revendedor_id: null })}
+                    className={`py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+                      (subEditar.tipo_comprador || "cliente") === "cliente"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    👤 Cliente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, tipo_comprador: "revendedor" })}
+                    className={`py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+                      subEditar.tipo_comprador === "revendedor"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    🤝 Revendedor
+                  </button>
+                </div>
               </div>
 
-              {subEditar.origen === "stock" ? (
-                <select
-                  value={matrizNuevaEdicionId}
-                  onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
-                  {matrices
-                    .filter((m) => !m.en_papelera && m.estado === "Activa")
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.plataforma} — {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
-                      </option>
-                    ))}
-                </select>
-              ) : (
-                <select
-                  value={subEditar.proveedor_id || ""}
-                  onChange={(e) => {
-                    const prov = proveedores.find((p) => p.id === e.target.value);
-                    if (prov) {
-                      setSubEditar({
-                        ...subEditar,
-                        proveedor_id: prov.id,
-                        nombre_proveedor: prov.nombre,
-                        telefono_proveedor: prov.telefono
-                      });
-                    }
-                  }}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                >
-                  <option value="">-- Seleccionar Proveedor --</option>
-                  {proveedores.map((p) => (
-                    <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
-                  ))}
-                </select>
-              )}
+              <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2">
+                <label className="text-xs font-bold text-[#66FF00]">4. Origen:</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
+                    className={`py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+                      subEditar.origen === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    Matriz Stock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
+                    className={`py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+                      subEditar.origen === "proveedor" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    Proveedor
+                  </button>
+                </div>
+              </div>
             </div>
+
+            {subEditar.origen === "stock" ? (
+              <select
+                value={matrizNuevaEdicionId}
+                onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
+                className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+              >
+                <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
+                {matrices
+                  .filter((m) => !m.en_papelera && m.estado === "Activa")
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.plataforma} — {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              <select
+                value={subEditar.proveedor_id || ""}
+                onChange={(e) => {
+                  const prov = proveedores.find((p) => p.id === e.target.value);
+                  if (prov) {
+                    setSubEditar({
+                      ...subEditar,
+                      proveedor_id: prov.id,
+                      nombre_proveedor: prov.nombre,
+                      telefono_proveedor: prov.telefono
+                    });
+                  }
+                }}
+                className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+              >
+                <option value="">-- Seleccionar Proveedor --</option>
+                {proveedores.map((p) => (
+                  <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
+                ))}
+              </select>
+            )}
 
             <div className="grid grid-cols-2 gap-2.5">
               <div>
@@ -869,30 +1017,6 @@ export default function ModuloDirectorio({
                   className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                 />
               </div>
-
-              {subEditar.tipo_comprador === "revendedor" && (
-                <>
-                  <div>
-                    <label className="text-[11px] text-purple-300">Cliente Final del Revendedor</label>
-                    <input
-                      type="text"
-                      value={subEditar.nombre_cliente_final || ""}
-                      onChange={(e) => setSubEditar({ ...subEditar, nombre_cliente_final: e.target.value })}
-                      className="w-full bg-[#070B06] border border-purple-500/40 rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-purple-300">Precio Venta del Revendedor (Bs)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={subEditar.precio_venta_revendedor || 0}
-                      onChange={(e) => setSubEditar({ ...subEditar, precio_venta_revendedor: e.target.value })}
-                      className="w-full bg-[#070B06] border border-purple-500/40 rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
-                </>
-              )}
 
               <div className={subEditar.tipo_cuenta === "Por Invitación" ? "col-span-2" : ""}>
                 <label className="text-[11px] text-gray-400">
@@ -963,7 +1087,15 @@ export default function ModuloDirectorio({
                 <input
                   type="date"
                   value={subEditar.fecha_venta || ""}
-                  onChange={(e) => setSubEditar({ ...subEditar, fecha_venta: e.target.value })}
+                  onChange={(e) => {
+                    const nuevaVenta = e.target.value;
+                    const d = Number(subEditar.dias_totales || 30);
+                    setSubEditar({
+                      ...subEditar,
+                      fecha_venta: nuevaVenta,
+                      fecha_corte: sumarDiasBoliviaISO(d, nuevaVenta)
+                    });
+                  }}
                   className="w-full bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
                 />
               </div>
@@ -983,7 +1115,7 @@ export default function ModuloDirectorio({
                 Cancelar
               </button>
               <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Guardar y Generar Mensaje
+                Guardar y Generar Mensaje ({subEditar.dias_totales || 30} días)
               </button>
             </div>
           </form>

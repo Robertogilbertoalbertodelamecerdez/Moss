@@ -1,5 +1,16 @@
 import { formatearFechaDMA } from "@/config";
 
+// Formatea el plan mostrando siempre los días exactos contratados (ej. "90 días")
+function obtenerTextoPlanDias(item) {
+  const dias =
+    Number(item.diasTotales) > 0
+      ? Number(item.diasTotales)
+      : Number(item.meses) === 12
+      ? 365
+      : Number(item.meses || 1) * 30;
+  return `${dias} ${dias === 1 ? "día" : "días"}`;
+}
+
 // 1. Mensaje de Entrega / Reemplazo / Edición
 export function generarMensajeEntrega(
   nombre,
@@ -15,8 +26,7 @@ export function generarMensajeEntrega(
   if (esRevendedor) {
     const bloquesRev = listaItems
       .map((item, idx) => {
-        const m = Number(item.meses || 1);
-        const textoMeses = m === 12 ? "1 año" : m === 1 ? "1 mes" : `${m} meses`;
+        const textoPlan = obtenerTextoPlanDias(item);
         const vence = formatearFechaDMA(item.fechaCorte);
         const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
 
@@ -38,7 +48,7 @@ export function generarMensajeEntrega(
             ? `\n📌 *PIN:* ${item.pinFinal}`
             : "";
 
-        return `${head}\n📧 *Correo / Usuario:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoMeses}\n📅 *Vence:* ${vence}`;
+        return `${head}\n📧 *Correo / Usuario:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan}\n📅 *Vence:* ${vence}`;
       })
       .join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
 
@@ -64,8 +74,7 @@ export function generarMensajeEntrega(
 
   const bloques = listaItems
     .map((item, idx) => {
-      const m = Number(item.meses || 1);
-      const textoMeses = m === 12 ? "1 año" : m === 1 ? "1 mes" : `${m} meses`;
+      const textoPlan = obtenerTextoPlanDias(item);
       const vence = formatearFechaDMA(item.fechaCorte);
       const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
 
@@ -87,7 +96,7 @@ export function generarMensajeEntrega(
           ? ` | 📌 *PIN:* ${item.pinFinal}`
           : "";
 
-      return `${head}\n📧 *Correo:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoMeses} | 📅 *Vence:* ${vence}`;
+      return `${head}\n📧 *Correo:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan} | 📅 *Vence:* ${vence}`;
     })
     .join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
 
@@ -102,6 +111,7 @@ export function generarMensajeEntrega(
 
   const resumido = listaItems
     .map((item) => {
+      const textoPlan = obtenerTextoPlanDias(item);
       const vence = formatearFechaDMA(item.fechaCorte);
       const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
       const pass = item.passFinal && !esInv ? `\n🔑 Clave: ${item.passFinal}` : "";
@@ -109,14 +119,14 @@ export function generarMensajeEntrega(
         item.perfilFinal && !esInv
           ? `\n👤 Perfil: ${item.perfilFinal}${item.pinFinal ? ` | PIN: ${item.pinFinal}` : ""}`
           : "";
-      return `*${item.plataforma} (MOSS)*\n📧 Correo: ${item.correoFinal}${pass}${perfil}\n📅 Vence: ${vence}\n🛠️ Soporte: 78953018`;
+      return `*${item.plataforma} (MOSS)*\n📧 Correo: ${item.correoFinal}${pass}${perfil}\n⏳ Plan: ${textoPlan} | 📅 Vence: ${vence}\n🛠️ Soporte: 78953018`;
     })
     .join("\n\n");
 
   return { completo, resumido, telefono: tel, cliente: nombre };
 }
 
-// 2. Mensaje Corto Individual de Renovación (Sin precio para el cliente final)
+// 2. Mensaje Corto Individual de Renovación
 export function generarMensajeRenovacionCorto(s, textoDias) {
   const corteDMA = formatearFechaDMA(s.fecha_corte);
   const esRev = s.tipo_comprador === "revendedor";
@@ -132,14 +142,13 @@ export function generarMensajeRenovacionCorto(s, textoDias) {
   return `${encabezado}\n📧 *Correo:* ${s.correo_cuenta}${lineaPerfil}\n📅 *Vence:* ${corteDMA} (${textoDias})\n\n¿Deseas renovar tu cuenta para mantenerla activa?`;
 }
 
-// 3. NUEVO: Mensaje Consolidado en LOTE para enviar a un Revendedor todas sus cuentas por vencer
+// 3. Mensaje Consolidado en LOTE para Revendedor
 export function generarMensajeLoteRenovacionRevendedor(nombreRevendedor, listaSubs) {
   const items = listaSubs
     .map((s, idx) => {
       const cliNombre = s.nombre_cliente_final || "Cliente sin anotar";
       const cliTel = s.telefono_cliente_final || s.telefono_cliente || "S/N";
-      const m = Number(s.meses_contratados || 1);
-      const textoMeses = m === 12 ? "1 año" : m === 1 ? "1 mes" : `${m} meses`;
+      const dias = Number(s.dias_totales || (Number(s.meses_contratados || 1) * 30));
       const montoCliente =
         Number(s.precio_venta_revendedor) > 0
           ? `Bs ${Number(s.precio_venta_revendedor).toFixed(2)} (Tu costo: Bs ${s.precio_venta})`
@@ -149,7 +158,7 @@ export function generarMensajeLoteRenovacionRevendedor(nombreRevendedor, listaSu
           ? ` | 👤 ${s.nombre_perfil}`
           : "";
 
-      return `*${idx + 1}. ${s.plataforma}*${perfil}\n👤 *Cliente:* ${cliNombre} | 📞 *Tel:* ${cliTel}\n📧 *Cuenta:* ${s.correo_cuenta}\n⏳ *Compró:* ${textoMeses} | 💰 *Último pago:* ${montoCliente}\n📅 *Corte:* ${formatearFechaDMA(s.fecha_corte)}`;
+      return `*${idx + 1}. ${s.plataforma}*${perfil}\n👤 *Cliente:* ${cliNombre} | 📞 *Tel:* ${cliTel}\n📧 *Cuenta:* ${s.correo_cuenta}\n⏳ *Plan:* ${dias} días | 💰 *Último pago:* ${montoCliente}\n📅 *Corte:* ${formatearFechaDMA(s.fecha_corte)}`;
     })
     .join("\n\n──────────────────\n\n");
 

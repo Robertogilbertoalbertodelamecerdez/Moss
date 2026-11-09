@@ -4,7 +4,6 @@ import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
 import { extraerDatosProveedor } from "@/utils/extractorProveedor";
 import { generarMensajeCambioCredencial } from "@/utils/mensajesMoss";
 import {
-  Plus,
   KeyRound,
   AlertTriangle,
   Trash2,
@@ -50,15 +49,15 @@ export default function ModuloStock({
   const [nuevoProvNombre, setNuevoProvNombre] = useState("");
   const [nuevoProvTelefono, setNuevoProvTelefono] = useState("");
 
-  // Modal cambio de contraseña de toda la matriz
+  // Modal cambio de contraseña general de la matriz
   const [matrizCambioPass, setMatrizCambioPass] = useState(null);
   const [nuevaPass, setNuevaPass] = useState("");
 
-  // Modal emergente al hacer clic en una personita (perfil)
+  // Modal emergente al hacer clic en una personita (Incluye Contraseña + Perfil + PIN)
   const [perfilModal, setPerfilModal] = useState(null); // { perfil, matriz, subOcupante }
   const [nombrePerfilEdit, setNombrePerfilEdit] = useState("");
   const [pinPerfilEdit, setPinPerfilEdit] = useState("");
-  const [pinCambiadoExito, setPinCambiadoExito] = useState(false);
+  const [passMatrizEnPerfilEdit, setPassMatrizEnPerfilEdit] = useState("");
 
   useEffect(() => {
     setFechaCompra(new Date().toISOString().split("T")[0]);
@@ -68,9 +67,10 @@ export default function ModuloStock({
     setPerfilModal({ perfil, matriz, subOcupante });
     setNombrePerfilEdit(perfil.nombre_perfil || "");
     setPinPerfilEdit(perfil.pin || "");
-    setPinCambiadoExito(false);
+    setPassMatrizEnPerfilEdit(matriz.password || "");
   };
 
+  // Guarda tanto el Perfil/PIN como la Contraseña de la Matriz desde la ventana de la personita
   const guardarEdicionPerfilModal = async (e) => {
     e.preventDefault();
     if (!perfilModal) return;
@@ -92,9 +92,22 @@ export default function ModuloStock({
       .eq("perfil_id", perfilModal.perfil.id)
       .eq("estado", "Activa");
 
-    setPinCambiadoExito(true);
+    // Si también modificó la contraseña de la cuenta desde aquí, actualizarla en matriz y clientes activos
+    if (passMatrizEnPerfilEdit.trim() !== (perfilModal.matriz.password || "")) {
+      await supabase
+        .from("matrices_stock")
+        .update({ password: passMatrizEnPerfilEdit.trim() })
+        .eq("id", perfilModal.matriz.id);
+
+      await supabase
+        .from("suscripciones")
+        .update({ password_cuenta: passMatrizEnPerfilEdit.trim() })
+        .eq("matriz_id", perfilModal.matriz.id)
+        .eq("estado", "Activa");
+    }
+
     await recargarTodo();
-    notificar("Perfil y PIN guardados. Ya puedes copiar el aviso abajo");
+    notificar("Datos guardados. Usa los botones morados abajo para copiar el aviso de Clave o PIN");
   };
 
   const guardarNuevoProveedor = async (e) => {
@@ -122,13 +135,13 @@ export default function ModuloStock({
     if (found) setCapacidad(found.perfilesDefault || 5);
   };
 
+  // Extrae Correo y Contraseña SIN cambiar la plataforma que ya elegiste
   const procesarTextoMatriz = (texto) => {
     setTextoProveedorMatriz(texto);
     const extraido = extraerDatosProveedor(texto, plataformasList);
-    if (extraido.plataforma) handleSelectPlataforma(extraido.plataforma);
     if (extraido.correo) setCorreo(extraido.correo);
     if (extraido.password) setPassword(extraido.password);
-    notificar("Datos extraídos");
+    notificar("Correo y clave extraídos sin cambiar tu plataforma");
   };
 
   const generarPinAleatorio = () => Math.floor(1000 + Math.random() * 9000).toString();
@@ -233,7 +246,7 @@ export default function ModuloStock({
       .eq("matriz_id", matrizCambioPass.id)
       .eq("estado", "Activa");
     await recargarTodo();
-    notificar("Contraseña actualizada. Usa el botón morado para copiar el aviso corto");
+    notificar("Contraseña actualizada en toda la matriz");
   };
 
   const marcarMatrizCaida = async (matriz) => {
@@ -275,14 +288,13 @@ export default function ModuloStock({
 
   return (
     <div className="space-y-5">
-      {/* CABECERA */}
       <div className="bg-gradient-to-r from-[#162914] to-[#0E180D] border border-[#66FF00]/40 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-black text-white flex items-center gap-2">
             <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en Stock ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            Haz clic en el ícono de personita de cualquier perfil para ver cliente, editar su PIN y copiar el aviso de cambio.
+            Toca cualquier personita para ver cliente y copiar el aviso morado de cambio de Contraseña o de PIN.
           </p>
         </div>
         <div className="flex gap-2">
@@ -380,7 +392,7 @@ export default function ModuloStock({
                 </div>
               </div>
 
-              {/* ÍCONOS DE PERSONITAS POR CADA PERFIL (CON NOMBRE Y TELÉFONO DEL CLIENTE) */}
+              {/* ÍCONOS DE PERSONITAS POR CADA PERFIL */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                 {perfiles.map((p) => {
                   const subOcupante = suscripciones.find(
@@ -407,7 +419,6 @@ export default function ModuloStock({
                           : "bg-[#142412] border-[#66FF00]/40 hover:border-[#66FF00]"
                       }`}
                     >
-                      {/* ÍCONO DE PERSONITA */}
                       <div
                         className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 border ${
                           p.caido
@@ -426,7 +437,6 @@ export default function ModuloStock({
                         )}
                       </div>
 
-                      {/* TEXTO DE LA PERSONITA: PERFIL + NOMBRE Y TELÉFONO DEL CLIENTE */}
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-black text-white truncate">{p.nombre_perfil}</p>
                         {p.caido ? (
@@ -460,7 +470,7 @@ export default function ModuloStock({
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white flex items-center gap-1 cursor-pointer"
                 >
-                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave Matriz
+                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave Matriz / Aviso
                 </button>
 
                 <button
@@ -496,10 +506,10 @@ export default function ModuloStock({
       </div>
 
       {/* ========================================================================= */}
-      {/* VENTANA EMERGENTE AL CLICKEAR EN UNA PERSONITA (VER CLIENTE + EDITAR PIN) */}
+      {/* MODAL DE PERSONITA: INCLUYE TANTO AVISO DE CONTRASEÑA COMO AVISO DE PIN    */}
       {/* ========================================================================= */}
       {perfilModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-[0_0_50px_rgba(102,255,0,0.3)] animate-modal">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
               <div className="flex items-center gap-2.5">
@@ -518,7 +528,7 @@ export default function ModuloStock({
               </button>
             </div>
 
-            {/* INFORMACIÓN DEL CLIENTE ASIGNADO A ESTE PERFIL */}
+            {/* INFORMACIÓN DEL CLIENTE */}
             <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-2">
               <p className="text-[11px] text-gray-400 font-bold uppercase">Cliente en este perfil:</p>
               {perfilModal.subOcupante ? (
@@ -550,8 +560,20 @@ export default function ModuloStock({
               )}
             </div>
 
-            {/* FORMULARIO PARA EDITAR NOMBRE DEL PERFIL Y PIN */}
+            {/* EDITAR CONTRASEÑA DE LA CUENTA, NOMBRE DE PERFIL Y PIN */}
             <form onSubmit={guardarEdicionPerfilModal} className="space-y-3">
+              <div>
+                <label className="text-xs text-purple-300 font-bold">
+                  Contraseña de la Cuenta / Matriz:
+                </label>
+                <input
+                  type="text"
+                  value={passMatrizEnPerfilEdit}
+                  onChange={(e) => setPassMatrizEnPerfilEdit(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-purple-500 rounded-xl p-2.5 text-xs text-white font-mono"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-gray-400">Nombre del Perfil</label>
@@ -577,35 +599,34 @@ export default function ModuloStock({
                 type="submit"
                 className="w-full py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs cursor-pointer"
               >
-                Guardar Cambios de Perfil y PIN
+                Guardar Cambios (Clave / Perfil / PIN)
               </button>
             </form>
 
-            {/* BOTÓN MORADO PARA COPIAR AVISO DE CAMBIO DE PIN SOLO PARA ESTE CLIENTE */}
+            {/* DOS BOTONES MORADOS SEPARADOS: 1. CAMBIO DE CONTRASEÑA Y 2. CAMBIO DE PIN */}
             <div className="pt-2 border-t border-[#1E331A] space-y-2">
-              {pinCambiadoExito && (
-                <p className="text-[11px] text-purple-300 font-bold text-center">
-                  ✓ ¡PIN actualizado! Copia el aviso corto para enviárselo a este cliente:
-                </p>
-              )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <p className="text-[11px] text-purple-300 font-bold">
+                Copiar aviso corto para este cliente:
+              </p>
+
+              <div className="grid grid-cols-1 gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     const msg = generarMensajeCambioCredencial(
-                      "PIN de tu perfil",
+                      "Contraseña de la cuenta",
                       perfilModal.matriz.plataforma,
                       perfilModal.matriz.correo,
-                      perfilModal.matriz.password,
+                      passMatrizEnPerfilEdit,
                       nombrePerfilEdit,
                       pinPerfilEdit
                     );
                     navigator.clipboard.writeText(msg);
-                    notificar("Aviso corto de cambio de PIN copiado");
+                    notificar("¡Aviso de cambio de Contraseña copiado!");
                   }}
-                  className="py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_15px_rgba(147,51,234,0.35)]"
                 >
-                  <Copy className="w-4 h-4" /> Copiar Aviso de Cambio de PIN
+                  <KeyRound className="w-4 h-4" /> 🔑 Copiar Aviso de Cambio de Contraseña
                 </button>
 
                 <button
@@ -615,24 +636,20 @@ export default function ModuloStock({
                       "PIN de tu perfil",
                       perfilModal.matriz.plataforma,
                       perfilModal.matriz.correo,
-                      perfilModal.matriz.password,
+                      passMatrizEnPerfilEdit,
                       nombrePerfilEdit,
                       pinPerfilEdit
                     );
-                    if (navigator.share) navigator.share({ text: msg });
-                    else {
-                      navigator.clipboard.writeText(msg);
-                      notificar("Aviso copiado");
-                    }
+                    navigator.clipboard.writeText(msg);
+                    notificar("¡Aviso de cambio de PIN copiado!");
                   }}
-                  className="py-2.5 px-3 bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-500 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="py-2.5 px-3 bg-purple-900/90 hover:bg-purple-800 text-purple-100 border border-purple-400 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  <Share2 className="w-4 h-4" /> Compartir Aviso (Celular)
+                  <Copy className="w-4 h-4" /> 📌 Copiar Aviso de Cambio de PIN
                 </button>
               </div>
             </div>
 
-            {/* CONTROL RÁPIDO DE LIBERAR O RESOLVER PERFIL CAÍDO */}
             <div className="flex justify-between items-center pt-2 border-t border-[#1E331A]">
               {perfilModal.perfil.caido ? (
                 <button
@@ -672,7 +689,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL CAMBIO DE CLAVE DE LA MATRIZ CON BOTÓN MORADO */}
+      {/* MODAL CAMBIO DE CLAVE GENERAL DE LA MATRIZ */}
       {matrizCambioPass && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-5 max-w-md w-full space-y-4">
@@ -818,7 +835,7 @@ export default function ModuloStock({
             <select value={proveedorId || proveedores[0]?.id || ""} onChange={(e) => setProveedorId(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
               {proveedores.map((p) => (<option key={p.id} value={p.id}>{p.nombre} — 📞 {p.telefono}</option>))}
             </select>
-            <textarea rows={2} placeholder="Pega aquí mensaje del proveedor para autocompletar..." value={textoProveedorMatriz} onChange={(e) => procesarTextoMatriz(e.target.value)} className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white" />
+            <textarea rows={2} placeholder="Pega aquí mensaje del proveedor para autocompletar correo y clave..." value={textoProveedorMatriz} onChange={(e) => procesarTextoMatriz(e.target.value)} className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white" />
             <div className="grid grid-cols-2 gap-2">
               <select value={plataforma} onChange={(e) => handleSelectPlataforma(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
                 {plataformasList.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}

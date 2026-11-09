@@ -11,33 +11,39 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
     pin: ""
   };
 
-  // 1. Detectar Plataforma mencionada en cualquier parte del texto
+  // 1. Detectar Plataforma solo si coincide de forma exacta (sin confundir "max" de Claude/textos con HBO)
   const upper = textoCrudo.toUpperCase();
-  if (upper.includes("NETFLIX")) resultado.plataforma = "Netflix";
-  else if (upper.includes("DISNEY") || upper.includes("ESPN")) resultado.plataforma = "Disney+ / ESPN";
-  else if (upper.includes("PRIME") || upper.includes("AMAZON")) resultado.plataforma = "Prime Video";
-  else if (upper.includes("CRUNCHYROLL") || upper.includes("CRUNCHY")) resultado.plataforma = "Crunchyroll";
-  else if (upper.includes("HBO") || upper.includes("MAX")) resultado.plataforma = "Max (HBO)";
-  else if (upper.includes("GEMINI")) {
-    const tieneGemini = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("GEMINI"));
-    resultado.plataforma = tieneGemini ? tieneGemini.nombre : "Gemini Pro";
+  if (upper.includes("CLAUDE") || upper.includes("ANTHROPIC")) {
+    const tieneClaude = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("CLAUDE"));
+    resultado.plataforma = tieneClaude ? tieneClaude.nombre : "Claude Pro";
   } else if (upper.includes("CHATGPT") || upper.includes("OPENAI") || upper.includes("GPT")) {
     const tienePlus = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("CHATGPT"));
     resultado.plataforma = tienePlus ? tienePlus.nombre : "ChatGPT Plus";
-  } else if (upper.includes("CLAUDE") || upper.includes("ANTHROPIC")) {
-    const tieneClaude = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("CLAUDE"));
-    resultado.plataforma = tieneClaude ? tieneClaude.nombre : "Claude Pro";
+  } else if (upper.includes("GEMINI")) {
+    const tieneGemini = plataformasPersonalizadas.find((p) => p.nombre.toUpperCase().includes("GEMINI"));
+    resultado.plataforma = tieneGemini ? tieneGemini.nombre : "Gemini Pro";
+  } else if (upper.includes("NETFLIX")) {
+    resultado.plataforma = "Netflix";
+  } else if (upper.includes("DISNEY") || upper.includes("ESPN")) {
+    resultado.plataforma = "Disney+ / ESPN";
+  } else if (upper.includes("PRIME VIDEO") || upper.includes("AMAZON PRIME")) {
+    resultado.plataforma = "Prime Video";
+  } else if (upper.includes("CRUNCHYROLL") || upper.includes("CRUNCHY")) {
+    resultado.plataforma = "Crunchyroll";
+  } else if (upper.includes("HBO") || /\bMAX\s*\(\s*HBO\s*\)/i.test(textoCrudo)) {
+    resultado.plataforma = "Max (HBO)";
   } else if (upper.includes("SPOTIFY")) {
     resultado.plataforma = upper.includes("INVITACI") ? "Spotify (Invitación)" : "Spotify (Asignada)";
-  } else if (upper.includes("YOUTUBE")) resultado.plataforma = "YouTube Premium";
-  else if (upper.includes("CANVA")) resultado.plataforma = "Canva Pro";
-  else {
-    for (const p of plataformasPersonalizadas) {
-      if (upper.includes(p.nombre.toUpperCase())) {
-        resultado.plataforma = p.nombre;
-        break;
-      }
-    }
+  } else if (upper.includes("YOUTUBE")) {
+    resultado.plataforma = upper.includes("ASIGNADA") ? "YouTube Premium (Asignada)" : "YouTube Premium (Invitación)";
+  } else if (upper.includes("CANVA")) {
+    resultado.plataforma = "Canva Pro";
+  } else if (upper.includes("CAPCUT")) {
+    resultado.plataforma = "CapCut Pro";
+  } else if (upper.includes("FLUJO")) {
+    resultado.plataforma = "Flujo TV";
+  } else if (upper.includes("IPTV")) {
+    resultado.plataforma = "IPTV";
   }
 
   // 2. Extraer Correo
@@ -46,7 +52,7 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
     resultado.correo = matchCorreo[0].trim();
   }
 
-  // 3. Caso especial: formato "correo@gmail.com:contraseña123"
+  // 3. Formato "correo@gmail.com:contraseña123"
   if (resultado.correo) {
     const regexCombo = new RegExp(
       resultado.correo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*[:|/\\-]\\s*([^\\s\\n]+)",
@@ -58,7 +64,6 @@ export function extraerDatosProveedor(textoCrudo, plataformasPersonalizadas = PL
     }
   }
 
-  // Analizar línea por línea para Contraseña, Perfil y PIN
   const lineas = textoCrudo.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   for (const linea of lineas) {

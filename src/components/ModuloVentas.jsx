@@ -71,6 +71,9 @@ export default function ModuloVentas({
 
   const [precioVenta, setPrecioVenta] = useState("");
   const [meses, setMeses] = useState(1);
+  const [diasPersonalizados, setDiasPersonalizados] = useState(30);
+  const [mesesPagadosProv, setMesesPagadosProv] = useState(3);
+
   const [modoFecha, setModoFecha] = useState("hoy");
   const [fechaVenta, setFechaVenta] = useState("");
 
@@ -93,7 +96,6 @@ export default function ModuloVentas({
 
   const perfilesEnCarritoIds = carritoCombo.map((item) => item.perfilIdUsado).filter(Boolean);
 
-  // Calcula cuántos cupos libres reales tiene cualquier plataforma en tus matrices activas
   const contarCuposLibresPlataforma = (nombrePlat) => {
     return matrices
       .filter((m) => !m.en_papelera && m.estado === "Activa" && m.plataforma === nombrePlat)
@@ -107,7 +109,6 @@ export default function ModuloVentas({
       );
   };
 
-  // ATAJO DE PRECIO: Sugiere el precio según Cliente o Revendedor, 100% libre de editar
   const aplicarAtajoPrecio = (nombrePlat, rolComprador, cantMeses = 1) => {
     const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
     if (!cfg) return;
@@ -116,6 +117,25 @@ export default function ModuloVentas({
         ? Number(cfg.precioRevendedor ?? 10)
         : Number(cfg.precioCliente ?? 20);
     setPrecioVenta(String(base * Number(cantMeses || 1)));
+  };
+
+  // Cambiar meses actualiza automáticamente los días (ej: 3M -> 90 días, 4M -> 120 días, 12M -> 365 días)
+  const cambiarDuracionMeses = (cantMeses) => {
+    const m = Math.max(1, Number(cantMeses || 1));
+    const d = m === 12 ? 365 : m * 30;
+    setMeses(m);
+    setDiasPersonalizados(d);
+    if (m <= 3) setMesesPagadosProv(m);
+    else setMesesPagadosProv(3);
+    aplicarAtajoPrecio(plataforma, tipoComprador, m);
+  };
+
+  // Cambiar días directamente (ej: escribir 90 días, 45 días, 120 días)
+  const cambiarDuracionDias = (cantDias) => {
+    const d = Math.max(1, Number(cantDias || 30));
+    setDiasPersonalizados(d);
+    const mAprox = Math.max(1, Math.round(d / 30));
+    setMeses(mAprox);
   };
 
   const cambiarTipoComprador = (nuevoTipo) => {
@@ -209,16 +229,16 @@ export default function ModuloVentas({
     }
   };
 
+  // IMPORTANTE: Al pegar el mensaje del proveedor NO cambia la plataforma que ya tienes seleccionada
   const procesarTextoProveedor = (texto) => {
     setTextoProveedorCrudo(texto);
     const extraido = extraerDatosProveedor(texto, plataformasList);
-    if (extraido.plataforma) seleccionarPlataforma(extraido.plataforma);
     if (extraido.correo) setProvCorreo(extraido.correo);
     if (extraido.password) setProvPassword(extraido.password);
     if (extraido.perfil) setProvPerfil(extraido.perfil);
     if (extraido.pin) setProvPin(extraido.pin);
     if (texto.toUpperCase().includes("COMPLETA")) setTipoCuenta("Cuenta Completa");
-    notificar("Datos extraídos automáticamente");
+    notificar(`Datos extraídos para ${plataforma}`);
   };
 
   const pegarDesdePortapapeles = async () => {
@@ -267,7 +287,6 @@ export default function ModuloVentas({
   });
 
   const obtenerSiguientePerfilLibre = (matriz) => obtenerPerfilesLibresDeMatriz(matriz)[0] || null;
-  const calcularDiasPorMeses = (cantMeses) => (Number(cantMeses) === 12 ? 365 : Number(cantMeses) * 30);
 
   const armarItemActualFormulario = () => {
     if (precioVenta === "" || Number(precioVenta) < 0) {
@@ -322,9 +341,16 @@ export default function ModuloVentas({
       provTelFinal = provObj ? provObj.telefono : "";
     }
 
-    const diasTotales = calcularDiasPorMeses(meses);
+    const diasTotales = Math.max(1, Number(diasPersonalizados || 30));
     const fechaBaseStr = fechaVenta || obtenerFechaBoliviaISO();
     const fechaCorte = sumarDiasBoliviaISO(diasTotales, fechaBaseStr);
+
+    // Si pagó más de 3 meses (> 90 días), calcular cuándo debes renovar tú con el proveedor
+    const mesesPagProv = diasTotales > 90 ? Number(mesesPagadosProv || 3) : Number(meses || 1);
+    const fechaRenovProv =
+      diasTotales > 90
+        ? sumarDiasBoliviaISO(mesesPagProv * 30, fechaBaseStr)
+        : fechaCorte;
 
     return {
       tempId: Date.now() + Math.random(),
@@ -344,6 +370,8 @@ export default function ModuloVentas({
       precioVenta: Number(precioVenta),
       meses: Number(meses),
       diasTotales,
+      mesesPagadosProv,
+      fechaRenovProv,
       fechaVenta: fechaBaseStr,
       fechaCorte
     };
@@ -419,6 +447,8 @@ export default function ModuloVentas({
             precio_venta: item.precioVenta,
             meses_contratados: item.meses,
             dias_totales: item.diasTotales,
+            meses_pagados_proveedor: item.mesesPagadosProv,
+            fecha_renovacion_proveedor: item.fechaRenovProv,
             fecha_venta: item.fechaVenta,
             fecha_corte: item.fechaCorte,
             estado: "Activa"
@@ -441,7 +471,7 @@ export default function ModuloVentas({
           tipo: "Ingreso Venta",
           monto: Math.abs(Number(item.precioVenta)),
           afecta_ganancia_neta: true,
-          descripcion: `Venta${tagRol} ${item.plataforma} a ${nombreCliente.trim()}`,
+          descripcion: `Venta${tagRol} ${item.plataforma} (${item.diasTotales}d) a ${nombreCliente.trim()}`,
           referencia_id: nuevaSub.id
         }]);
 
@@ -450,7 +480,7 @@ export default function ModuloVentas({
             tipo: "Costo Proveedor",
             monto: -Math.abs(item.costoFinal),
             afecta_ganancia_neta: true,
-            descripcion: `Pago a proveedor ${item.provNombreFinal} por ${item.plataforma}`,
+            descripcion: `Pago a proveedor ${item.provNombreFinal} por ${item.plataforma} (${item.mesesPagadosProv}M)`,
             referencia_id: nuevaSub.id
           }]);
         }
@@ -496,9 +526,7 @@ export default function ModuloVentas({
 
   return (
     <div className="space-y-6">
-      {/* ===================================================================== */}
-      {/* BANNER HERO: VERDE BRILLANTE SI TIENE CUPOS EN STOCK, APAGADO SI NO   */}
-      {/* ===================================================================== */}
+      {/* BANNER HERO */}
       <div className="bg-gradient-to-r from-[#162914] via-[#101D0E] to-[#0B140A] border-2 border-[#66FF00]/60 rounded-3xl p-6 shadow-lg flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="space-y-2.5 text-center md:text-left">
           <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
@@ -538,7 +566,6 @@ export default function ModuloVentas({
                 >
                   <span>{p.nombre}</span>
 
-                  {/* BADGE DE CUPOS LIBRES O PROVEEDOR */}
                   {tieneStock ? (
                     <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-[#66FF00] text-black">
                       ● {libresPlat} {libresPlat === 1 ? "libre" : "libres"}
@@ -618,7 +645,7 @@ export default function ModuloVentas({
                   </div>
                   <p className="text-xs text-gray-400 truncate mt-1">{v.correo_cuenta}</p>
                   <p className="text-[11px] text-gray-500">
-                    Bs {v.precio_venta} · Venta: {formatearFechaDMA(v.fecha_venta)} · Vence: {formatearFechaDMA(v.fecha_corte)}
+                    Bs {v.precio_venta} · Plan: {v.dias_totales || 30} días · Vence: {formatearFechaDMA(v.fecha_corte)}
                   </p>
                 </div>
 
@@ -637,6 +664,7 @@ export default function ModuloVentas({
                           perfilFinal: v.nombre_perfil,
                           pinFinal: v.pin_perfil,
                           meses: v.meses_contratados || 1,
+                          diasTotales: v.dias_totales || 30,
                           fechaCorte: v.fecha_corte,
                           precioVenta: v.precio_venta
                         }],
@@ -769,7 +797,7 @@ export default function ModuloVentas({
                 {carritoCombo.map((item, idx) => (
                   <div key={item.tempId} className="flex justify-between items-center bg-[#111A10] rounded-xl px-3 py-1.5 text-xs">
                     <span className="truncate">
-                      <b className="text-[#66FF00]">#{idx + 1} {item.plataforma}</b> — {item.correoFinal}
+                      <b className="text-[#66FF00]">#{idx + 1} {item.plataforma} ({item.diasTotales}d)</b> — {item.correoFinal}
                     </span>
                     <div className="flex items-center gap-2">
                       <b>Bs {item.precioVenta}</b>
@@ -921,7 +949,7 @@ export default function ModuloVentas({
                   <div className="space-y-1.5">
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-[#66FF00] font-bold flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5" /> Pegar Mensaje Proveedor
+                        <Sparkles className="w-3.5 h-3.5" /> Pegar Mensaje Proveedor (No cambia tu plataforma {plataforma})
                       </span>
                       <button type="button" onClick={pegarDesdePortapapeles} className="px-2.5 py-1 bg-[#66FF00] text-black font-bold rounded-lg text-[11px] cursor-pointer">
                         Pegar Portapapeles
@@ -986,7 +1014,7 @@ export default function ModuloVentas({
                 )}
 
                 <div>
-                  <label className="text-[11px] text-orange-300">Costo Proveedor (Bs) - Opcional</label>
+                  <label className="text-[11px] text-orange-300">Costo Pagado hoy al Proveedor (Bs) - Opcional</label>
                   <input
                     type="number"
                     step="0.01"
@@ -999,10 +1027,11 @@ export default function ModuloVentas({
               </div>
             )}
 
+            {/* PRECIO, PLAN EN MESES O DÍAS Y FECHA */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
                 <label className="text-xs text-[#66FF00] font-bold">
-                  Precio a Cobrar (Bs) * (Atajo libre de editar)
+                  Precio a Cobrar (Bs) *
                 </label>
                 <input
                   type="number"
@@ -1015,28 +1044,50 @@ export default function ModuloVentas({
               </div>
 
               <div>
-                <label className="text-xs text-gray-400">Duración ({calcularDiasPorMeses(meses)}d)</label>
+                <label className="text-xs text-[#66FF00] font-bold">
+                  Plan: {diasPersonalizados} días ({meses}M)
+                </label>
                 <div className="flex gap-1 mt-1">
                   {[
                     { valor: 1, texto: "1M" },
                     { valor: 2, texto: "2M" },
                     { valor: 3, texto: "3M" },
-                    { valor: 12, texto: "1 Año" }
+                    { valor: 6, texto: "6M" },
+                    { valor: 12, texto: "1A" }
                   ].map((op) => (
                     <button
                       key={op.valor}
                       type="button"
-                      onClick={() => {
-                        setMeses(op.valor);
-                        aplicarAtajoPrecio(plataforma, tipoComprador, op.valor);
-                      }}
-                      className={`flex-1 py-2 rounded-xl text-[11px] font-extrabold border cursor-pointer ${
+                      onClick={() => cambiarDuracionMeses(op.valor)}
+                      className={`flex-1 py-2 rounded-xl text-[10px] font-extrabold border cursor-pointer ${
                         Number(meses) === op.valor ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                       }`}
                     >
                       {op.texto}
                     </button>
                   ))}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                  <div>
+                    <span className="text-[10px] text-gray-400">O escribe Meses:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={meses}
+                      onChange={(e) => cambiarDuracionMeses(e.target.value)}
+                      className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg px-2 py-1 text-xs text-white text-center"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#66FF00]">O escribe Días:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={diasPersonalizados}
+                      onChange={(e) => cambiarDuracionDias(e.target.value)}
+                      className="w-full bg-[#070B06] border border-[#66FF00] rounded-lg px-2 py-1 text-xs text-white font-bold text-center"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1073,6 +1124,34 @@ export default function ModuloVentas({
                 </div>
               </div>
             </div>
+
+            {/* BLOQUE ESPECIAL SI PAGÓ MÁS DE 3 MESES (> 90 DÍAS): CONTROL DE ADELANTO AL PROVEEDOR */}
+            {Number(diasPersonalizados) > 90 && (
+              <div className="bg-amber-950/30 border-2 border-amber-500/60 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black text-amber-300">
+                    📦 Plan largo ({diasPersonalizados} días): ¿Cuántos meses le cancelaste hoy al proveedor?
+                  </p>
+                  <p className="text-[11px] text-gray-300">
+                    El sistema te agendará renovar con el proveedor el{" "}
+                    <b className="text-white">
+                      {formatearFechaDMA(sumarDiasBoliviaISO(Number(mesesPagadosProv || 3) * 30, fechaVenta || obtenerFechaBoliviaISO()))}
+                    </b>{" "}
+                    para completar los {diasPersonalizados} días del cliente.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-amber-300 font-bold">Meses pagados a Prov:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={mesesPagadosProv}
+                    onChange={(e) => setMesesPagadosProv(e.target.value)}
+                    className="w-16 bg-[#070B06] border border-amber-400 rounded-xl p-2 text-center text-white font-black text-xs"
+                  />
+                </div>
+              </div>
+            )}
 
             <button
               type="button"
