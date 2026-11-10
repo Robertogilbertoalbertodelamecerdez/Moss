@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
 import { extraerDatosProveedor } from "@/utils/extractorProveedor";
-import { generarMensajeCambioCredencial } from "@/utils/mensajesMoss";
+import { generarMensajeCambioCredencial, enviarWhatsappDirecto } from "@/utils/mensajesMoss";
 import {
   KeyRound,
   AlertTriangle,
@@ -10,14 +10,13 @@ import {
   Edit3,
   X,
   Copy,
-  UserPlus,
   Layers,
   Search,
   User,
   UserCheck,
   UserX,
   Phone,
-  Share2
+  Send
 } from "lucide-react";
 
 export default function ModuloStock({
@@ -49,12 +48,10 @@ export default function ModuloStock({
   const [nuevoProvNombre, setNuevoProvNombre] = useState("");
   const [nuevoProvTelefono, setNuevoProvTelefono] = useState("");
 
-  // Modal cambio de contraseña general de la matriz
   const [matrizCambioPass, setMatrizCambioPass] = useState(null);
   const [nuevaPass, setNuevaPass] = useState("");
 
-  // Modal emergente al hacer clic en una personita (Incluye Contraseña + Perfil + PIN)
-  const [perfilModal, setPerfilModal] = useState(null); // { perfil, matriz, subOcupante }
+  const [perfilModal, setPerfilModal] = useState(null);
   const [nombrePerfilEdit, setNombrePerfilEdit] = useState("");
   const [pinPerfilEdit, setPinPerfilEdit] = useState("");
   const [passMatrizEnPerfilEdit, setPassMatrizEnPerfilEdit] = useState("");
@@ -70,7 +67,6 @@ export default function ModuloStock({
     setPassMatrizEnPerfilEdit(matriz.password || "");
   };
 
-  // Guarda tanto el Perfil/PIN como la Contraseña de la Matriz desde la ventana de la personita
   const guardarEdicionPerfilModal = async (e) => {
     e.preventDefault();
     if (!perfilModal) return;
@@ -92,7 +88,6 @@ export default function ModuloStock({
       .eq("perfil_id", perfilModal.perfil.id)
       .eq("estado", "Activa");
 
-    // Si también modificó la contraseña de la cuenta desde aquí, actualizarla en matriz y clientes activos
     if (passMatrizEnPerfilEdit.trim() !== (perfilModal.matriz.password || "")) {
       await supabase
         .from("matrices_stock")
@@ -107,7 +102,7 @@ export default function ModuloStock({
     }
 
     await recargarTodo();
-    notificar("Datos guardados. Usa los botones morados abajo para copiar el aviso de Clave o PIN");
+    notificar("Datos guardados");
   };
 
   const guardarNuevoProveedor = async (e) => {
@@ -135,13 +130,12 @@ export default function ModuloStock({
     if (found) setCapacidad(found.perfilesDefault || 5);
   };
 
-  // Extrae Correo y Contraseña SIN cambiar la plataforma que ya elegiste
   const procesarTextoMatriz = (texto) => {
     setTextoProveedorMatriz(texto);
     const extraido = extraerDatosProveedor(texto, plataformasList);
     if (extraido.correo) setCorreo(extraido.correo);
     if (extraido.password) setPassword(extraido.password);
-    notificar("Correo y clave extraídos sin cambiar tu plataforma");
+    notificar("Correo y clave extraídos");
   };
 
   const generarPinAleatorio = () => Math.floor(1000 + Math.random() * 9000).toString();
@@ -258,7 +252,7 @@ export default function ModuloStock({
       await supabase.from("perfiles_matriz").update({ caido: false }).eq("matriz_id", matriz.id);
     }
     await recargarTodo();
-    notificar(nuevoEstado === "Caida" ? "Matriz marcada como Caída" : "Matriz resuelta y perfiles habilitados");
+    notificar(nuevoEstado === "Caida" ? "Matriz marcada como Caída" : "Matriz resuelta");
   };
 
   const calcularDiasRestantes = (fechaCorte) => {
@@ -294,7 +288,7 @@ export default function ModuloStock({
             <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en Stock ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            Toca cualquier personita para ver cliente y copiar el aviso morado de cambio de Contraseña o de PIN.
+            Cada perfil muestra su PIN y al tocarlo puedes copiar o enviar el aviso de Contraseña o PIN con el número del revendedor.
           </p>
         </div>
         <div className="flex gap-2">
@@ -313,13 +307,12 @@ export default function ModuloStock({
         </div>
       </div>
 
-      {/* BUSCADOR Y FILTROS */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 space-y-3">
         <div className="relative">
           <Search className="w-4 h-4 text-[#66FF00] absolute left-3.5 top-3" />
           <input
             type="text"
-            placeholder="Buscar matriz por teléfono de cliente, nombre, correo de matriz o proveedor..."
+            placeholder="Buscar matriz por teléfono, cliente, correo o proveedor..."
             value={busquedaStock}
             onChange={(e) => setBusquedaStock(e.target.value)}
             className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-sm text-white"
@@ -352,7 +345,7 @@ export default function ModuloStock({
         </div>
       </div>
 
-      {/* GRILLA DE MATRICES */}
+      {/* GRILLA DE MATRICES (MUESTRA EL PIN TANTO EN LIBRES COMO EN OCUPADOS) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {matricesFiltradas.map((matriz) => {
           const perfiles = (matriz.perfiles_matriz || []).sort((a, b) => a.numero_slot - b.numero_slot);
@@ -371,11 +364,6 @@ export default function ModuloStock({
                   <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                     {matriz.plataforma}
                   </span>
-                  {matriz.nombre_proveedor && (
-                    <span className="ml-2 px-2 py-0.5 text-[11px] rounded bg-gray-800 text-gray-300">
-                      Prov: {matriz.nombre_proveedor}
-                    </span>
-                  )}
                   <h3 className="font-bold text-base mt-1 break-all">{matriz.correo}</h3>
                   <p className="text-xs text-gray-400">
                     Clave: <span className="text-white font-mono">{matriz.password || "N/A"}</span> · Costo: Bs {matriz.costo_total}
@@ -392,35 +380,27 @@ export default function ModuloStock({
                 </div>
               </div>
 
-              {/* ÍCONOS DE PERSONITAS POR CADA PERFIL */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                 {perfiles.map((p) => {
                   const subOcupante = suscripciones.find(
                     (s) => s.perfil_id === p.id && s.estado === "Activa" && !s.en_papelera
                   );
-                  const resaltaBusqueda =
-                    busquedaStock.trim() !== "" &&
-                    subOcupante &&
-                    ((subOcupante.telefono_cliente || "").includes(busquedaStock.trim()) ||
-                      (subOcupante.nombre_cliente || "").toLowerCase().includes(busquedaStock.toLowerCase().trim()));
 
                   return (
                     <button
                       key={p.id}
                       type="button"
                       onClick={() => abrirModalPersonita(p, matriz, subOcupante)}
-                      className={`p-2.5 rounded-2xl border text-left transition flex items-center gap-2.5 cursor-pointer group ${
-                        resaltaBusqueda
-                          ? "bg-[#223B1E] border-2 border-[#66FF00]"
-                          : p.caido
-                          ? "bg-red-950/60 border-red-500 hover:bg-red-900/60"
+                      className={`p-2.5 rounded-2xl border text-left transition flex items-center gap-2 cursor-pointer ${
+                        p.caido
+                          ? "bg-red-950/60 border-red-500"
                           : p.ocupado
                           ? "bg-[#070B06] border-[#2A4226] hover:border-[#66FF00]"
                           : "bg-[#142412] border-[#66FF00]/40 hover:border-[#66FF00]"
                       }`}
                     >
                       <div
-                        className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 border ${
+                        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border ${
                           p.caido
                             ? "bg-red-900/70 border-red-400 text-red-200"
                             : p.ocupado
@@ -428,19 +408,15 @@ export default function ModuloStock({
                             : "bg-[#66FF00]/20 border-[#66FF00] text-[#66FF00]"
                         }`}
                       >
-                        {p.caido ? (
-                          <UserX className="w-4 h-4" />
-                        ) : p.ocupado ? (
-                          <UserCheck className="w-4 h-4" />
-                        ) : (
-                          <User className="w-4 h-4" />
-                        )}
+                        {p.caido ? <UserX className="w-4 h-4" /> : p.ocupado ? <UserCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-black text-white truncate">{p.nombre_perfil}</p>
+                        <p className="text-[11px] font-black text-white truncate">
+                          {p.nombre_perfil} {p.pin ? <span className="text-[#66FF00] font-mono">(PIN {p.pin})</span> : ""}
+                        </p>
                         {p.caido ? (
-                          <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído (Tocar)</p>
+                          <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído</p>
                         ) : p.ocupado && subOcupante ? (
                           <>
                             <p className="text-[10px] text-orange-300 font-bold truncate">
@@ -450,10 +426,8 @@ export default function ModuloStock({
                               📞 {subOcupante.telefono_cliente}
                             </p>
                           </>
-                        ) : p.ocupado ? (
-                          <p className="text-[10px] text-orange-300 font-bold">Ocupado</p>
                         ) : (
-                          <p className="text-[10px] text-[#66FF00] font-semibold">● Libre (PIN {p.pin})</p>
+                          <p className="text-[10px] text-[#66FF00] font-semibold">● Libre</p>
                         )}
                       </div>
                     </button>
@@ -461,7 +435,6 @@ export default function ModuloStock({
                 })}
               </div>
 
-              {/* ACCIONES DE LA MATRIZ */}
               <div className="flex flex-wrap gap-2 pt-2 border-t border-[#1E331A]">
                 <button
                   onClick={() => {
@@ -487,215 +460,188 @@ export default function ModuloStock({
                   <AlertTriangle className="w-3.5 h-3.5" />
                   {matriz.estado === "Caida" ? "Marcar Resuelta" : "Marcar Caída"}
                 </button>
-
-                <button
-                  onClick={async () => {
-                    await supabase.from("matrices_stock").update({ en_papelera: true }).eq("id", matriz.id);
-                    await supabase.from("movimientos_yolo").delete().eq("referencia_id", matriz.id);
-                    await recargarTodo();
-                    notificar("Matriz enviada a papelera");
-                  }}
-                  className="ml-auto p-1.5 rounded-lg bg-gray-900 text-gray-400 hover:text-red-400 cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODAL DE PERSONITA: INCLUYE TANTO AVISO DE CONTRASEÑA COMO AVISO DE PIN    */}
-      {/* ========================================================================= */}
+      {/* MODAL DE PERSONITA (INCLUYE TELÉFONO DEL REVENDEDOR EN EL SOPORTE DEL AVISO) */}
       {perfilModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-[0_0_50px_rgba(102,255,0,0.3)] animate-modal">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-full bg-[#66FF00]/20 border border-[#66FF00] flex items-center justify-center text-[#66FF00]">
-                  <User className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-black text-[#66FF00] text-base">
-                    {perfilModal.matriz.plataforma} — {perfilModal.perfil.nombre_perfil}
-                  </h3>
-                  <p className="text-[11px] text-gray-400">{perfilModal.matriz.correo}</p>
-                </div>
+              <div>
+                <h3 className="font-black text-[#66FF00] text-base">
+                  {perfilModal.matriz.plataforma} — {perfilModal.perfil.nombre_perfil}
+                </h3>
+                <p className="text-[11px] text-gray-400">{perfilModal.matriz.correo}</p>
               </div>
-              <button onClick={() => setPerfilModal(null)} className="text-gray-400 hover:text-white">
+              <button onClick={() => setPerfilModal(null)} className="text-gray-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* INFORMACIÓN DEL CLIENTE */}
-            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-2">
-              <p className="text-[11px] text-gray-400 font-bold uppercase">Cliente en este perfil:</p>
+            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-1">
               {perfilModal.subOcupante ? (
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="text-sm font-black text-white">{perfilModal.subOcupante.nombre_cliente}</p>
-                    <p className="text-xs text-[#66FF00] font-mono flex items-center gap-1 mt-0.5">
-                      <Phone className="w-3.5 h-3.5" /> {perfilModal.subOcupante.telefono_cliente}
-                    </p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      Vence: {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(perfilModal.subOcupante.telefono_cliente);
-                      notificar("Número de teléfono copiado");
-                    }}
-                    className="px-3 py-1.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
-                  >
-                    <Copy className="w-3.5 h-3.5" /> Copiar Nro
-                  </button>
-                </div>
+                <>
+                  <p className="text-sm font-black text-white">
+                    {perfilModal.subOcupante.nombre_cliente} ({perfilModal.subOcupante.tipo_comprador === "revendedor" ? "🤝 Revendedor" : "👤 Cliente"})
+                  </p>
+                  <p className="text-xs text-[#66FF00] font-mono">
+                    📞 {perfilModal.subOcupante.telefono_cliente} · PIN actual: <b>{pinPerfilEdit || "Sin PIN"}</b>
+                  </p>
+                </>
               ) : (
-                <p className="text-xs text-[#66FF00] font-semibold">
-                  ● Este perfil está libre actualmente (Sin cliente asignado).
-                </p>
+                <p className="text-xs text-[#66FF00] font-semibold">● Perfil libre (PIN: {pinPerfilEdit})</p>
               )}
             </div>
 
-            {/* EDITAR CONTRASEÑA DE LA CUENTA, NOMBRE DE PERFIL Y PIN */}
             <form onSubmit={guardarEdicionPerfilModal} className="space-y-3">
               <div>
-                <label className="text-xs text-purple-300 font-bold">
-                  Contraseña de la Cuenta / Matriz:
-                </label>
+                <label className="text-xs text-purple-300 font-bold">Contraseña de la Matriz:</label>
                 <input
                   type="text"
                   value={passMatrizEnPerfilEdit}
                   onChange={(e) => setPassMatrizEnPerfilEdit(e.target.value)}
-                  className="w-full mt-1 bg-[#070B06] border border-purple-500 rounded-xl p-2.5 text-xs text-white font-mono"
+                  className="w-full mt-1 bg-[#070B06] border border-purple-500 rounded-xl p-2 text-xs text-white font-mono"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-gray-400">Nombre del Perfil</label>
+                  <label className="text-xs text-gray-400">Nombre Perfil</label>
                   <input
                     type="text"
                     value={nombrePerfilEdit}
                     onChange={(e) => setNombrePerfilEdit(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white focus:border-[#66FF00] outline-none"
+                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-[#66FF00] font-bold">PIN del Perfil</label>
+                  <label className="text-xs text-[#66FF00] font-bold">📌 PIN del Perfil</label>
                   <input
                     type="text"
                     value={pinPerfilEdit}
                     onChange={(e) => setPinPerfilEdit(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-mono font-bold focus:outline-none"
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-mono font-bold"
                   />
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs cursor-pointer"
-              >
+              <button type="submit" className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
                 Guardar Cambios (Clave / Perfil / PIN)
               </button>
             </form>
 
-            {/* DOS BOTONES MORADOS SEPARADOS: 1. CAMBIO DE CONTRASEÑA Y 2. CAMBIO DE PIN */}
             <div className="pt-2 border-t border-[#1E331A] space-y-2">
-              <p className="text-[11px] text-purple-300 font-bold">
-                Copiar aviso corto para este cliente:
-              </p>
-
-              <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => {
+                    const telRev =
+                      perfilModal.subOcupante?.tipo_comprador === "revendedor"
+                        ? perfilModal.subOcupante.telefono_cliente
+                        : "";
                     const msg = generarMensajeCambioCredencial(
                       "Contraseña de la cuenta",
                       perfilModal.matriz.plataforma,
                       perfilModal.matriz.correo,
                       passMatrizEnPerfilEdit,
                       nombrePerfilEdit,
-                      pinPerfilEdit
+                      pinPerfilEdit,
+                      telRev
                     );
                     navigator.clipboard.writeText(msg);
-                    notificar("¡Aviso de cambio de Contraseña copiado!");
+                    notificar("¡Aviso de Contraseña copiado!");
                   }}
-                  className="py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_15px_rgba(147,51,234,0.35)]"
+                  className="py-2.5 px-2 bg-purple-600 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
                 >
-                  <KeyRound className="w-4 h-4" /> 🔑 Copiar Aviso de Cambio de Contraseña
+                  <KeyRound className="w-3.5 h-3.5" /> Copiar Aviso Clave
                 </button>
 
                 <button
                   type="button"
                   onClick={() => {
+                    const telRev =
+                      perfilModal.subOcupante?.tipo_comprador === "revendedor"
+                        ? perfilModal.subOcupante.telefono_cliente
+                        : "";
+                    const msg = generarMensajeCambioCredencial(
+                      "Contraseña de la cuenta",
+                      perfilModal.matriz.plataforma,
+                      perfilModal.matriz.correo,
+                      passMatrizEnPerfilEdit,
+                      nombrePerfilEdit,
+                      pinPerfilEdit,
+                      telRev
+                    );
+                    enviarWhatsappDirecto(perfilModal.subOcupante?.telefono_cliente || "", msg);
+                  }}
+                  className="py-2.5 px-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" /> Enviar Clave WhatsApp
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const telRev =
+                      perfilModal.subOcupante?.tipo_comprador === "revendedor"
+                        ? perfilModal.subOcupante.telefono_cliente
+                        : "";
                     const msg = generarMensajeCambioCredencial(
                       "PIN de tu perfil",
                       perfilModal.matriz.plataforma,
                       perfilModal.matriz.correo,
                       passMatrizEnPerfilEdit,
                       nombrePerfilEdit,
-                      pinPerfilEdit
+                      pinPerfilEdit,
+                      telRev
                     );
                     navigator.clipboard.writeText(msg);
-                    notificar("¡Aviso de cambio de PIN copiado!");
+                    notificar("¡Aviso de PIN copiado!");
                   }}
-                  className="py-2.5 px-3 bg-purple-900/90 hover:bg-purple-800 text-purple-100 border border-purple-400 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="py-2.5 px-2 bg-purple-900 text-purple-100 border border-purple-400 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
                 >
-                  <Copy className="w-4 h-4" /> 📌 Copiar Aviso de Cambio de PIN
+                  <Copy className="w-3.5 h-3.5" /> Copiar Aviso PIN
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const telRev =
+                      perfilModal.subOcupante?.tipo_comprador === "revendedor"
+                        ? perfilModal.subOcupante.telefono_cliente
+                        : "";
+                    const msg = generarMensajeCambioCredencial(
+                      "PIN de tu perfil",
+                      perfilModal.matriz.plataforma,
+                      perfilModal.matriz.correo,
+                      passMatrizEnPerfilEdit,
+                      nombrePerfilEdit,
+                      pinPerfilEdit,
+                      telRev
+                    );
+                    enviarWhatsappDirecto(perfilModal.subOcupante?.telefono_cliente || "", msg);
+                  }}
+                  className="py-2.5 px-2 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00] rounded-xl text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" /> Enviar PIN WhatsApp
                 </button>
               </div>
-            </div>
-
-            <div className="flex justify-between items-center pt-2 border-t border-[#1E331A]">
-              {perfilModal.perfil.caido ? (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await supabase
-                      .from("perfiles_matriz")
-                      .update({ caido: false, ocupado: false })
-                      .eq("id", perfilModal.perfil.id);
-                    setPerfilModal(null);
-                    await recargarTodo();
-                    notificar("Perfil marcado como Resuelto y Disponible");
-                  }}
-                  className="w-full py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer"
-                >
-                  ✓ Marcar Perfil como Resuelto y Disponible
-                </button>
-              ) : perfilModal.perfil.ocupado ? (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await supabase
-                      .from("perfiles_matriz")
-                      .update({ ocupado: false })
-                      .eq("id", perfilModal.perfil.id);
-                    setPerfilModal(null);
-                    await recargarTodo();
-                    notificar("Perfil liberado manualmente");
-                  }}
-                  className="text-xs text-red-400 hover:underline cursor-pointer"
-                >
-                  Liberar este perfil manualmente (Dejar Disponible)
-                </button>
-              ) : null}
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL CAMBIO DE CLAVE GENERAL DE LA MATRIZ */}
+      {/* MODAL CAMBIO DE CLAVE GENERAL DE LA MATRIZ (CON NÚMERO DEL REVENDEDOR EN SOPORTE) */}
       {matrizCambioPass && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-5 max-w-md w-full space-y-4">
             <div className="flex justify-between items-center">
-              <h3 className="font-bold text-purple-300">Cambiar Contraseña y Copiar Aviso Corto</h3>
-              <button onClick={() => setMatrizCambioPass(null)} className="text-gray-400 hover:text-white">
+              <h3 className="font-bold text-purple-300">Cambiar Contraseña y Enviar Aviso</h3>
+              <button onClick={() => setMatrizCambioPass(null)} className="text-gray-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -714,113 +660,50 @@ export default function ModuloStock({
               </button>
             </div>
 
-            <button
-              onClick={() => {
-                const msg = generarMensajeCambioCredencial(
-                  "Contraseña",
-                  matrizCambioPass.plataforma,
-                  matrizCambioPass.correo,
-                  nuevaPass,
-                  null,
-                  null
-                );
-                navigator.clipboard.writeText(msg);
-                notificar("Aviso corto de cambio de contraseña copiado");
-              }}
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Copy className="w-4 h-4" /> Copiar Aviso Corto General (Morado)
-            </button>
-
-            <div className="space-y-1.5 max-h-52 overflow-y-auto pt-2 border-t border-[#1E331A]">
-              <p className="text-[11px] text-gray-400">O copiar aviso corto con el perfil y PIN de cada cliente:</p>
+            <div className="space-y-1.5 max-h-60 overflow-y-auto pt-2 border-t border-[#1E331A]">
+              <p className="text-[11px] text-gray-400">
+                Copiar o enviar aviso con el número de soporte del revendedor incluido:
+              </p>
               {suscripciones
                 .filter((s) => s.matriz_id === matrizCambioPass.id && s.estado === "Activa" && !s.en_papelera)
                 .map((c) => {
+                  const telRev = c.tipo_comprador === "revendedor" ? c.telefono_cliente : "";
                   const msgCliente = generarMensajeCambioCredencial(
                     "Contraseña",
                     c.plataforma,
                     c.correo_cuenta,
                     nuevaPass,
                     c.nombre_perfil,
-                    c.pin_perfil
+                    c.pin_perfil,
+                    telRev
                   );
                   return (
-                    <div key={c.id} className="flex justify-between items-center bg-[#070B06] p-2 rounded-xl text-xs">
-                      <span>
-                        <b>{c.nombre_cliente}</b> ({c.telefono_cliente} · {c.nombre_perfil})
+                    <div key={c.id} className="flex justify-between items-center bg-[#070B06] p-2 rounded-xl text-xs gap-2">
+                      <span className="truncate">
+                        <b>{c.nombre_cliente}</b> ({c.nombre_perfil} · PIN {c.pin_perfil})
                       </span>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(msgCliente);
-                          notificar(`Aviso corto para ${c.nombre_cliente} copiado`);
-                        }}
-                        className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                      >
-                        <Copy className="w-3 h-3" /> Copiar
-                      </button>
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(msgCliente);
+                            notificar(`Aviso copiado para ${c.nombre_cliente}`);
+                          }}
+                          className="px-2 py-1 bg-purple-600 text-white rounded-lg text-[10px] font-bold cursor-pointer"
+                        >
+                          Copiar
+                        </button>
+                        <button
+                          onClick={() => enviarWhatsappDirecto(c.telefono_cliente, msgCliente)}
+                          className="px-2 py-1 bg-[#66FF00] text-black rounded-lg text-[10px] font-black cursor-pointer"
+                        >
+                          WhatsApp
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* MODAL EDITAR MATRIZ */}
-      {matrizEditar && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
-          <form onSubmit={guardarEdicionMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-3">
-            <h3 className="font-black text-[#66FF00]">Editar Matriz</h3>
-            <select
-              value={matrizEditar.plataforma}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, plataforma: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            >
-              {plataformasList.map((p) => (
-                <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={matrizEditar.correo}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, correo: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <input
-              type="text"
-              value={matrizEditar.password || ""}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, password: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <input
-              type="number"
-              step="0.01"
-              value={matrizEditar.costo_total}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, costo_total: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <input
-              type="date"
-              value={matrizEditar.fecha_corte_matriz}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, fecha_corte_matriz: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <select
-              value={matrizEditar.proveedor_id || ""}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, proveedor_id: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            >
-              <option value="">-- Sin Proveedor --</option>
-              {proveedores.map((p) => (
-                <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
-              ))}
-            </select>
-            <div className="flex gap-2 pt-2">
-              <button type="button" onClick={() => setMatrizEditar(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">Guardar</button>
-            </div>
-          </form>
         </div>
       )}
 
@@ -835,7 +718,7 @@ export default function ModuloStock({
             <select value={proveedorId || proveedores[0]?.id || ""} onChange={(e) => setProveedorId(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
               {proveedores.map((p) => (<option key={p.id} value={p.id}>{p.nombre} — 📞 {p.telefono}</option>))}
             </select>
-            <textarea rows={2} placeholder="Pega aquí mensaje del proveedor para autocompletar correo y clave..." value={textoProveedorMatriz} onChange={(e) => procesarTextoMatriz(e.target.value)} className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white" />
+            <textarea rows={2} placeholder="Pega aquí mensaje del proveedor..." value={textoProveedorMatriz} onChange={(e) => procesarTextoMatriz(e.target.value)} className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white" />
             <div className="grid grid-cols-2 gap-2">
               <select value={plataforma} onChange={(e) => handleSelectPlataforma(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
                 {plataformasList.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
@@ -849,21 +732,6 @@ export default function ModuloStock({
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setModalNuevaMatriz(false)} className="px-4 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
               <button type="submit" disabled={cargando} className="flex-1 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">Guardar Matriz</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL NUEVO PROVEEDOR */}
-      {modalNuevoProv && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
-          <form onSubmit={guardarNuevoProveedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-3">
-            <h3 className="font-black text-[#66FF00]">Registrar Proveedor</h3>
-            <input type="text" placeholder="Nombre" value={nuevoProvNombre} onChange={(e) => setNuevoProvNombre(e.target.value)} className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white" />
-            <input type="text" placeholder="Teléfono" value={nuevoProvTelefono} onChange={(e) => setNuevoProvTelefono(e.target.value)} className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white" />
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setModalNuevoProv(false)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold">Guardar</button>
             </div>
           </form>
         </div>

@@ -155,6 +155,7 @@ export default function MossCRM() {
     }
   }, []);
 
+  // SINCRONIZACIÓN AUTOMÁTICA EN TIEMPO REAL (SIN RECARGAR LA PÁGINA)
   useEffect(() => {
     setMontado(true);
     const guardada = localStorage.getItem("moss_sesion_v3");
@@ -166,6 +167,26 @@ export default function MossCRM() {
       }
     }
     recargarTodo();
+
+    const canalRealtime = supabase
+      .channel("moss-realtime-sync")
+      .on("postgres_changes", { event: "*", schema: "public" }, () => {
+        recargarTodo();
+      })
+      .subscribe();
+
+    const intervaloVivo = setInterval(() => {
+      recargarTodo();
+    }, 6000);
+
+    const alVolverALaVentana = () => recargarTodo();
+    window.addEventListener("focus", alVolverALaVentana);
+
+    return () => {
+      supabase.removeChannel(canalRealtime);
+      clearInterval(intervaloVivo);
+      window.removeEventListener("focus", alVolverALaVentana);
+    };
   }, [recargarTodo]);
 
   if (!montado) return null;
@@ -234,7 +255,6 @@ export default function MossCRM() {
     notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
   };
 
-  // Liquidar todas las cuentas pendientes de pago de golpe
   const cobrarTodasLasPendientes = async () => {
     const pendientes = notificaciones.filter((n) => n.tipo === "venta_revendedor" && !n.pagado);
     if (pendientes.length === 0) return;
@@ -460,7 +480,7 @@ export default function MossCRM() {
                   <h1 className="font-black text-base text-white">
                     MOSS · Panel de {revendedorLogueadoObj?.nombre || sesionActual.nombre}
                   </h1>
-                  <span className="text-[11px] text-[#66FF00]">Portal Oficial de Revendedor</span>
+                  <span className="text-[11px] text-[#66FF00]">Portal Oficial de Revendedor (En Vivo)</span>
                 </div>
               </div>
               <button
@@ -508,7 +528,7 @@ export default function MossCRM() {
                   <div className="flex items-center gap-2">
                     <h1 className="font-black tracking-widest text-xl leading-none text-white">MOSS</h1>
                     <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase rounded-full bg-[#66FF00]/15 text-[#66FF00] border border-[#66FF00]/40 flex items-center gap-1">
-                      <Sparkles className="w-2.5 h-2.5" /> ADMIN CRM
+                      <Sparkles className="w-2.5 h-2.5" /> EN VIVO
                     </span>
                   </div>
                   <span className="text-xs text-gray-400">Panel de Mateus</span>
@@ -843,65 +863,6 @@ export default function MossCRM() {
                                 await recargarTodo();
                               }}
                               className="p-1.5 text-gray-500 hover:text-red-400"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                  )}
-                </div>
-
-                <div className="space-y-2.5 pt-3 border-t border-[#233820]">
-                  <div className="flex justify-between items-center">
-                    <h4 className="text-xs font-extrabold uppercase text-red-400">
-                      🛠️ Registro Técnico de Errores ({notificaciones.filter((n) => n.tipo === "error").length})
-                    </h4>
-                    {notificaciones.some((n) => n.tipo === "error") && (
-                      <button
-                        onClick={async () => {
-                          await supabase.from("notificaciones_sistema").delete().eq("tipo", "error");
-                          await recargarTodo();
-                        }}
-                        className="text-[11px] text-gray-400 hover:text-white underline cursor-pointer"
-                      >
-                        Limpiar todos
-                      </button>
-                    )}
-                  </div>
-
-                  {notificaciones.filter((n) => n.tipo === "error").length === 0 ? (
-                    <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
-                      ✓ Sin errores registrados. Todo funciona limpio.
-                    </p>
-                  ) : (
-                    notificaciones
-                      .filter((n) => n.tipo === "error")
-                      .map((err) => (
-                        <div
-                          key={err.id}
-                          className="bg-red-950/30 border border-red-600/50 rounded-2xl p-3 flex flex-wrap justify-between items-center gap-2 text-xs"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="font-bold text-red-300">{err.titulo}</p>
-                            <p className="text-gray-300 font-mono text-[11px] break-all mt-0.5">{err.mensaje}</p>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(err.detalle_tecnico || err.mensaje);
-                                notificar("Error copiado");
-                              }}
-                              className="px-3 py-1.5 bg-red-600 text-white font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
-                            >
-                              <Copy className="w-3.5 h-3.5" /> Copiar
-                            </button>
-                            <button
-                              onClick={async () => {
-                                await supabase.from("notificaciones_sistema").delete().eq("id", err.id);
-                                await recargarTodo();
-                              }}
-                              className="p-1.5 text-gray-400 hover:text-white"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>

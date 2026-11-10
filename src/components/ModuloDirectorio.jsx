@@ -110,7 +110,10 @@ export default function ModuloDirectorio({
       setSubEditar({
         ...subEditar,
         plataforma: nuevaPlatNombre,
-        tipo_cuenta: subEditar.tipo_cuenta === "Por Invitación" ? "1 Dispositivo" : subEditar.tipo_cuenta || "1 Dispositivo"
+        tipo_cuenta:
+          subEditar.tipo_cuenta === "Por Invitación"
+            ? "1 Dispositivo"
+            : subEditar.tipo_cuenta || "1 Dispositivo"
       });
     }
   };
@@ -180,6 +183,7 @@ export default function ModuloDirectorio({
           (s.telefono_cliente_final || "").toLowerCase().includes(q) ||
           (s.correo_cuenta || "").toLowerCase().includes(q) ||
           (s.nombre_perfil || "").toLowerCase().includes(q) ||
+          (s.pin_perfil || "").toLowerCase().includes(q) ||
           (s.nombre_proveedor || "").toLowerCase().includes(q);
         if (!coincide) return false;
       }
@@ -211,6 +215,8 @@ export default function ModuloDirectorio({
           sumarDiasBoliviaISO(mesesPagProv * 30, subEditar.fecha_venta)
         : subEditar.fecha_corte;
 
+    const nuevoPrecioCobrado = Number(subEditar.precio_venta ?? 0);
+
     let payload = {
       plataforma: subEditar.plataforma,
       tipo_comprador: subEditar.tipo_comprador || "cliente",
@@ -225,7 +231,7 @@ export default function ModuloDirectorio({
       password_cuenta: subEditar.tipo_cuenta === "Por Invitación" ? "" : subEditar.password_cuenta,
       nombre_perfil: subEditar.nombre_perfil,
       pin_perfil: subEditar.pin_perfil,
-      precio_venta: Number(subEditar.precio_venta),
+      precio_venta: nuevoPrecioCobrado,
       costo_proveedor: Number(subEditar.costo_proveedor || 0),
       meses_contratados: mesesFinal,
       dias_totales: diasFinal,
@@ -265,6 +271,15 @@ export default function ModuloDirectorio({
         nombre_perfil: slot.nombre_perfil,
         pin_perfil: slot.pin
       };
+    } else if (subEditar.perfil_id) {
+      // Si mantuviste la misma matriz y cambiaste el PIN o Perfil, sincronizarlo en perfiles_matriz
+      await supabase
+        .from("perfiles_matriz")
+        .update({
+          nombre_perfil: subEditar.nombre_perfil || "Perfil 1",
+          pin: subEditar.pin_perfil || ""
+        })
+        .eq("id", subEditar.perfil_id);
     }
 
     const { data: editada } = await supabase
@@ -274,10 +289,27 @@ export default function ModuloDirectorio({
       .select()
       .single();
 
+    // Actualizar también el monto en movimientos_yolo y en la alerta de cobro del revendedor (ej. si cambiaste de 8 a 4 Bs)
+    await supabase
+      .from("movimientos_yolo")
+      .update({
+        monto: Math.abs(nuevoPrecioCobrado),
+        descripcion: `Venta ${payload.plataforma} (${diasFinal}d) a ${payload.nombre_cliente}`
+      })
+      .eq("referencia_id", subEditar.id)
+      .eq("tipo", "Ingreso Venta");
+
+    await supabase
+      .from("notificaciones_sistema")
+      .update({
+        monto_cobrar: nuevoPrecioCobrado
+      })
+      .eq("suscripcion_id", subEditar.id);
+
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("Suscripción actualizada");
+    notificar("¡Precio, PIN y datos actualizados con éxito!");
     if (editada) abrirMensajeDeSuscripcion(editada, "DATOS ACTUALIZADOS");
   };
 
@@ -299,7 +331,7 @@ export default function ModuloDirectorio({
             <Search className="w-4 h-4 text-[#66FF00] absolute left-3.5 top-3" />
             <input
               type="text"
-              placeholder="Buscar por teléfono, cliente, correo, perfil o proveedor..."
+              placeholder="Buscar por teléfono, cliente, correo, perfil, PIN o proveedor..."
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-sm text-white"
@@ -314,6 +346,19 @@ export default function ModuloDirectorio({
             <option value="Todas">Todas las Plataformas</option>
             {plataformasList.map((p) => (
               <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+            ))}
+          </select>
+
+          <select
+            value={filtroRevendedorId}
+            onChange={(e) => setFiltroRevendedorId(e.target.value)}
+            className="bg-[#070B06] border border-purple-500/50 rounded-xl px-3 py-2 text-xs text-purple-200 font-bold"
+          >
+            <option value="todos">-- Filtrar por Revendedor (Todos) --</option>
+            {revendedores.map((r) => (
+              <option key={r.id} value={r.id}>
+                🤝 {r.nombre} ({r.telefono})
+              </option>
             ))}
           </select>
         </div>
@@ -364,6 +409,9 @@ export default function ModuloDirectorio({
                     <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
                       ⏳ Plan: {diasPlan} días
                     </span>
+                    <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
+                      💰 Te pagó: Bs {s.precio_venta}
+                    </span>
                     {tieneRenovIntermediaProv && (
                       <span className="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-500 text-black">
                         📦 Pagado a Prov: {s.meses_pagados_proveedor || 1}M · Avisar el:{" "}
@@ -374,10 +422,25 @@ export default function ModuloDirectorio({
 
                   <h3 className="font-bold text-base pt-0.5">
                     {s.nombre_cliente} · <span className="text-[#66FF00] font-mono">{s.telefono_cliente}</span>
+                    {s.tipo_comprador === "revendedor" && s.nombre_cliente_final && (
+                      <span className="text-xs text-purple-300 ml-2">
+                        👉 Cliente Final: <b>{s.nombre_cliente_final}</b> ({s.telefono_cliente_final || "S/N"})
+                      </span>
+                    )}
                   </h3>
+
+                  {/* CORREO, CLAVE, PERFIL Y PIN VISIBLES EN CADA TARJETA */}
                   <p className="text-xs text-gray-300">
                     Correo: <span className="font-mono text-white">{s.correo_cuenta}</span>
-                    {s.password_cuenta ? ` | Clave: ${s.password_cuenta}` : ""}
+                    {s.password_cuenta ? (
+                      <> | Clave: <span className="font-mono text-[#66FF00]">{s.password_cuenta}</span></>
+                    ) : null}
+                    {s.nombre_perfil ? (
+                      <> | 👤 <b className="text-white">{s.nombre_perfil}</b></>
+                    ) : null}
+                    {s.pin_perfil ? (
+                      <> | 📌 PIN: <b className="text-[#66FF00] font-mono">{s.pin_perfil}</b></>
+                    ) : null}
                   </p>
                 </div>
 
@@ -413,7 +476,7 @@ export default function ModuloDirectorio({
                     }}
                     className="px-3 py-1.5 bg-[#1A2B18] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Precio / PIN / Plan)
                   </button>
 
                   <button
@@ -437,7 +500,9 @@ export default function ModuloDirectorio({
         })}
       </div>
 
-      {/* MODAL EDICIÓN TOTAL */}
+      {/* ========================================================================= */}
+      {/* MODAL EDICIÓN TOTAL: AHORA CON PRECIO COBRADO, COSTO, PERFIL Y PIN        */}
+      {/* ========================================================================= */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -479,6 +544,7 @@ export default function ModuloDirectorio({
               </div>
             </div>
 
+            {/* BLOQUE DE PLAN CONTRATADO EN MESES O DÍAS */}
             <div className="bg-[#0B120A] border border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
               <label className="text-xs font-extrabold text-[#66FF00]">
                 Plan Contratado ({subEditar.dias_totales || 30} días):
@@ -558,55 +624,123 @@ export default function ModuloDirectorio({
               )}
             </div>
 
+            {/* CAMPOS COMPLETOS: PRECIO COBRADO (EJ: CAMBIAR DE 8 A 4), COSTO, PERFIL Y PIN */}
             <div className="grid grid-cols-2 gap-2.5">
-              <input
-                type="text"
-                value={subEditar.nombre_cliente}
-                onChange={(e) => setSubEditar({ ...subEditar, nombre_cliente: e.target.value })}
-                placeholder="Nombre"
-                className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-              />
-              <input
-                type="text"
-                value={subEditar.telefono_cliente}
-                onChange={(e) => setSubEditar({ ...subEditar, telefono_cliente: e.target.value })}
-                placeholder="Teléfono"
-                className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-              />
-              <input
-                type="text"
-                value={subEditar.correo_cuenta}
-                onChange={(e) => setSubEditar({ ...subEditar, correo_cuenta: e.target.value })}
-                placeholder="Correo"
-                className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-              />
-              <input
-                type="text"
-                value={subEditar.password_cuenta || ""}
-                onChange={(e) => setSubEditar({ ...subEditar, password_cuenta: e.target.value })}
-                placeholder="Contraseña"
-                className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-              />
-              <input
-                type="date"
-                value={subEditar.fecha_venta || ""}
-                onChange={(e) => {
-                  const nv = e.target.value;
-                  const d = Number(subEditar.dias_totales || 30);
-                  setSubEditar({
-                    ...subEditar,
-                    fecha_venta: nv,
-                    fecha_corte: sumarDiasBoliviaISO(d, nv)
-                  });
-                }}
-                className="bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
-              />
-              <input
-                type="date"
-                value={subEditar.fecha_corte || ""}
-                onChange={(e) => setSubEditar({ ...subEditar, fecha_corte: e.target.value })}
-                className="bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
-              />
+              <div>
+                <label className="text-[11px] text-[#66FF00] font-black">
+                  💰 Precio Cobrado por Ti (Bs) — (Ej: pon 4 si regalaste 1M):
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={subEditar.precio_venta ?? 0}
+                  onChange={(e) => setSubEditar({ ...subEditar, precio_venta: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border-2 border-[#66FF00] rounded-lg p-2 text-xs text-white font-black"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-orange-300 font-bold">
+                  Costo Pagado al Proveedor (Bs):
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={subEditar.costo_proveedor ?? 0}
+                  onChange={(e) => setSubEditar({ ...subEditar, costo_proveedor: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-orange-500/50 rounded-lg p-2 text-xs text-white font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">Nombre Comprador</label>
+                <input
+                  type="text"
+                  value={subEditar.nombre_cliente}
+                  onChange={(e) => setSubEditar({ ...subEditar, nombre_cliente: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">Teléfono Comprador</label>
+                <input
+                  type="text"
+                  value={subEditar.telefono_cliente}
+                  onChange={(e) => setSubEditar({ ...subEditar, telefono_cliente: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">Correo de la Cuenta</label>
+                <input
+                  type="text"
+                  value={subEditar.correo_cuenta}
+                  onChange={(e) => setSubEditar({ ...subEditar, correo_cuenta: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">Contraseña</label>
+                <input
+                  type="text"
+                  value={subEditar.password_cuenta || ""}
+                  onChange={(e) => setSubEditar({ ...subEditar, password_cuenta: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">👤 Nombre del Perfil</label>
+                <input
+                  type="text"
+                  value={subEditar.nombre_perfil || ""}
+                  onChange={(e) => setSubEditar({ ...subEditar, nombre_perfil: e.target.value })}
+                  placeholder="Ej: Perfil 1"
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-[#66FF00] font-bold">📌 PIN del Perfil</label>
+                <input
+                  type="text"
+                  value={subEditar.pin_perfil || ""}
+                  onChange={(e) => setSubEditar({ ...subEditar, pin_perfil: e.target.value })}
+                  placeholder="Ej: 1234"
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-mono font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">Fecha Venta</label>
+                <input
+                  type="date"
+                  value={subEditar.fecha_venta || ""}
+                  onChange={(e) => {
+                    const nv = e.target.value;
+                    const d = Number(subEditar.dias_totales || 30);
+                    setSubEditar({
+                      ...subEditar,
+                      fecha_venta: nv,
+                      fecha_corte: sumarDiasBoliviaISO(d, nv)
+                    });
+                  }}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-gray-400">Fecha Corte</label>
+                <input
+                  type="date"
+                  value={subEditar.fecha_corte || ""}
+                  onChange={(e) => setSubEditar({ ...subEditar, fecha_corte: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                />
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -614,14 +748,14 @@ export default function ModuloDirectorio({
                 Cancelar
               </button>
               <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Guardar Cambios
+                Guardar Cambios (Bs {subEditar.precio_venta})
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL DE MENSAJE CON BOTÓN ENVIAR PEDIDO DIRECTO A WHATSAPP */}
+      {/* MODAL DE MENSAJE */}
       {mensajeActivo && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">

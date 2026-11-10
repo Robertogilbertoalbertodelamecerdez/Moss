@@ -1,6 +1,5 @@
 import { formatearFechaDMA } from "@/config";
 
-// Abre directamente el chat de WhatsApp Web o App del cliente/revendedor sin tener que agendarlo
 export function enviarWhatsappDirecto(telefono, textoMensaje) {
   if (typeof window === "undefined") return;
   let num = String(telefono || "").replace(/\D/g, "");
@@ -177,10 +176,24 @@ export function generarMensajeLoteRenovacionRevendedor(nombreRevendedor, listaSu
   return `📋 *LISTA DE RENOVACIONES PENDIENTES (${listaSubs.length} CUENTAS)*\n🤝 *Revendedor:* ${nombreRevendedor}\n\n${items}\n\n_Confírmame cuáles de tus clientes van a renovar para mantenerles el cupo activo._`;
 }
 
-// 4. Mensaje Corto Morado de Cambio de Contraseña o PIN
-export function generarMensajeCambioCredencial(tipoCambio, plataforma, correo, password, perfil, pin) {
+// 4. Mensaje Corto Morado de Cambio de Contraseña o PIN (Incluye teléfono del revendedor en Soporte si aplica)
+export function generarMensajeCambioCredencial(
+  tipoCambio,
+  plataforma,
+  correo,
+  password,
+  perfil,
+  pin,
+  telefonoRevendedor = ""
+) {
   const lineaPass = password ? `\n🔑 *Contraseña:* ${password}` : "";
   const lineaPerfil = perfil ? `\n👤 *Perfil:* ${perfil}` : "";
   const lineaPin = pin ? ` | 📌 *PIN:* ${pin}` : "";
-  return `🔄 *Se realizó un cambio de ${tipoCambio}*\n📺 *Plataforma:* ${plataforma}\n📧 *Correo:* ${correo}${lineaPass}${lineaPerfil}${lineaPin}\n🛠️ *Soporte:* 78953018`;
+  const telRevLimpio = String(telefonoRevendedor || "").trim();
+  const lineaSoporte =
+    telRevLimpio && telRevLimpio !== "78953018"
+      ? `\n🛠️ *Soporte:* ${telRevLimpio} / 78953018`
+      : `\n🛠️ *Soporte:* 78953018`;
+
+  return `🔄 *Se realizó un cambio de ${tipoCambio}*\n📺 *Plataforma:* ${plataforma}\n📧 *Correo:* ${correo}${lineaPass}${lineaPerfil}${lineaPin}${lineaSoporte}`;
 }
