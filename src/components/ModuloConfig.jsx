@@ -16,7 +16,9 @@ import {
   Users,
   Edit3,
   Check,
-  Layers
+  Layers,
+  ArrowUp,
+  ArrowDown
 } from "lucide-react";
 
 export default function ModuloConfig({
@@ -45,7 +47,7 @@ export default function ModuloConfig({
   const [busquedaRev, setBusquedaRev] = useState("");
   const [busquedaPlat, setBusquedaPlat] = useState("");
 
-  // Nueva Plataforma + Ambos Precios y Propiedades
+  // Crear Nueva Plataforma
   const [nuevaPlatNombre, setNuevaPlatNombre] = useState("");
   const [esPorInvitacion, setEsPorInvitacion] = useState(false);
   const [nuevaPlatCupos, setNuevaPlatCupos] = useState(5);
@@ -55,12 +57,13 @@ export default function ModuloConfig({
   const [nuevaPlatPidePerfil, setNuevaPlatPidePerfil] = useState(true);
   const [nuevaPlatPidePin, setNuevaPlatPidePin] = useState(false);
 
-  // Nuevo Proveedor / Edición
+  // Estado de Edición Manual de Plataforma con botón Guardar y Cancelar
+  const [platEditando, setPlatEditando] = useState(null);
+
   const [nombreProv, setNombreProv] = useState("");
   const [telProv, setTelProv] = useState("");
   const [editProv, setEditProv] = useState(null);
 
-  // Nuevo Revendedor con Usuario, PIN y Permiso de Stock
   const [nombreRev, setNombreRev] = useState("");
   const [telRev, setTelRev] = useState("");
   const [userRev, setUserRev] = useState("");
@@ -86,10 +89,12 @@ export default function ModuloConfig({
     e.preventDefault();
     const limpio = nuevaPlatNombre.trim();
     if (!limpio) return notificar("Escribe el nombre de la app", "error");
+    const siguienteOrden = plataformasList.length + 1;
     const { error } = await supabase.from("plataformas").upsert(
       [
         {
           nombre: limpio,
+          orden: siguienteOrden,
           perfiles_default: esPorInvitacion ? 1 : Number(nuevaPlatCupos || 5),
           precio_cliente: Number(nuevaPlatPrecioCli || 20),
           precio_revendedor: Number(nuevaPlatPrecioRev || 10),
@@ -104,71 +109,80 @@ export default function ModuloConfig({
     if (error) return notificar("Error: " + error.message, "error");
     setNuevaPlatNombre("");
     await recargarTodo();
-    notificar(`App ${limpio} guardada`);
+    notificar(`App ${limpio} guardada al final de tu lista`);
   };
 
-  // Alternar cualquier propiedad (Pide Clave / Invitación, Pide Perfil, Pide PIN) en plataformas ya creadas
-  const toggleRequisitoPlataforma = async (plat, propiedad) => {
-    const nuevoPass =
-      propiedad === "pidePass" ? (plat.pidePass === false ? true : false) : plat.pidePass !== false;
-    const nuevoPerfil =
-      propiedad === "pidePerfil"
-        ? plat.pidePerfil === false
-          ? true
-          : false
-        : !nuevoPass
-        ? false
-        : plat.pidePerfil !== false;
-    const nuevoPin =
-      propiedad === "pidePin"
-        ? plat.pidePin === false
-          ? true
-          : false
-        : !nuevoPass
-        ? false
-        : plat.pidePin !== false;
-
-    const { error } = await supabase.from("plataformas").upsert(
-      [
-        {
-          nombre: plat.nombre,
-          perfiles_default: Number(plat.perfilesDefault ?? 5),
-          tiene_extra_2020: Boolean(plat.tieneExtra2020),
-          precio_cliente: Number(plat.precioCliente ?? 20),
-          precio_revendedor: Number(plat.precioRevendedor ?? 10),
-          pide_pass: nuevoPass,
-          pide_perfil: nuevoPerfil,
-          pide_pin: nuevoPin
-        }
-      ],
-      { onConflict: "nombre" }
-    );
-
-    if (error) return notificar("Error al actualizar: " + error.message, "error");
-    await recargarTodo();
-    notificar(`Configuración de ${plat.nombre} actualizada`);
+  // Abrir modo edición de una plataforma existente (Con Guardar y Cancelar)
+  const iniciarEdicionPlataforma = (p, idx) => {
+    setPlatEditando({
+      nombreOriginal: p.nombre,
+      nombre: p.nombre,
+      orden: p.orden ?? idx + 1,
+      perfilesDefault: p.perfilesDefault ?? 5,
+      precioCliente: p.precioCliente ?? 20,
+      precioRevendedor: p.precioRevendedor ?? 10,
+      pidePass: p.pidePass !== false,
+      pidePerfil: p.pidePerfil !== false,
+      pidePin: p.pidePin !== false
+    });
   };
 
-  // Actualizar Precios o Cupos por defecto de una plataforma ya existente
-  const actualizarCampoNumericoPlataforma = async (plat, columnaDB, nuevoValor) => {
+  // Guardar los cambios de la plataforma solo cuando presionas "Guardar Cambios"
+  const guardarEdicionPlataforma = async () => {
+    if (!platEditando) return;
     const payload = {
-      nombre: plat.nombre,
-      perfiles_default:
-        columnaDB === "perfiles_default" ? Number(nuevoValor || 1) : Number(plat.perfilesDefault ?? 5),
-      tiene_extra_2020: Boolean(plat.tieneExtra2020),
-      precio_cliente:
-        columnaDB === "precio_cliente" ? Number(nuevoValor || 0) : Number(plat.precioCliente ?? 20),
-      precio_revendedor:
-        columnaDB === "precio_revendedor" ? Number(nuevoValor || 0) : Number(plat.precioRevendedor ?? 10),
-      pide_pass: plat.pidePass !== false,
-      pide_perfil: plat.pidePerfil !== false,
-      pide_pin: plat.pidePin !== false
+      nombre: platEditando.nombre.trim(),
+      orden: Number(platEditando.orden || 1),
+      perfiles_default: Number(platEditando.perfilesDefault || 1),
+      tiene_extra_2020: platEditando.nombre.toLowerCase().includes("netflix"),
+      precio_cliente: Number(platEditando.precioCliente || 0),
+      precio_revendedor: Number(platEditando.precioRevendedor || 0),
+      pide_pass: Boolean(platEditando.pidePass),
+      pide_perfil: platEditando.pidePass ? Boolean(platEditando.pidePerfil) : false,
+      pide_pin: platEditando.pidePass ? Boolean(platEditando.pidePin) : false
     };
 
-    const { error } = await supabase.from("plataformas").upsert([payload], { onConflict: "nombre" });
-    if (error) return notificar("Error: " + error.message, "error");
+    if (
+      platEditando.nombreOriginal &&
+      platEditando.nombreOriginal !== platEditando.nombre.trim()
+    ) {
+      await supabase.from("plataformas").delete().eq("nombre", platEditando.nombreOriginal);
+    }
+
+    const { error } = await supabase
+      .from("plataformas")
+      .upsert([payload], { onConflict: "nombre" });
+
+    if (error) return notificar("Error al guardar: " + error.message, "error");
+    setPlatEditando(null);
     await recargarTodo();
-    notificar(`Datos de ${plat.nombre} guardados`);
+    notificar(`¡${payload.nombre} guardada sin alterar tu orden!`);
+  };
+
+  // Subir o bajar una plataforma en el orden sin que se mezclen
+  const moverOrdenPlataforma = async (indexActual, direccion) => {
+    const nuevoIndex = indexActual + direccion;
+    if (nuevoIndex < 0 || nuevoIndex >= plataformasList.length) return;
+
+    const copia = [...plataformasList];
+    const [movida] = copia.splice(indexActual, 1);
+    copia.splice(nuevoIndex, 0, movida);
+
+    const payloads = copia.map((p, idx) => ({
+      nombre: p.nombre,
+      orden: idx + 1,
+      perfiles_default: Number(p.perfilesDefault ?? 5),
+      tiene_extra_2020: Boolean(p.tieneExtra2020),
+      precio_cliente: Number(p.precioCliente ?? 20),
+      precio_revendedor: Number(p.precioRevendedor ?? 10),
+      pide_pass: p.pidePass !== false,
+      pide_perfil: p.pidePerfil !== false,
+      pide_pin: p.pidePin !== false
+    }));
+
+    await supabase.from("plataformas").upsert(payloads, { onConflict: "nombre" });
+    await recargarTodo();
+    notificar("Orden de plataformas actualizado");
   };
 
   const eliminarPlataforma = async (nombrePlat) => {
@@ -270,7 +284,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_4.6",
+      version: "MOSS_CRM_5.0",
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
       proveedores: prRes.data || [],
@@ -322,9 +336,9 @@ export default function ModuloConfig({
         <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 flex items-center justify-between">
           <div>
             <h3 className="font-black text-white text-sm flex items-center gap-2">
-              <Tv className="w-4 h-4 text-[#66FF00]" /> Catálogo y Atajos ({plataformasList.length})
+              <Tv className="w-4 h-4 text-[#66FF00]" /> Catálogo y Orden ({plataformasList.length})
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Editar Clave, Perfil, PIN y Precios</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Editar apps, precios y elegir orden</p>
           </div>
           <button onClick={() => setModalPlataformas(true)} className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
             Administrar
@@ -426,18 +440,18 @@ export default function ModuloConfig({
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL PLATAFORMAS: EDITAR CLAVE, PERFIL, PIN, CUPOS Y PRECIOS EN VIVO     */}
+      {/* MODAL PLATAFORMAS: CON BOTÓN GUARDAR / CANCELAR Y FLECHAS DE ORDEN ⬆️⬇️   */}
       {/* ========================================================================= */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-3xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
               <div>
                 <h3 className="font-black text-[#66FF00] text-base">
-                  Catálogo de Plataformas y Datos que Piden ({plataformasList.length})
+                  Catálogo de Plataformas, Precios y Orden ({plataformasList.length})
                 </h3>
                 <p className="text-[11px] text-gray-400">
-                  Toca los botones de cualquier app abajo para activar o quitar Contraseña, Perfil o PIN en cualquier momento.
+                  Usa las flechas ⬆️ ⬇️ para elegir el orden y el botón "Editar" para cambiar datos y confirmar con Guardar.
                 </p>
               </div>
               <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
@@ -483,7 +497,6 @@ export default function ModuloConfig({
                   value={nuevaPlatCupos}
                   onChange={(e) => setNuevaPlatCupos(e.target.value)}
                   className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-                  title="Cupos por defecto al crear Matriz"
                 />
                 <input
                   type="number"
@@ -492,7 +505,6 @@ export default function ModuloConfig({
                   value={nuevaPlatPrecioCli}
                   onChange={(e) => setNuevaPlatPrecioCli(e.target.value)}
                   className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
-                  title="Precio Catálogo Cliente"
                 />
                 <input
                   type="number"
@@ -501,7 +513,6 @@ export default function ModuloConfig({
                   value={nuevaPlatPrecioRev}
                   onChange={(e) => setNuevaPlatPrecioRev(e.target.value)}
                   className="bg-[#111A10] border border-purple-500 rounded-xl p-2 text-xs text-white font-bold"
-                  title="Precio Revendedor"
                 />
               </div>
 
@@ -543,119 +554,230 @@ export default function ModuloConfig({
                   type="submit"
                   className="px-4 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer ml-auto"
                 >
-                  + Guardar Nueva App
+                  + Agregar Nueva App
                 </button>
               </div>
             </form>
 
             <input
               type="text"
-              placeholder="Buscar plataforma para editar qué pide o sus precios..."
+              placeholder="Buscar plataforma..."
               value={busquedaPlat}
               onChange={(e) => setBusquedaPlat(e.target.value)}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
             />
 
-            {/* LISTA DE PLATAFORMAS CON BOTONES EDITABLES PARA CLAVE, PERFIL Y PIN */}
+            {/* LISTA DE PLATAFORMAS CON ORDEN FIJO Y BOTÓN EDITAR (CON GUARDAR Y CANCELAR) */}
             <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-              {plataformasList
-                .filter((p) => !busquedaPlat.trim() || p.nombre.toLowerCase().includes(busquedaPlat.toLowerCase()))
-                .map((p) => {
-                  const usaClave = p.pidePass !== false;
-                  const usaPerfil = p.pidePerfil !== false && usaClave;
-                  const usaPin = p.pidePin !== false && usaClave;
+              {plataformasList.map((p, idx) => {
+                if (
+                  busquedaPlat.trim() &&
+                  !p.nombre.toLowerCase().includes(busquedaPlat.toLowerCase())
+                ) {
+                  return null;
+                }
 
-                  return (
-                    <div
-                      key={p.nombre}
-                      className="bg-[#070B06] border border-[#1E331A] hover:border-[#66FF00]/50 rounded-2xl p-3 space-y-2.5 text-xs transition"
-                    >
+                const estaEditandoEsta =
+                  platEditando && platEditando.nombreOriginal === p.nombre;
+
+                return (
+                  <div
+                    key={p.nombre}
+                    className={`bg-[#070B06] border rounded-2xl p-3.5 text-xs transition ${
+                      estaEditandoEsta ? "border-2 border-[#66FF00]" : "border-[#1E331A]"
+                    }`}
+                  >
+                    {estaEditandoEsta ? (
+                      /* MODO EDICIÓN CON BOTÓN GUARDAR Y CANCELAR */
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[#66FF00] font-black uppercase">
+                            ✏️ Editando: {platEditando.nombreOriginal}
+                          </span>
+                          <span className="text-[11px] text-gray-400">
+                            Modifica lo que necesites y dale a Guardar
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                          <div className="col-span-2">
+                            <label className="text-[10px] text-gray-400">Nombre Plataforma</label>
+                            <input
+                              type="text"
+                              value={platEditando.nombre}
+                              onChange={(e) => setPlatEditando({ ...platEditando, nombre: e.target.value })}
+                              className="w-full mt-0.5 bg-[#111A10] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-gray-400">Cupos Matriz</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={platEditando.perfilesDefault}
+                              onChange={(e) => setPlatEditando({ ...platEditando, perfilesDefault: e.target.value })}
+                              className="w-full mt-0.5 bg-[#111A10] border border-[#2A4226] rounded-lg p-2 text-xs text-white text-center"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-[#66FF00] font-bold">Catálogo (Bs)</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={platEditando.precioCliente}
+                              onChange={(e) => setPlatEditando({ ...platEditando, precioCliente: e.target.value })}
+                              className="w-full mt-0.5 bg-[#111A10] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-bold text-center"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-purple-300 font-bold">Revendedor (Bs)</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={platEditando.precioRevendedor}
+                              onChange={(e) => setPlatEditando({ ...platEditando, precioRevendedor: e.target.value })}
+                              className="w-full mt-0.5 bg-[#111A10] border border-purple-500 rounded-lg p-2 text-xs text-white font-bold text-center"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPlatEditando({
+                                ...platEditando,
+                                pidePass: !platEditando.pidePass,
+                                pidePerfil: !platEditando.pidePass ? true : false,
+                                pidePin: !platEditando.pidePass ? platEditando.pidePin : false
+                              })
+                            }
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                              platEditando.pidePass
+                                ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                                : "bg-blue-950 text-blue-300 border-blue-500"
+                            }`}
+                          >
+                            {platEditando.pidePass ? "🔑 Pide Contraseña: SÍ" : "📩 Por Invitación (Sin Clave)"}
+                          </button>
+
+                          {platEditando.pidePass && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPlatEditando({ ...platEditando, pidePerfil: !platEditando.pidePerfil })
+                                }
+                                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                                  platEditando.pidePerfil
+                                    ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                                    : "bg-gray-900 text-gray-400 border-gray-700"
+                                }`}
+                              >
+                                {platEditando.pidePerfil ? "👤 Pide Perfil: SÍ" : "👤 Pide Perfil: NO"}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPlatEditando({ ...platEditando, pidePin: !platEditando.pidePin })
+                                }
+                                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                                  platEditando.pidePin
+                                    ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
+                                    : "bg-gray-900 text-gray-400 border-gray-700"
+                                }`}
+                              >
+                                {platEditando.pidePin ? "📌 Pide PIN: SÍ" : "📌 Pide PIN: NO"}
+                              </button>
+                            </>
+                          )}
+
+                          <div className="ml-auto flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setPlatEditando(null)}
+                              className="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={guardarEdicionPlataforma}
+                              className="px-4 py-1.5 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl font-black flex items-center gap-1 cursor-pointer"
+                            >
+                              <Check className="w-4 h-4" /> Guardar Cambios
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* MODO VISTA CON FLECHAS DE ORDEN Y BOTÓN EDITAR */
                       <div className="flex flex-wrap justify-between items-center gap-2">
-                        <span className="font-black text-white text-sm">{p.nombre}</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex flex-col gap-0.5">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => moverOrdenPlataforma(idx, -1)}
+                              className="p-0.5 bg-[#142012] hover:bg-[#66FF00] text-gray-300 hover:text-black rounded disabled:opacity-30 cursor-pointer"
+                              title="Subir posición"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === plataformasList.length - 1}
+                              onClick={() => moverOrdenPlataforma(idx, 1)}
+                              className="p-0.5 bg-[#142012] hover:bg-[#66FF00] text-gray-300 hover:text-black rounded disabled:opacity-30 cursor-pointer"
+                              title="Bajar posición"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                          </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[10px] text-gray-400">Cupos:</span>
-                          <input
-                            type="number"
-                            min="1"
-                            defaultValue={p.perfilesDefault ?? 5}
-                            onBlur={(e) => actualizarCampoNumericoPlataforma(p, "perfiles_default", e.target.value)}
-                            className="w-11 bg-[#111A10] border border-[#2A4226] rounded-lg px-1 py-1 text-xs text-white text-center"
-                            title="Cupos por defecto al crear Matriz"
-                          />
+                          <div>
+                            <p className="font-black text-white text-sm">
+                              #{idx + 1} {p.nombre}
+                            </p>
+                            <p className="text-[11px] text-gray-400">
+                              {p.pidePass === false ? "📩 Por Invitación" : "🔑 Con Clave"}
+                              {p.pidePass !== false && p.pidePerfil !== false ? " · 👤 Perfil" : ""}
+                              {p.pidePass !== false && p.pidePin !== false ? " · 📌 PIN" : ""}
+                              {` · ${p.perfilesDefault ?? 5} cupos`}
+                            </p>
+                          </div>
+                        </div>
 
-                          <span className="text-[10px] text-[#66FF00] font-bold">Catálogo Bs:</span>
-                          <input
-                            type="number"
-                            step="0.5"
-                            defaultValue={p.precioCliente ?? 20}
-                            onBlur={(e) => actualizarCampoNumericoPlataforma(p, "precio_cliente", e.target.value)}
-                            className="w-14 bg-[#111A10] border border-[#66FF00]/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
-                          />
+                        <div className="flex items-center gap-2.5">
+                          <span className="px-2.5 py-1 rounded-lg bg-[#122210] border border-[#66FF00]/40 text-[#66FF00] font-bold">
+                            Catálogo: Bs {p.precioCliente ?? 20}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-lg bg-purple-950/50 border border-purple-500/40 text-purple-300 font-bold">
+                            Revendedor: Bs {p.precioRevendedor ?? 10}
+                          </span>
 
-                          <span className="text-[10px] text-purple-300 font-bold">Rev Bs:</span>
-                          <input
-                            type="number"
-                            step="0.5"
-                            defaultValue={p.precioRevendedor ?? 10}
-                            onBlur={(e) => actualizarCampoNumericoPlataforma(p, "precio_revendedor", e.target.value)}
-                            className="w-14 bg-[#111A10] border border-purple-500/60 rounded-lg px-1.5 py-1 text-xs text-white font-bold text-center"
-                          />
+                          <button
+                            type="button"
+                            onClick={() => iniciarEdicionPlataforma(p, idx)}
+                            className="px-3 py-1.5 bg-[#66FF00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" /> Editar
+                          </button>
 
                           <button
                             type="button"
                             onClick={() => eliminarPlataforma(p.nombre)}
-                            className="text-gray-500 hover:text-red-400 p-1 cursor-pointer"
-                            title="Eliminar plataforma"
+                            className="p-1.5 text-gray-500 hover:text-red-400 cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
-
-                      {/* BOTONES INTERACTIVOS PARA ACTIVAR / DESACTIVAR CLAVE, PERFIL Y PIN */}
-                      <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[#152213]">
-                        <span className="text-[10px] text-gray-400 font-bold">Datos que pide (Toca para cambiar):</span>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleRequisitoPlataforma(p, "pidePass")}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
-                            usaClave
-                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                              : "bg-blue-950 text-blue-300 border-blue-500/50"
-                          }`}
-                        >
-                          {usaClave ? "🔑 Pide Contraseña (Activa)" : "📩 Por Invitación (Sin Clave)"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleRequisitoPlataforma(p, "pidePerfil")}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
-                            usaPerfil
-                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                              : "bg-gray-900 text-gray-400 border-gray-700"
-                          }`}
-                        >
-                          {usaPerfil ? "👤 Pide Perfil: SÍ" : "👤 Sin Perfil (Tocar p/activar)"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleRequisitoPlataforma(p, "pidePin")}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
-                            usaPin
-                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                              : "bg-gray-900 text-gray-400 border-gray-700"
-                          }`}
-                        >
-                          {usaPin ? "📌 Pide PIN: SÍ" : "📌 Sin PIN (Tocar p/activar)"}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

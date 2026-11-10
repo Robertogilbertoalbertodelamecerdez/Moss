@@ -8,11 +8,10 @@ import {
   sumarDiasBoliviaISO
 } from "@/config";
 import { extraerDatosProveedor } from "@/utils/extractorProveedor";
-import { generarMensajeEntrega } from "@/utils/mensajesMoss";
+import { generarMensajeEntrega, enviarWhatsappDirecto } from "@/utils/mensajesMoss";
 import {
   ShoppingBag,
   Copy,
-  Share2,
   CheckCircle2,
   UserCheck,
   Sparkles,
@@ -24,7 +23,8 @@ import {
   Calendar,
   MessageSquare,
   Trash2,
-  Users
+  Users,
+  Send
 } from "lucide-react";
 
 export default function ModuloVentas({
@@ -72,7 +72,10 @@ export default function ModuloVentas({
   const [precioVenta, setPrecioVenta] = useState("");
   const [meses, setMeses] = useState(1);
   const [diasPersonalizados, setDiasPersonalizados] = useState(30);
-  const [mesesPagadosProv, setMesesPagadosProv] = useState(3);
+
+  // Recordatorio periódico de Proveedor cuando el cliente paga más de 1 mes (> 30 días)
+  const [mesesPagadosProv, setMesesPagadosProv] = useState(1);
+  const [cadaCuantosMesesAvisar, setCadaCuantosMesesAvisar] = useState(1);
 
   const [modoFecha, setModoFecha] = useState("hoy");
   const [fechaVenta, setFechaVenta] = useState("");
@@ -119,18 +122,18 @@ export default function ModuloVentas({
     setPrecioVenta(String(base * Number(cantMeses || 1)));
   };
 
-  // Cambiar meses actualiza automáticamente los días (ej: 3M -> 90 días, 4M -> 120 días, 12M -> 365 días)
   const cambiarDuracionMeses = (cantMeses) => {
     const m = Math.max(1, Number(cantMeses || 1));
     const d = m === 12 ? 365 : m * 30;
     setMeses(m);
     setDiasPersonalizados(d);
-    if (m <= 3) setMesesPagadosProv(m);
-    else setMesesPagadosProv(3);
+    if (m > 1) {
+      setMesesPagadosProv(1);
+      setCadaCuantosMesesAvisar(1);
+    }
     aplicarAtajoPrecio(plataforma, tipoComprador, m);
   };
 
-  // Cambiar días directamente (ej: escribir 90 días, 45 días, 120 días)
   const cambiarDuracionDias = (cantDias) => {
     const d = Math.max(1, Number(cantDias || 30));
     setDiasPersonalizados(d);
@@ -190,7 +193,7 @@ export default function ModuloVentas({
       setNombreCliente(data.nombre);
       setTelefono(data.telefono);
     }
-    notificar("Revendedor registrado y seleccionado");
+    notificar("Revendedor registrado");
   };
 
   const guardarNuevoProveedor = async (e) => {
@@ -211,7 +214,7 @@ export default function ModuloVentas({
     setModalNuevoProv(false);
     await recargarTodo();
     if (data) setProveedorSeleccionadoId(data.id);
-    notificar("Proveedor guardado en Supabase");
+    notificar("Proveedor guardado");
   };
 
   const seleccionarPlataforma = (nombrePlat, libresPlat = null) => {
@@ -229,7 +232,6 @@ export default function ModuloVentas({
     }
   };
 
-  // IMPORTANTE: Al pegar el mensaje del proveedor NO cambia la plataforma que ya tienes seleccionada
   const procesarTextoProveedor = (texto) => {
     setTextoProveedorCrudo(texto);
     const extraido = extraerDatosProveedor(texto, plataformasList);
@@ -345,10 +347,10 @@ export default function ModuloVentas({
     const fechaBaseStr = fechaVenta || obtenerFechaBoliviaISO();
     const fechaCorte = sumarDiasBoliviaISO(diasTotales, fechaBaseStr);
 
-    // Si pagó más de 3 meses (> 90 días), calcular cuándo debes renovar tú con el proveedor
-    const mesesPagProv = diasTotales > 90 ? Number(mesesPagadosProv || 3) : Number(meses || 1);
+    const mesesPagProv = diasTotales > 30 ? Number(mesesPagadosProv || 1) : Number(meses || 1);
+    const cadaCuantosAvisar = diasTotales > 30 ? Number(cadaCuantosMesesAvisar || 1) : 1;
     const fechaRenovProv =
-      diasTotales > 90
+      diasTotales > 30
         ? sumarDiasBoliviaISO(mesesPagProv * 30, fechaBaseStr)
         : fechaCorte;
 
@@ -370,7 +372,8 @@ export default function ModuloVentas({
       precioVenta: Number(precioVenta),
       meses: Number(meses),
       diasTotales,
-      mesesPagadosProv,
+      mesesPagadosProv: mesesPagProv,
+      cadaCuantosAvisar,
       fechaRenovProv,
       fechaVenta: fechaBaseStr,
       fechaCorte
@@ -448,6 +451,7 @@ export default function ModuloVentas({
             meses_contratados: item.meses,
             dias_totales: item.diasTotales,
             meses_pagados_proveedor: item.mesesPagadosProv,
+            cada_cuantos_meses_avisar_prov: item.cadaCuantosAvisar,
             fecha_renovacion_proveedor: item.fechaRenovProv,
             fecha_venta: item.fechaVenta,
             fecha_corte: item.fechaCorte,
@@ -526,15 +530,11 @@ export default function ModuloVentas({
 
   return (
     <div className="space-y-6">
-      {/* BANNER HERO */}
       <div className="bg-gradient-to-r from-[#162914] via-[#101D0E] to-[#0B140A] border-2 border-[#66FF00]/60 rounded-3xl p-6 shadow-lg flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="space-y-2.5 text-center md:text-left">
           <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-[#66FF00]/20 text-[#66FF00] border border-[#66FF00]/40">
               <Zap className="w-3.5 h-3.5" /> Ventas a Clientes & Revendedores ({formatearFechaDMA(hoyBolivia)})
-            </span>
-            <span className="text-[11px] text-gray-400">
-              🟢 Verde = Con cupos en tu Stock · ⚫ Apagado = Sin stock (Comprar a Proveedor)
             </span>
           </div>
 
@@ -565,17 +565,16 @@ export default function ModuloVentas({
                   }`}
                 >
                   <span>{p.nombre}</span>
-
                   {tieneStock ? (
                     <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-[#66FF00] text-black">
                       ● {libresPlat} {libresPlat === 1 ? "libre" : "libres"}
                     </span>
                   ) : esInvitacion ? (
-                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-500/30">
-                      📩 Inv. (Prov.)
+                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-950 text-blue-300">
+                      📩 Inv.
                     </span>
                   ) : (
-                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-gray-900 text-gray-500 border border-gray-800">
+                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-gray-900 text-gray-500">
                       0 stock (Prov.)
                     </span>
                   )}
@@ -599,26 +598,6 @@ export default function ModuloVentas({
         </button>
       </div>
 
-      {/* RESUMEN RÁPIDO */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Ventas Hoy ({formatearFechaDMA(hoyBolivia).slice(0, 5)})</p>
-          <p className="text-2xl font-black text-[#66FF00] mt-1">{ventasDeHoy.length}</p>
-        </div>
-        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Cobrado Hoy</p>
-          <p className="text-2xl font-black text-white mt-1">Bs {ingresoDeHoy.toFixed(2)}</p>
-        </div>
-        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Perfiles Libres Stock</p>
-          <p className="text-2xl font-black text-[#66FF00] mt-1">{cuposLibresTotales}</p>
-        </div>
-        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 uppercase font-bold">Revendedores Activos</p>
-          <p className="text-2xl font-black text-white mt-1">{revendedores.length}</p>
-        </div>
-      </div>
-
       {/* ÚLTIMAS VENTAS */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-4">
         <h3 className="font-extrabold text-sm text-[#66FF00] uppercase flex items-center gap-2">
@@ -635,11 +614,6 @@ export default function ModuloVentas({
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                       {v.plataforma}
-                    </span>
-                    <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                      v.tipo_comprador === "revendedor" ? "bg-purple-950 text-purple-300 border border-purple-600/40" : "bg-gray-800 text-gray-300"
-                    }`}>
-                      {v.tipo_comprador === "revendedor" ? "🤝 Revendedor" : "👤 Cliente"}
                     </span>
                     <span className="text-xs font-bold text-white truncate">{v.nombre_cliente}</span>
                   </div>
@@ -676,7 +650,7 @@ export default function ModuloVentas({
                   }
                   className="px-3 py-2 bg-[#162614] hover:bg-[#66FF00] text-[#66FF00] hover:text-black border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
                 >
-                  <MessageSquare className="w-3.5 h-3.5" /> Mensaje
+                  <MessageSquare className="w-3.5 h-3.5" /> Entregar
                 </button>
               </div>
             ))}
@@ -711,7 +685,7 @@ export default function ModuloVentas({
                       : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <UserCheck className="w-4 h-4" /> Venta a Cliente (Catálogo Bs {configPlatActual.precioCliente ?? 20})
+                  <UserCheck className="w-4 h-4" /> Cliente (Catálogo Bs {configPlatActual.precioCliente ?? 20})
                 </button>
                 <button
                   type="button"
@@ -722,16 +696,14 @@ export default function ModuloVentas({
                       : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <Users className="w-4 h-4" /> Venta a Revendedor (Atajo Bs {configPlatActual.precioRevendedor ?? 10})
+                  <Users className="w-4 h-4" /> Revendedor (Atajo Bs {configPlatActual.precioRevendedor ?? 10})
                 </button>
               </div>
 
               {tipoComprador === "revendedor" && (
                 <div className="bg-[#111A10] border border-[#66FF00]/40 rounded-xl p-3 space-y-2">
                   <div className="flex justify-between items-center">
-                    <label className="text-xs font-bold text-[#66FF00] flex items-center gap-1">
-                      <Users className="w-4 h-4" /> Seleccionar Revendedor
-                    </label>
+                    <label className="text-xs font-bold text-[#66FF00]">Seleccionar Revendedor</label>
                     <button
                       type="button"
                       onClick={() => setModalNuevoRev(true)}
@@ -745,7 +717,6 @@ export default function ModuloVentas({
                     onChange={(e) => handleSelectRevendedor(e.target.value)}
                     className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
                   >
-                    {revendedores.length === 0 && <option value="">-- Sin revendedores aún (Agrega uno arriba) --</option>}
                     {revendedores.map((r) => (
                       <option key={r.id} value={r.id}>
                         {r.nombre} — 📞 {r.telefono}
@@ -757,9 +728,7 @@ export default function ModuloVentas({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-gray-400">
-                    Teléfono del {tipoComprador === "revendedor" ? "Revendedor" : "Cliente"} *
-                  </label>
+                  <label className="text-xs text-gray-400">Teléfono *</label>
                   <input
                     type="text"
                     placeholder="Ej: 77012345"
@@ -769,12 +738,7 @@ export default function ModuloVentas({
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-400 flex justify-between">
-                    <span>Nombre del {tipoComprador === "revendedor" ? "Revendedor" : "Cliente"} *</span>
-                    {clienteExistente && tipoComprador === "cliente" && (
-                      <span className="text-[#66FF00] text-[10px] font-bold">✓ Reconocido</span>
-                    )}
-                  </label>
+                  <label className="text-xs text-gray-400">Nombre *</label>
                   <input
                     type="text"
                     placeholder="Nombre"
@@ -786,33 +750,9 @@ export default function ModuloVentas({
               </div>
             </div>
 
-            {carritoCombo.length > 0 && (
-              <div className="bg-[#091208] border-2 border-[#66FF00]/60 rounded-2xl p-3 space-y-2">
-                <div className="flex justify-between text-xs font-black">
-                  <span className="text-[#66FF00]">Cuentas en Combo ({carritoCombo.length}):</span>
-                  <span className="text-white">
-                    Subtotal: Bs {carritoCombo.reduce((a, b) => a + Number(b.precioVenta), 0).toFixed(2)}
-                  </span>
-                </div>
-                {carritoCombo.map((item, idx) => (
-                  <div key={item.tempId} className="flex justify-between items-center bg-[#111A10] rounded-xl px-3 py-1.5 text-xs">
-                    <span className="truncate">
-                      <b className="text-[#66FF00]">#{idx + 1} {item.plataforma} ({item.diasTotales}d)</b> — {item.correoFinal}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <b>Bs {item.precioVenta}</b>
-                      <button type="button" onClick={() => setCarritoCombo((p) => p.filter((x) => x.tempId !== item.tempId))} className="text-red-400">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-[#1E331A]">
               <div className="sm:col-span-4">
-                <label className="text-xs text-gray-400">Plataforma (Stock / Prov.)</label>
+                <label className="text-xs text-gray-400">Plataforma</label>
                 <select
                   value={plataforma}
                   onChange={(e) => seleccionarPlataforma(e.target.value)}
@@ -820,15 +760,9 @@ export default function ModuloVentas({
                 >
                   {plataformasList.map((p) => {
                     const cLibres = contarCuposLibresPlataforma(p.nombre);
-                    const infoStock =
-                      cLibres > 0
-                        ? `🟢 ${cLibres} libre(s)`
-                        : p.pidePass === false
-                        ? `📩 Invitación`
-                        : `⚫ 0 stock (Prov.)`;
                     return (
                       <option key={p.nombre} value={p.nombre}>
-                        {p.nombre} — {infoStock}
+                        {p.nombre} ({cLibres > 0 ? `🟢 ${cLibres} libres` : "Prov."})
                       </option>
                     );
                   })}
@@ -838,36 +772,21 @@ export default function ModuloVentas({
               <div className="sm:col-span-5">
                 <label className="text-xs text-[#66FF00] font-bold">Modalidad</label>
                 <div className="grid grid-cols-3 gap-1 mt-1">
-                  <button
-                    type="button"
-                    onClick={() => setTipoCuenta("1 Dispositivo")}
-                    className={`py-2.5 px-1 rounded-xl font-bold text-[11px] border cursor-pointer ${
-                      tipoCuenta === "1 Dispositivo" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    1 Disp.
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTipoCuenta("Cuenta Completa")}
-                    className={`py-2.5 px-1 rounded-xl font-bold text-[11px] border cursor-pointer ${
-                      tipoCuenta === "Cuenta Completa" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    Completa
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTipoCuenta("Por Invitación");
-                      setOrigen("proveedor");
-                    }}
-                    className={`py-2.5 px-1 rounded-xl font-bold text-[11px] border cursor-pointer ${
-                      tipoCuenta === "Por Invitación" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    Invitación
-                  </button>
+                  {["1 Dispositivo", "Cuenta Completa", "Por Invitación"].map((mod) => (
+                    <button
+                      key={mod}
+                      type="button"
+                      onClick={() => {
+                        setTipoCuenta(mod);
+                        if (mod === "Por Invitación") setOrigen("proveedor");
+                      }}
+                      className={`py-2.5 px-1 rounded-xl font-bold text-[10px] border cursor-pointer ${
+                        tipoCuenta === mod ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                      }`}
+                    >
+                      {mod === "1 Dispositivo" ? "1 Disp." : mod === "Cuenta Completa" ? "Completa" : "Invitación"}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -900,32 +819,25 @@ export default function ModuloVentas({
             {origen === "stock" && !esModoInvitacionActual ? (
               <div className="bg-[#0B120A] border border-[#233820] rounded-xl p-3.5">
                 <label className="text-xs text-[#66FF00] font-semibold">Selecciona Matriz Disponible:</label>
-                {matricesDisponibles.length === 0 ? (
-                  <p className="text-xs text-orange-400 mt-1">Sin stock libre para {plataforma}. Cambia a "Proveedor".</p>
-                ) : (
-                  <select
-                    value={matrizSeleccionadaId || matricesDisponibles[0]?.id || ""}
-                    onChange={(e) => setMatrizSeleccionadaId(e.target.value)}
-                    className="w-full mt-1.5 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
-                  >
-                    {matricesDisponibles.map((m) => {
-                      const sig = obtenerSiguientePerfilLibre(m);
-                      const libresCount = obtenerPerfilesLibresDeMatriz(m).length;
-                      return (
-                        <option key={m.id} value={m.id}>
-                          {m.correo} ({libresCount} libres) 👉 {tipoCuenta === "Cuenta Completa" ? "Toda la cuenta" : `${sig?.nombre_perfil} (PIN: ${sig?.pin})`}
-                        </option>
-                      );
-                    })}
-                  </select>
-                )}
+                <select
+                  value={matrizSeleccionadaId || matricesDisponibles[0]?.id || ""}
+                  onChange={(e) => setMatrizSeleccionadaId(e.target.value)}
+                  className="w-full mt-1.5 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
+                >
+                  {matricesDisponibles.map((m) => {
+                    const sig = obtenerSiguientePerfilLibre(m);
+                    return (
+                      <option key={m.id} value={m.id}>
+                        {m.correo} 👉 {sig?.nombre_perfil} (PIN: {sig?.pin})
+                      </option>
+                    );
+                  })}
+                </select>
               </div>
             ) : (
               <div className="bg-[#0B120A] border border-[#66FF00]/40 rounded-xl p-3.5 space-y-3">
                 <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-[#66FF00] flex items-center gap-1">
-                    <Truck className="w-4 h-4" /> Proveedor
-                  </label>
+                  <label className="text-xs font-bold text-[#66FF00]">Proveedor</label>
                   <button
                     type="button"
                     onClick={() => setModalNuevoProv(true)}
@@ -946,53 +858,32 @@ export default function ModuloVentas({
                 </select>
 
                 {!esModoInvitacionActual && (
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[11px] text-[#66FF00] font-bold flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5" /> Pegar Mensaje Proveedor (No cambia tu plataforma {plataforma})
-                      </span>
-                      <button type="button" onClick={pegarDesdePortapapeles} className="px-2.5 py-1 bg-[#66FF00] text-black font-bold rounded-lg text-[11px] cursor-pointer">
-                        Pegar Portapapeles
-                      </button>
-                    </div>
-                    <textarea
-                      rows={2}
-                      placeholder="Pega aquí el mensaje del proveedor..."
-                      value={textoProveedorCrudo}
-                      onChange={(e) => procesarTextoProveedor(e.target.value)}
-                      className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
+                  <textarea
+                    rows={2}
+                    placeholder="Pega aquí el mensaje del proveedor (No cambia tu plataforma seleccionada)..."
+                    value={textoProveedorCrudo}
+                    onChange={(e) => procesarTextoProveedor(e.target.value)}
+                    className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white"
+                  />
                 )}
 
-                {esModoInvitacionActual ? (
-                  <div>
-                    <label className="text-xs text-[#66FF00] font-bold">Correo a activar por Invitación *</label>
-                    <input
-                      type="text"
-                      placeholder="cliente@gmail.com"
-                      value={provCorreo}
-                      onChange={(e) => setProvCorreo(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                    />
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <input
-                      type="text"
-                      placeholder="Correo *"
-                      value={provCorreo}
-                      onChange={(e) => setProvCorreo(e.target.value)}
-                      className="bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Contraseña"
-                      value={provPassword}
-                      onChange={(e) => setProvPassword(e.target.value)}
-                      className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                    />
-                    {configPlatActual.pidePerfil !== false && tipoCuenta !== "Cuenta Completa" && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Correo *"
+                    value={provCorreo}
+                    onChange={(e) => setProvCorreo(e.target.value)}
+                    className="bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                  />
+                  {!esModoInvitacionActual && (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Contraseña"
+                        value={provPassword}
+                        onChange={(e) => setProvPassword(e.target.value)}
+                        className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                      />
                       <input
                         type="text"
                         placeholder="Perfil"
@@ -1000,8 +891,6 @@ export default function ModuloVentas({
                         onChange={(e) => setProvPerfil(e.target.value)}
                         className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                       />
-                    )}
-                    {configPlatActual.pidePin !== false && tipoCuenta !== "Cuenta Completa" && (
                       <input
                         type="text"
                         placeholder="PIN"
@@ -1009,16 +898,15 @@ export default function ModuloVentas({
                         onChange={(e) => setProvPin(e.target.value)}
                         className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                       />
-                    )}
-                  </div>
-                )}
+                    </>
+                  )}
+                </div>
 
                 <div>
-                  <label className="text-[11px] text-orange-300">Costo Pagado hoy al Proveedor (Bs) - Opcional</label>
+                  <label className="text-[11px] text-orange-300">Costo Pagado hoy al Proveedor (Bs)</label>
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="Ej: 12"
                     value={costoProveedor}
                     onChange={(e) => setCostoProveedor(e.target.value)}
                     className="w-40 mt-1 bg-[#070B06] border border-orange-500/40 rounded-lg p-2 text-xs text-white block"
@@ -1027,16 +915,12 @@ export default function ModuloVentas({
               </div>
             )}
 
-            {/* PRECIO, PLAN EN MESES O DÍAS Y FECHA */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
-                <label className="text-xs text-[#66FF00] font-bold">
-                  Precio a Cobrar (Bs) *
-                </label>
+                <label className="text-xs text-[#66FF00] font-bold">Precio a Cobrar (Bs) *</label>
                 <input
                   type="number"
                   step="0.01"
-                  placeholder="Ej: 25"
                   value={precioVenta}
                   onChange={(e) => setPrecioVenta(e.target.value)}
                   className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-white font-bold text-xs"
@@ -1068,88 +952,70 @@ export default function ModuloVentas({
                   ))}
                 </div>
                 <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-                  <div>
-                    <span className="text-[10px] text-gray-400">O escribe Meses:</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={meses}
-                      onChange={(e) => cambiarDuracionMeses(e.target.value)}
-                      className="w-full bg-[#070B06] border border-[#2A4226] rounded-lg px-2 py-1 text-xs text-white text-center"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#66FF00]">O escribe Días:</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={diasPersonalizados}
-                      onChange={(e) => cambiarDuracionDias(e.target.value)}
-                      className="w-full bg-[#070B06] border border-[#66FF00] rounded-lg px-2 py-1 text-xs text-white font-bold text-center"
-                    />
-                  </div>
+                  <input
+                    type="number"
+                    min="1"
+                    value={meses}
+                    onChange={(e) => cambiarDuracionMeses(e.target.value)}
+                    placeholder="Meses"
+                    className="bg-[#070B06] border border-[#2A4226] rounded-lg px-2 py-1 text-xs text-white text-center"
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    value={diasPersonalizados}
+                    onChange={(e) => cambiarDuracionDias(e.target.value)}
+                    placeholder="Días"
+                    className="bg-[#070B06] border border-[#66FF00] rounded-lg px-2 py-1 text-xs text-white font-bold text-center"
+                  />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-[#66FF00] font-bold">Fecha Bolivia ({formatearFechaDMA(fechaVenta)})</label>
-                <div className="flex gap-1 mt-1">
-                  <button
-                    type="button"
-                    onClick={() => seleccionarModoFecha("hoy")}
-                    className={`px-2 py-2 rounded-xl text-xs font-bold border ${
-                      modoFecha === "hoy" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    Hoy
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => seleccionarModoFecha("ayer")}
-                    className={`px-2 py-2 rounded-xl text-xs font-bold border ${
-                      modoFecha === "ayer" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    Ayer
-                  </button>
-                  <input
-                    type="date"
-                    value={fechaVenta}
-                    onChange={(e) => {
-                      setModoFecha("otra");
-                      setFechaVenta(e.target.value);
-                    }}
-                    className="flex-1 bg-[#070B06] border border-[#2A4226] rounded-xl px-1 text-[11px] text-white"
-                  />
-                </div>
+                <label className="text-xs text-[#66FF00] font-bold">Fecha ({formatearFechaDMA(fechaVenta)})</label>
+                <input
+                  type="date"
+                  value={fechaVenta}
+                  onChange={(e) => setFechaVenta(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
               </div>
             </div>
 
-            {/* BLOQUE ESPECIAL SI PAGÓ MÁS DE 3 MESES (> 90 DÍAS): CONTROL DE ADELANTO AL PROVEEDOR */}
-            {Number(diasPersonalizados) > 90 && (
-              <div className="bg-amber-950/30 border-2 border-amber-500/60 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-black text-amber-300">
-                    📦 Plan largo ({diasPersonalizados} días): ¿Cuántos meses le cancelaste hoy al proveedor?
-                  </p>
-                  <p className="text-[11px] text-gray-300">
-                    El sistema te agendará renovar con el proveedor el{" "}
-                    <b className="text-white">
-                      {formatearFechaDMA(sumarDiasBoliviaISO(Number(mesesPagadosProv || 3) * 30, fechaVenta || obtenerFechaBoliviaISO()))}
-                    </b>{" "}
-                    para completar los {diasPersonalizados} días del cliente.
-                  </p>
+            {/* RECORDATORIO MES POR MES CUANDO EL CLIENTE PAGA MÁS DE 1 MES (> 30 DÍAS) */}
+            {Number(diasPersonalizados) > 30 && (
+              <div className="bg-amber-950/30 border-2 border-amber-500/60 rounded-2xl p-3.5 space-y-2">
+                <p className="text-xs font-black text-amber-300">
+                  📦 Recordatorio de Proveedor (El cliente pagó {diasPersonalizados} días):
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-center justify-between bg-[#070B06] p-2 rounded-xl border border-amber-500/30">
+                    <span className="text-gray-300">¿Cuántos meses pagaste HOY al proveedor?</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={mesesPagadosProv}
+                      onChange={(e) => setMesesPagadosProv(e.target.value)}
+                      className="w-14 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between bg-[#070B06] p-2 rounded-xl border border-amber-500/30">
+                    <span className="text-gray-300">¿Cada cuántos meses avisarte en Renovaciones?</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={cadaCuantosMesesAvisar}
+                      onChange={(e) => setCadaCuantosMesesAvisar(e.target.value)}
+                      className="w-14 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
+                    />
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-amber-300 font-bold">Meses pagados a Prov:</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={mesesPagadosProv}
-                    onChange={(e) => setMesesPagadosProv(e.target.value)}
-                    className="w-16 bg-[#070B06] border border-amber-400 rounded-xl p-2 text-center text-white font-black text-xs"
-                  />
-                </div>
+                <p className="text-[11px] text-amber-200">
+                  🔔 Primer aviso en tu pestaña Renovaciones el:{" "}
+                  <b className="text-white">
+                    {formatearFechaDMA(sumarDiasBoliviaISO(Number(mesesPagadosProv || 1) * 30, fechaVenta || obtenerFechaBoliviaISO()))}
+                  </b>
+                </p>
               </div>
             )}
 
@@ -1177,90 +1043,20 @@ export default function ModuloVentas({
                 disabled={guardando}
                 className="flex-1 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs sm:text-sm cursor-pointer"
               >
-                {guardando
-                  ? "Registrando..."
-                  : carritoCombo.length > 0
-                  ? `Confirmar Combo (Bs ${totalAcumuladoCombo.toFixed(2)})`
-                  : "Confirmar Venta y Obtener Mensaje"}
+                {guardando ? "Registrando..." : "Confirmar Venta y Entregar Pedido"}
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL NUEVO REVENDEDOR */}
-      {modalNuevoRev && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
-          <form onSubmit={guardarNuevoRevendedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4">
-            <h3 className="font-black text-[#66FF00] flex items-center gap-2">
-              <Users className="w-5 h-5" /> Registrar Nuevo Revendedor
-            </h3>
-            <input
-              type="text"
-              placeholder="Nombre del Revendedor"
-              value={nuevoRevNombre}
-              onChange={(e) => setNuevoRevNombre(e.target.value)}
-              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
-            />
-            <input
-              type="text"
-              placeholder="Teléfono / WhatsApp"
-              value={nuevoRevTelefono}
-              onChange={(e) => setNuevoRevTelefono(e.target.value)}
-              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
-            />
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setModalNuevoRev(false)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
-                Cancelar
-              </button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Guardar Revendedor
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL NUEVO PROVEEDOR */}
-      {modalNuevoProv && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
-          <form onSubmit={guardarNuevoProveedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4">
-            <h3 className="font-black text-[#66FF00] flex items-center gap-2">
-              <UserPlus className="w-5 h-5" /> Registrar Proveedor
-            </h3>
-            <input
-              type="text"
-              placeholder="Nombre del Proveedor"
-              value={nuevoProvNombre}
-              onChange={(e) => setNuevoProvNombre(e.target.value)}
-              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
-            />
-            <input
-              type="text"
-              placeholder="Teléfono / WhatsApp"
-              value={nuevoProvTelefono}
-              onChange={(e) => setNuevoProvTelefono(e.target.value)}
-              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
-            />
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setModalNuevoProv(false)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
-                Cancelar
-              </button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Guardar Proveedor
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL MENSAJE DE ENTREGA */}
+      {/* MODAL MENSAJE DE ENTREGA CON BOTÓN ENVIAR PEDIDO DIRECTO A WHATSAPP */}
       {mensajeGenerado && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-[#66FF00] font-black text-base flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5" /> ¡Mensaje Lista para {mensajeGenerado.cliente}!
+                <CheckCircle2 className="w-5 h-5" /> ¡Pedido Listo para {mensajeGenerado.cliente}!
               </h3>
               <button onClick={() => setMensajeGenerado(null)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -1283,16 +1079,10 @@ export default function ModuloVentas({
                 <Copy className="w-4 h-4" /> Copiar Mensaje
               </button>
               <button
-                onClick={() => {
-                  if (navigator.share) navigator.share({ text: mensajeGenerado.resumido });
-                  else {
-                    navigator.clipboard.writeText(mensajeGenerado.resumido);
-                    notificar("Resumen copiado");
-                  }
-                }}
-                className="py-3 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
+                onClick={() => enviarWhatsappDirecto(mensajeGenerado.telefono, mensajeGenerado.completo)}
+                className="py-3 bg-[#66FF00] text-black rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(102,255,0,0.4)]"
               >
-                <Share2 className="w-4 h-4" /> Compartir (Celular)
+                <Send className="w-4 h-4" /> 📲 Enviar Pedido a WhatsApp
               </button>
             </div>
           </div>

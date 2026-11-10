@@ -1,6 +1,18 @@
 import { formatearFechaDMA } from "@/config";
 
-// Formatea el plan mostrando siempre los días exactos contratados (ej. "90 días")
+// Abre directamente el chat de WhatsApp Web o App del cliente/revendedor sin tener que agendarlo
+export function enviarWhatsappDirecto(telefono, textoMensaje) {
+  if (typeof window === "undefined") return;
+  let num = String(telefono || "").replace(/\D/g, "");
+  if (num.length === 8 && (num.startsWith("6") || num.startsWith("7"))) {
+    num = "591" + num;
+  }
+  const url = num
+    ? `https://wa.me/${num}?text=${encodeURIComponent(textoMensaje || "")}`
+    : `https://wa.me/?text=${encodeURIComponent(textoMensaje || "")}`;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function obtenerTextoPlanDias(item) {
   const dias =
     Number(item.diasTotales) > 0
@@ -148,7 +160,7 @@ export function generarMensajeLoteRenovacionRevendedor(nombreRevendedor, listaSu
     .map((s, idx) => {
       const cliNombre = s.nombre_cliente_final || "Cliente sin anotar";
       const cliTel = s.telefono_cliente_final || s.telefono_cliente || "S/N";
-      const dias = Number(s.dias_totales || (Number(s.meses_contratados || 1) * 30));
+      const dias = Number(s.dias_totales || Number(s.meses_contratados || 1) * 30);
       const montoCliente =
         Number(s.precio_venta_revendedor) > 0
           ? `Bs ${Number(s.precio_venta_revendedor).toFixed(2)} (Tu costo: Bs ${s.precio_venta})`

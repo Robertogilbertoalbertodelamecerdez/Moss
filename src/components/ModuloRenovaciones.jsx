@@ -1,9 +1,15 @@
 "use client";
 import React, { useState } from "react";
-import { supabase, formatearFechaDMA } from "@/config";
+import {
+  supabase,
+  formatearFechaDMA,
+  obtenerFechaBoliviaISO,
+  sumarDiasBoliviaISO
+} from "@/config";
 import {
   generarMensajeRenovacionCorto,
-  generarMensajeLoteRenovacionRevendedor
+  generarMensajeLoteRenovacionRevendedor,
+  enviarWhatsappDirecto
 } from "@/utils/mensajesMoss";
 import {
   Copy,
@@ -12,7 +18,9 @@ import {
   RefreshCw,
   XCircle,
   X,
-  Users
+  Users,
+  Truck,
+  Send
 } from "lucide-react";
 
 export default function ModuloRenovaciones({
@@ -38,10 +46,12 @@ export default function ModuloRenovaciones({
   const [provPerfil, setProvPerfil] = useState("");
   const [costoProv, setCostoProv] = useState("");
 
+  const hoyISO = obtenerFechaBoliviaISO();
+
   const calcularDias = (fechaCorte) => {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const corte = new Date(fechaCorte + "T00:00:00");
+    if (!fechaCorte) return 999;
+    const hoy = new Date(hoyISO + "T00:00:00-04:00");
+    const corte = new Date(fechaCorte + "T00:00:00-04:00");
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
@@ -50,13 +60,23 @@ export default function ModuloRenovaciones({
     return calcularDias(s.fecha_corte) <= 3;
   });
 
+  // =========================================================================
+  // ALERTAS DE PAGO A PROVEEDOR (PLANES LARGOS DONDE PAGASTE MENOS MESES)
+  // =========================================================================
+  const subsProveedorPorRenovar = suscripciones.filter((s) => {
+    if (s.en_papelera || s.estado !== "Activa") return false;
+    if (!s.fecha_renovacion_proveedor) return false;
+    // Solo si el plan del cliente sigue vigente más allá del pago actual al proveedor
+    if (s.fecha_renovacion_proveedor >= s.fecha_corte) return false;
+    return calcularDias(s.fecha_renovacion_proveedor) <= 3;
+  });
+
   const listaPorAvisar = subsPorVencer.filter((s) => !s.avisado_renovacion);
   const listaAvisados = subsPorVencer.filter((s) => s.avisado_renovacion);
   const matricesPorVencer = matrices.filter(
     (m) => !m.en_papelera && m.estado === "Activa" && calcularDias(m.fecha_corte_matriz) <= 3
   );
 
-  // Agrupar renovaciones por Revendedor para enviarles todas sus cuentas por vencer en UN SOLO MENSAJE
   const lotesPorRevendedor = revendedores
     .map((r) => {
       const cuentasDeEsteRev = subsPorVencer.filter(
@@ -67,6 +87,29 @@ export default function ModuloRenovaciones({
       return { revendedor: r, cuentas: cuentasDeEsteRev };
     })
     .filter((grupo) => grupo.cuentas.length > 0);
+
+  // Cuando ya le pagaste el siguiente mes (o X meses) al proveedor para que el cliente siga con su plan largo
+  const avanzarCicloProveedor = async (sub, mesesAgregar = null) => {
+    const intervalo = Number(mesesAgregar || sub.cada_cuantos_meses_avisar_prov || 1);
+    const baseFecha =
+      sub.fecha_renovacion_proveedor > hoyISO ? sub.fecha_renovacion_proveedor : hoyISO;
+    const nuevaFechaProv = sumarDiasBoliviaISO(intervalo * 30, baseFecha);
+    const nuevosMesesPagados = Number(sub.meses_pagados_proveedor || 1) + intervalo;
+
+    await supabase
+      .from("suscripciones")
+      .update({
+        meses_pagados_proveedor: nuevosMesesPagados,
+        fecha_renovacion_proveedor:
+          nuevaFechaProv > sub.fecha_corte ? sub.fecha_corte : nuevaFechaProv
+      })
+      .eq("id", sub.id);
+
+    await recargarTodo();
+    notificar(
+      `¡Ciclo de proveedor avanzado +${intervalo}M! Próximo aviso: ${formatearFechaDMA(nuevaFechaProv)}`
+    );
+  };
 
   const marcarComoAvisado = async (sub, estadoBool) => {
     await supabase.from("suscripciones").update({ avisado_renovacion: estadoBool }).eq("id", sub.id);
@@ -85,11 +128,10 @@ export default function ModuloRenovaciones({
   };
 
   const ejecutarRenovarMatriz30Dias = async (m) => {
-    const nuevaFecha = new Date(m.fecha_corte_matriz + "T12:00:00");
-    nuevaFecha.setDate(nuevaFecha.getDate() + 30);
+    const nuevaFecha = sumarDiasBoliviaISO(30, m.fecha_corte_matriz);
     await supabase
       .from("matrices_stock")
-      .update({ fecha_corte_matriz: nuevaFecha.toISOString().split("T")[0] })
+      .update({ fecha_corte_matriz: nuevaFecha })
       .eq("id", m.id);
     if (Number(m.costo_total) > 0) {
       await supabase.from("movimientos_yolo").insert([
@@ -121,11 +163,9 @@ export default function ModuloRenovaciones({
   const confirmarRenovacion = async (e) => {
     e.preventDefault();
     const diasSumar = Number(mesesRenovacion) === 12 ? 365 : Number(mesesRenovacion) * 30;
-    const hoy = new Date();
-    const corteActual = new Date(subRenovar.fecha_corte + "T12:00:00");
-    const baseFecha = corteActual > hoy ? corteActual : hoy;
-    baseFecha.setDate(baseFecha.getDate() + diasSumar);
-    const nuevaFechaCorte = baseFecha.toISOString().split("T")[0];
+    const baseFecha =
+      subRenovar.fecha_corte > hoyISO ? subRenovar.fecha_corte : hoyISO;
+    const nuevaFechaCorte = sumarDiasBoliviaISO(diasSumar, baseFecha);
 
     let datosUpdate = {
       precio_venta: Number(precioRenovacion),
@@ -210,6 +250,17 @@ export default function ModuloRenovaciones({
         </button>
 
         <button
+          onClick={() => setSubTab("proveedores_largos")}
+          className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border flex items-center gap-1.5 cursor-pointer ${
+            subTab === "proveedores_largos"
+              ? "bg-amber-400 text-black border-amber-400"
+              : "bg-[#111A10] text-amber-300 border-amber-500/50"
+          }`}
+        >
+          <Truck className="w-4 h-4" /> Pagos a Proveedor Planes Largos ({subsProveedorPorRenovar.length})
+        </button>
+
+        <button
           onClick={() => setSubTab("avisados")}
           className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
             subTab === "avisados" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#233820]"
@@ -228,8 +279,66 @@ export default function ModuloRenovaciones({
         </button>
       </div>
 
-      {/* PESTAÑA DE LOTE POR REVENDEDOR: COPIA TODAS SUS CUENTAS EN 1 SOLO MENSAJE */}
-      {subTab === "lote_revendedores" ? (
+      {/* PESTAÑA DE ALERTAS DE PROVEEDOR (PLANES DE 3M / 6M / 1 AÑO PAGADOS MES A MES) */}
+      {subTab === "proveedores_largos" ? (
+        <div className="space-y-3">
+          {subsProveedorPorRenovar.length === 0 ? (
+            <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs">
+              No tienes pagos intermedios a proveedores que venzan en los próximos 3 días.
+            </div>
+          ) : (
+            subsProveedorPorRenovar.map((s) => {
+              const diasProv = calcularDias(s.fecha_renovacion_proveedor);
+              const diasTot = s.dias_totales || Number(s.meses_contratados || 1) * 30;
+              return (
+                <div
+                  key={s.id}
+                  className="bg-[#111A10] border-2 border-amber-400/70 rounded-2xl p-4 flex flex-wrap justify-between items-center gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-amber-400 text-black">
+                        📦 {s.plataforma} · Prov: {s.nombre_proveedor || "Proveedor"}
+                      </span>
+                      <span className="text-xs font-bold text-red-400">
+                        {diasProv < 0
+                          ? `Venció con proveedor hace ${Math.abs(diasProv)}d`
+                          : diasProv === 0
+                          ? "¡Toca pagar hoy al proveedor!"
+                          : `Faltan ${diasProv}d para pagar al proveedor`}
+                      </span>
+                    </div>
+                    <p className="text-sm font-bold text-white">
+                      Cliente: {s.nombre_cliente} (📞 {s.telefono_cliente}) · Correo:{" "}
+                      <span className="text-[#66FF00] font-mono">{s.correo_cuenta}</span>
+                    </p>
+                    <p className="text-xs text-gray-300">
+                      El cliente pagó <b>{diasTot} días</b> (Vence el {formatearFechaDMA(s.fecha_corte)}), pero al proveedor le pagaste{" "}
+                      <b className="text-amber-300">{s.meses_pagados_proveedor || 1} mes(es)</b> (Vence el{" "}
+                      <b>{formatearFechaDMA(s.fecha_renovacion_proveedor)}</b>).
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => avanzarCicloProveedor(s, 1)}
+                      className="px-3.5 py-2 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer"
+                    >
+                      ✅ Ya pagué +1 Mes al Proveedor (+30d)
+                    </button>
+                    <button
+                      onClick={() => avanzarCicloProveedor(s, 3)}
+                      className="px-3.5 py-2 bg-amber-400 text-black font-black rounded-xl text-xs cursor-pointer"
+                    >
+                      ✅ Ya pagué +3 Meses (+90d)
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      ) : subTab === "lote_revendedores" ? (
         <div className="space-y-4">
           {lotesPorRevendedor.length === 0 ? (
             <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs">
@@ -246,7 +355,7 @@ export default function ModuloRenovaciones({
                         🤝 Revendedor: {rev.nombre} (📞 {rev.telefono})
                       </span>
                       <h3 className="text-base font-black text-white mt-1">
-                        Tiene {cuentas.length} cuenta(s) por vencer para avisar a sus clientes
+                        Tiene {cuentas.length} cuenta(s) por vencer
                       </h3>
                     </div>
 
@@ -254,21 +363,18 @@ export default function ModuloRenovaciones({
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(msgLote);
-                          notificar(`¡Lista de ${cuentas.length} cuentas copiada en un solo mensaje para ${rev.nombre}!`);
+                          notificar(`¡Lista de ${cuentas.length} cuentas copiada!`);
                         }}
-                        className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-[0_0_20px_rgba(102,255,0,0.3)]"
+                        className="px-4 py-2.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
                       >
-                        <Copy className="w-4 h-4" /> Copiar las {cuentas.length} Renovaciones Juntas
+                        <Copy className="w-4 h-4" /> Copiar Lote
                       </button>
 
                       <button
-                        onClick={() => {
-                          if (navigator.share) navigator.share({ text: msgLote });
-                          else navigator.clipboard.writeText(msgLote);
-                        }}
-                        className="px-3 py-2.5 bg-purple-600 text-white font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                        onClick={() => enviarWhatsappDirecto(rev.telefono, msgLote)}
+                        className="px-4 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
                       >
-                        <Share2 className="w-4 h-4" /> Compartir
+                        <Send className="w-4 h-4" /> 📲 Enviar Lote a su WhatsApp
                       </button>
                     </div>
                   </div>
@@ -280,9 +386,6 @@ export default function ModuloRenovaciones({
                           #{i + 1} {c.plataforma} — Cliente: {c.nombre_cliente_final || "Sin anotar"} (📞 {c.telefono_cliente_final || "S/N"})
                         </p>
                         <p className="text-gray-300 font-mono text-[11px]">{c.correo_cuenta} ({c.nombre_perfil})</p>
-                        <p className="text-gray-400 text-[11px]">
-                          Pagó: Bs {Number(c.precio_venta_revendedor || c.precio_venta).toFixed(2)} · {c.meses_contratados || 1}M · Corte: {formatearFechaDMA(c.fecha_corte)}
-                        </p>
                       </div>
                     ))}
                   </div>
@@ -333,11 +436,6 @@ export default function ModuloRenovaciones({
                       <span className="ml-2 text-xs font-bold text-orange-400">{textoDias}</span>
                       <h3 className="font-bold text-base mt-1">
                         {s.nombre_cliente} — <span className="text-[#66FF00] font-mono">{s.telefono_cliente}</span>
-                        {s.nombre_cliente_final && (
-                          <span className="text-xs text-purple-300 ml-2">
-                            (Cliente final: {s.nombre_cliente_final} · 📞 {s.telefono_cliente_final})
-                          </span>
-                        )}
                       </h3>
                       <p className="text-xs text-gray-300">
                         Cuenta: <b className="text-white">{s.correo_cuenta}</b> ({s.nombre_perfil}) · Corte: {formatearFechaDMA(s.fecha_corte)}
@@ -352,20 +450,14 @@ export default function ModuloRenovaciones({
                         }}
                         className="px-3 py-1.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                       >
-                        <Copy className="w-3.5 h-3.5" /> Copiar Aviso Corto
+                        <Copy className="w-3.5 h-3.5" /> Copiar Aviso
                       </button>
 
                       <button
-                        onClick={() => {
-                          if (navigator.share) navigator.share({ text: msgCorto });
-                          else {
-                            navigator.clipboard.writeText(msgCorto);
-                            notificar("Aviso copiado");
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-[#66FF00] text-black rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        onClick={() => enviarWhatsappDirecto(s.telefono_cliente, msgCorto)}
+                        className="px-3 py-1.5 bg-[#66FF00] text-black rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer"
                       >
-                        <Share2 className="w-3.5 h-3.5" /> Compartir
+                        <Send className="w-3.5 h-3.5" /> 📲 Enviar a WhatsApp
                       </button>
                     </div>
                   </div>

@@ -10,7 +10,8 @@ import {
 import {
   generarMensajeEntrega,
   generarMensajeRenovacionCorto,
-  generarMensajeCambioCredencial
+  generarMensajeCambioCredencial,
+  enviarWhatsappDirecto
 } from "@/utils/mensajesMoss";
 import {
   Layers,
@@ -32,10 +33,11 @@ import {
   Trophy,
   Trash2,
   TrendingUp,
-  Calendar
+  Calendar,
+  RefreshCw,
+  Send
 } from "lucide-react";
 
-// Filtro estricto: permite teclado universal (con signos + y -) pero bloquea cualquier letra
 const limpiarMontoConSigno = (val) => {
   let v = String(val).replace(/,/g, ".").replace(/[^0-9.\-+]/g, "");
   const signo = v.startsWith("-") ? "-" : v.startsWith("+") ? "+" : "";
@@ -57,7 +59,6 @@ export default function PortalRevendedor({
 }) {
   const [tabRev, setTabRev] = useState("mis_clientes");
   const [busqueda, setBusqueda] = useState("");
-
   const [filtroTarjetasRev, setFiltroTarjetasRev] = useState("siempre");
 
   const hoyISO = obtenerFechaBoliviaISO();
@@ -85,7 +86,7 @@ export default function PortalRevendedor({
   const [telCliEditRev, setTelCliEditRev] = useState("");
   const [precioCliEditRev, setPrecioCliEditRev] = useState("");
 
-  // Estados para Sacar de Stock con soporte de Meses y Días personalizados
+  // Sacar de Stock
   const [matrizVender, setMatrizVender] = useState(null);
   const [nomVentaStock, setNomVentaStock] = useState("");
   const [telVentaStock, setTelVentaStock] = useState("");
@@ -93,6 +94,13 @@ export default function PortalRevendedor({
   const [mesesStock, setMesesStock] = useState(1);
   const [diasStockPersonalizados, setDiasStockPersonalizados] = useState(30);
   const [guardandoStock, setGuardandoStock] = useState(false);
+
+  // Modal para que el Revendedor renueve una de sus cuentas y avise al Admin para cobrarle
+  const [subRenovarRev, setSubRenovarRev] = useState(null);
+  const [mesesRenovarRev, setMesesRenovarRev] = useState(1);
+  const [diasRenovarRev, setDiasRenovarRev] = useState(30);
+  const [precioCobradoRenovarRev, setPrecioCobradoRenovarRev] = useState("");
+  const [guardandoRenovRev, setGuardandoRenovRev] = useState(false);
 
   const [mensajeModal, setMensajeModal] = useState(null);
 
@@ -119,6 +127,12 @@ export default function PortalRevendedor({
       })
       .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
   }, [suscripciones, revendedor]);
+
+  // =========================================================================
+  // REGLA DE BLOQUEO: MÁXIMO 3 CUENTAS SIN PAGAR AL ADMIN
+  // =========================================================================
+  const cuentasSinPagarAlAdmin = misVentas.filter((s) => s.pagado_al_admin === false);
+  const bloqueadoPorDeuda = cuentasSinPagarAlAdmin.length >= 3;
 
   const misVentasTarjetasTop = useMemo(() => {
     return misVentas.filter((s) => {
@@ -156,9 +170,10 @@ export default function PortalRevendedor({
   const ajustesManualesBanca = movimientosRevendedor.reduce((acc, m) => acc + Number(m.monto || 0), 0);
   const saldoBilleteraRevendedor = gananciaHistoricaTotal + ajustesManualesBanca;
 
-  const deudaPendienteAdmin = misVentas
-    .filter((s) => s.pagado_al_admin === false)
-    .reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
+  const deudaPendienteAdmin = cuentasSinPagarAlAdmin.reduce(
+    (acc, s) => acc + Number(s.precio_venta || 0),
+    0
+  );
 
   const etiquetaFiltroRev =
     filtroTarjetasRev === "hoy"
@@ -169,7 +184,6 @@ export default function PortalRevendedor({
       ? "ESTE MES"
       : "HISTÓRICO";
 
-  // Serie Bursátil + Predicción IA
   const { serieRevBursatil, previsionMensualRev } = useMemo(() => {
     const mapa = {};
     misVentasEstadisticas.forEach((s) => {
@@ -344,9 +358,12 @@ export default function PortalRevendedor({
     }
   };
 
-  // VENDER UN CUPO DE STOCK CON SOPORTE DE MÚLTIPLES MESES O DÍAS PERSONALIZADOS
+  // SACAR DE STOCK (BLOQUEADO SI DEBE 3 O MÁS CUENTAS)
   const venderPerfilDeMatriz = async (e) => {
     e.preventDefault();
+    if (bloqueadoPorDeuda) {
+      return notificar("⛔ Tienes 3 cuentas sin pagar al Admin. Paga tus pendientes para sacar más.", "error");
+    }
     if (!matrizVender) return;
     if (!nomVentaStock.trim() || !telVentaStock.trim() || precioVentaStock === "") {
       return notificar("Completa los datos de tu cliente y tu precio de venta", "error");
@@ -417,7 +434,7 @@ export default function PortalRevendedor({
         {
           tipo: "venta_revendedor",
           titulo: `🛒 ${revendedor.nombre} sacó ${matrizVender.plataforma} (${diasTotales}d / ${mesesContratados}M)`,
-          mensaje: `Correo: ${matrizVender.correo} (${slot.nombre_perfil}) · Plan: ${diasTotales} días (${mesesContratados}M) · Cliente final: ${nomVentaStock.trim()} (${telVentaStock.trim()}) · Vendido en Bs ${precioVentaStock}. Cobrar a revendedor: Bs ${costoTotalParaRev.toFixed(2)}.`,
+          mensaje: `Correo: ${matrizVender.correo} (${slot.nombre_perfil}) · Plan: ${diasTotales} días · Cliente final: ${nomVentaStock.trim()} (${telVentaStock.trim()}) · Cobrar a revendedor: Bs ${costoTotalParaRev.toFixed(2)}.`,
           revendedor_id: revendedor.id,
           nombre_revendedor: revendedor.nombre,
           suscripcion_id: nuevaSub.id,
@@ -447,6 +464,7 @@ export default function PortalRevendedor({
         null,
         true
       );
+      msg.telefonoClienteFinal = telVentaStock.trim();
 
       setMatrizVender(null);
       setNomVentaStock("");
@@ -462,6 +480,92 @@ export default function PortalRevendedor({
       notificar("Error: " + err.message, "error");
     } finally {
       setGuardandoStock(false);
+    }
+  };
+
+  // =========================================================================
+  // RENOVAR CUENTA DESDE EL PORTAL DEL REVENDEDOR (DISPARA COBRO AL ADMIN)
+  // =========================================================================
+  const confirmarRenovacionPorRevendedor = async (e) => {
+    e.preventDefault();
+    if (bloqueadoPorDeuda) {
+      return notificar("⛔ Tienes 3 cuentas pendientes de pago al Admin. Liquida para poder renovar.", "error");
+    }
+    if (!subRenovarRev) return;
+
+    setGuardandoRenovRev(true);
+    try {
+      const diasSumar = Math.max(1, Number(diasRenovarRev || 30));
+      const mesesSumar = Math.max(1, Number(mesesRenovarRev || Math.round(diasSumar / 30)));
+      const costoUnitarioRev = obtenerPrecioRevendedorPlat(subRenovarRev.plataforma);
+      const costoCobrarAlRev = Number((costoUnitarioRev * mesesSumar).toFixed(2));
+
+      const baseCorte =
+        subRenovarRev.fecha_corte > hoyISO ? subRenovarRev.fecha_corte : hoyISO;
+      const nuevaFechaCorte = sumarDiasBoliviaISO(diasSumar, baseCorte);
+
+      const { error } = await supabase
+        .from("suscripciones")
+        .update({
+          fecha_corte: nuevaFechaCorte,
+          meses_contratados: mesesSumar,
+          dias_totales: diasSumar,
+          precio_venta: costoCobrarAlRev,
+          precio_venta_revendedor: Number(precioCobradoRenovarRev || subRenovarRev.precio_venta_revendedor || 0),
+          pagado_al_admin: false,
+          avisado_renovacion: false,
+          estado: "Activa"
+        })
+        .eq("id", subRenovarRev.id);
+
+      if (error) throw error;
+
+      // Enviar alerta a la campana del Admin para que le cobre la renovación y marque Pagado
+      await supabase.from("notificaciones_sistema").insert([
+        {
+          tipo: "venta_revendedor",
+          titulo: `🔄 ${revendedor.nombre} renovó ${subRenovarRev.plataforma} (+${diasSumar}d)`,
+          mensaje: `Cuenta: ${subRenovarRev.correo_cuenta} (${subRenovarRev.nombre_perfil}) · Cliente: ${subRenovarRev.nombre_cliente_final || "S/N"} · Nuevo corte: ${formatearFechaDMA(nuevaFechaCorte)}. Cobrar renovación: Bs ${costoCobrarAlRev.toFixed(2)}.`,
+          revendedor_id: revendedor.id,
+          nombre_revendedor: revendedor.nombre,
+          suscripcion_id: subRenovarRev.id,
+          monto_cobrar: costoCobrarAlRev,
+          pagado: false
+        }
+      ]);
+
+      const msg = generarMensajeEntrega(
+        subRenovarRev.nombre_cliente_final || "Cliente",
+        revendedor.telefono,
+        [
+          {
+            plataforma: subRenovarRev.plataforma,
+            tipoCuenta: subRenovarRev.tipo_cuenta || "1 Dispositivo",
+            correoFinal: subRenovarRev.correo_cuenta,
+            passFinal: subRenovarRev.password_cuenta,
+            perfilFinal: subRenovarRev.nombre_perfil,
+            pinFinal: subRenovarRev.pin_perfil,
+            meses: mesesSumar,
+            diasTotales: diasSumar,
+            fechaCorte: nuevaFechaCorte,
+            precioVenta: Number(precioCobradoRenovarRev || subRenovarRev.precio_venta_revendedor || 0)
+          }
+        ],
+        "",
+        "RENOVACIÓN EXITOSA",
+        true
+      );
+      msg.telefonoClienteFinal = subRenovarRev.telefono_cliente_final;
+
+      setSubRenovarRev(null);
+      setMensajeModal(msg);
+      await recargarTodo();
+      notificar(`¡Renovación aplicada hasta el ${formatearFechaDMA(nuevaFechaCorte)}! Paga el cupo al administrador.`);
+    } catch (err) {
+      registrarErrorSistema("Renovación por Revendedor", err.message, revendedor.nombre);
+      notificar("Error: " + err.message, "error");
+    } finally {
+      setGuardandoRenovRev(false);
     }
   };
 
@@ -506,23 +610,37 @@ export default function PortalRevendedor({
 
   return (
     <div className="space-y-5">
+      {/* ALERTA DE BLOQUEO SI DEBE 3 O MÁS CUENTAS AL ADMINISTRADOR */}
+      {bloqueadoPorDeuda && (
+        <div className="bg-red-950/80 border-2 border-red-500 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-6 h-6 text-red-400 shrink-0" />
+            <div>
+              <h3 className="text-sm font-black text-white">
+                ⛔ Límite alcanzado: Tienes {cuentasSinPagarAlAdmin.length} cuentas pendientes de pago (Bs {deudaPendienteAdmin.toFixed(2)})
+              </h3>
+              <p className="text-xs text-red-200">
+                No puedes sacar más cuentas de Stock ni renovar hasta que el Administrador marque tus cuentas pendientes como pagadas.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {revendedor.mostrar_bono_semanal && (
-        <div className="bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-[#111A10] border-2 border-amber-400 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-[0_0_30px_rgba(251,191,36,0.2)]">
+        <div className="bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-[#111A10] border-2 border-amber-400 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-amber-400 text-black flex items-center justify-center shrink-0">
               <Trophy className="w-7 h-7" />
             </div>
             <div>
               <span className="px-2.5 py-0.5 text-[10px] font-black uppercase rounded-full bg-amber-400 text-black">
-                🏆 Mejor Revendedor de la Semana
+                🏆 Premio Semanal Activo
               </span>
               <h3 className="text-base sm:text-lg font-black text-white mt-1">
-                ¡Felicidades {revendedor.nombre}! Generaste Bs {Number(revendedor.ganancia_generada_semana || 0).toFixed(2)} de ganancia esta semana.
+                ¡Felicidades {revendedor.nombre}! Tienes un bono semanal asignado de{" "}
+                <b className="text-amber-300">Bs {Number(revendedor.monto_bono_semanal || 0).toFixed(2)}</b>.
               </h3>
-              <p className="text-xs text-amber-200">
-                Te corresponde un bono equivalente a{" "}
-                <b className="text-white text-sm">Bs {Number(revendedor.monto_bono_semanal || 0).toFixed(2)}</b>.
-              </p>
             </div>
           </div>
           <span
@@ -532,7 +650,7 @@ export default function PortalRevendedor({
                 : "bg-amber-950 text-amber-300 border border-amber-400"
             }`}
           >
-            {revendedor.bono_semanal_pagado ? "✓ BONO ENTREGADO / PAGADO" : "⏳ BONO PENDIENTE DE ENTREGA"}
+            {revendedor.bono_semanal_pagado ? "✓ BONO PAGADO" : "⏳ PENDIENTE DE PAGO"}
           </span>
         </div>
       )}
@@ -556,7 +674,7 @@ export default function PortalRevendedor({
               className={`px-3 py-1 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
                 filtroTarjetasRev === op.id
                   ? "bg-[#66FF00] text-black border-[#66FF00]"
-                  : "bg-[#070B06] text-gray-300 border-[#2A4226] hover:border-[#66FF00]/50"
+                  : "bg-[#070B06] text-gray-300 border-[#2A4226]"
               }`}
             >
               {op.label}
@@ -565,18 +683,20 @@ export default function PortalRevendedor({
         </div>
       </div>
 
-      {/* TARJETAS FINANCIERAS DEL REVENDEDOR */}
+      {/* TARJETAS FINANCIERAS */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
           <p className="text-[11px] text-gray-400 uppercase font-bold">Total Cobrado ({etiquetaFiltroRev})</p>
           <p className="text-2xl font-black text-white mt-1">Bs {cobradoPeriodoTop.toFixed(2)}</p>
-          <p className="text-[10px] text-gray-500">{misVentasTarjetasTop.length} venta(s) en periodo</p>
+          <p className="text-[10px] text-gray-500">{misVentasTarjetasTop.length} venta(s)</p>
         </div>
 
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
           <p className="text-[11px] text-gray-400 uppercase font-bold">Mi Costo Base ({etiquetaFiltroRev})</p>
           <p className="text-2xl font-black text-orange-300 mt-1">Bs {costoAdminPeriodoTop.toFixed(2)}</p>
-          <p className="text-[10px] text-gray-500">Por Pagar a Admin: Bs {deudaPendienteAdmin.toFixed(0)}</p>
+          <p className={`text-[10px] font-bold ${bloqueadoPorDeuda ? "text-red-400" : "text-amber-300"}`}>
+            Sin pagar: {cuentasSinPagarAlAdmin.length}/3 máx (Bs {deudaPendienteAdmin.toFixed(0)})
+          </p>
         </div>
 
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
@@ -758,34 +878,49 @@ export default function PortalRevendedor({
                       </button>
 
                       <button
-                        onClick={() =>
-                          setMensajeModal(
-                            generarMensajeEntrega(
-                              s.nombre_cliente_final || "Cliente",
-                              revendedor.telefono,
-                              [
-                                {
-                                  plataforma: s.plataforma,
-                                  tipoCuenta: s.tipo_cuenta || "1 Dispositivo",
-                                  correoFinal: s.correo_cuenta,
-                                  passFinal: s.password_cuenta,
-                                  perfilFinal: s.nombre_perfil,
-                                  pinFinal: s.pin_perfil,
-                                  meses: s.meses_contratados || 1,
-                                  diasTotales: diasPlan,
-                                  fechaCorte: s.fecha_corte,
-                                  precioVenta: s.precio_venta_revendedor || s.precio_venta
-                                }
-                              ],
-                              "",
-                              null,
-                              true
-                            )
-                          )
-                        }
+                        onClick={() => {
+                          if (bloqueadoPorDeuda) {
+                            return notificar("⛔ Tienes 3 cuentas sin pagar al Admin. Paga tus pendientes para renovar.", "error");
+                          }
+                          setSubRenovarRev(s);
+                          setMesesRenovarRev(1);
+                          setDiasRenovarRev(30);
+                          setPrecioCobradoRenovarRev(s.precio_venta_revendedor || "");
+                        }}
+                        className="px-3.5 py-1.5 bg-amber-400 text-black font-extrabold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" /> Renovar Cuenta
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const m = generarMensajeEntrega(
+                            s.nombre_cliente_final || "Cliente",
+                            revendedor.telefono,
+                            [
+                              {
+                                plataforma: s.plataforma,
+                                tipoCuenta: s.tipo_cuenta || "1 Dispositivo",
+                                correoFinal: s.correo_cuenta,
+                                passFinal: s.password_cuenta,
+                                perfilFinal: s.nombre_perfil,
+                                pinFinal: s.pin_perfil,
+                                meses: s.meses_contratados || 1,
+                                diasTotales: diasPlan,
+                                fechaCorte: s.fecha_corte,
+                                precioVenta: s.precio_venta_revendedor || s.precio_venta
+                              }
+                            ],
+                            "",
+                            null,
+                            true
+                          );
+                          m.telefonoClienteFinal = s.telefono_cliente_final;
+                          setMensajeModal(m);
+                        }}
                         className="px-3.5 py-1.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                       >
-                        <MessageSquare className="w-3.5 h-3.5" /> Copiar Mensaje de Entrega
+                        <MessageSquare className="w-3.5 h-3.5" /> Ver / Enviar Pedido
                       </button>
                     </div>
                   </div>
@@ -795,14 +930,16 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 2: MATRICES Y STOCK CON LOS 3 COLORES DIFERENCIADOS */}
+      {/* PESTAÑA 2: MATRICES Y STOCK */}
       {tabRev === "stock_disponible" && revendedor.puede_ver_matrices && (
         <div className="space-y-4">
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <span className="text-gray-300 font-bold">Guía rápida de colores de perfiles:</span>
+            <span className="text-gray-300 font-bold">
+              Cuentas pendientes de pago: <b className={bloqueadoPorDeuda ? "text-red-400" : "text-[#66FF00]"}>{cuentasSinPagarAlAdmin.length} / 3 máx.</b>
+            </span>
             <div className="flex flex-wrap items-center gap-4">
               <span className="flex items-center gap-1.5 text-[#66FF00] font-extrabold">
-                <span className="w-3 h-3 rounded-full bg-[#66FF00] inline-block" /> Verde = Ocupado por Mí (Mi Cliente)
+                <span className="w-3 h-3 rounded-full bg-[#66FF00] inline-block" /> Verde = Ocupado por Mí
               </span>
               <span className="flex items-center gap-1.5 text-purple-300 font-extrabold">
                 <span className="w-3 h-3 rounded-full bg-purple-500 inline-block" /> Morado = Libre para Vender
@@ -839,14 +976,19 @@ export default function PortalRevendedor({
 
                       {libres.length > 0 ? (
                         <button
+                          disabled={bloqueadoPorDeuda}
                           onClick={() => {
+                            if (bloqueadoPorDeuda) {
+                              return notificar("⛔ Tienes 3 cuentas sin pagar al Admin.", "error");
+                            }
                             setMatrizVender(matriz);
                             setMesesStock(1);
                             setDiasStockPersonalizados(30);
                           }}
-                          className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(168,85,247,0.4)]"
+                          className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-800 disabled:text-gray-500 text-white font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                         >
-                          <PlusCircle className="w-4 h-4" /> Vender Cupo ({libres.length})
+                          <PlusCircle className="w-4 h-4" />{" "}
+                          {bloqueadoPorDeuda ? "Bloqueado (Paga Deuda)" : `Vender Cupo (${libres.length})`}
                         </button>
                       ) : (
                         <span className="text-xs text-gray-500 font-bold">Llena</span>
@@ -876,6 +1018,9 @@ export default function PortalRevendedor({
                                 setTelCliEditRev(subOcupante.telefono_cliente_final || "");
                                 setPrecioCliEditRev(subOcupante.precio_venta_revendedor || "");
                               } else if (!p.ocupado && !p.caido) {
+                                if (bloqueadoPorDeuda) {
+                                  return notificar("⛔ Tienes 3 cuentas sin pagar al Admin.", "error");
+                                }
                                 setMatrizVender(matriz);
                                 setMesesStock(1);
                                 setDiasStockPersonalizados(30);
@@ -883,10 +1028,10 @@ export default function PortalRevendedor({
                             }}
                             className={`p-2.5 rounded-xl border text-left text-xs flex items-center gap-2 transition ${
                               esMio
-                                ? "bg-[#152912] border-2 border-[#66FF00] cursor-pointer hover:brightness-110 shadow-[0_0_12px_rgba(102,255,0,0.18)]"
+                                ? "bg-[#152912] border-2 border-[#66FF00] cursor-pointer hover:brightness-110"
                                 : p.ocupado || p.caido
                                 ? "bg-[#111315] border-gray-800 text-gray-500 opacity-50 cursor-not-allowed"
-                                : "bg-purple-950/60 border-2 border-purple-500 hover:bg-purple-900/60 cursor-pointer shadow-[0_0_12px_rgba(168,85,247,0.2)]"
+                                : "bg-purple-950/60 border-2 border-purple-500 hover:bg-purple-900/60 cursor-pointer"
                             }`}
                           >
                             <div
@@ -935,7 +1080,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 3: RENOVACIONES */}
+      {/* PESTAÑA 3: RENOVACIONES DEL REVENDEDOR (CON BOTÓN DE RENOVAR Y ENVIAR A WHATSAPP) */}
       {tabRev === "renovaciones" && (
         <div className="space-y-3">
           {misRenovaciones.length === 0 ? (
@@ -970,15 +1115,39 @@ export default function PortalRevendedor({
                     </p>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(msgCorto);
-                      notificar("Aviso corto copiado para tu cliente");
-                    }}
-                    className="px-4 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Copy className="w-3.5 h-3.5" /> Copiar Aviso
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(msgCorto);
+                        notificar("Aviso corto copiado");
+                      }}
+                      className="px-3 py-2 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copiar Aviso
+                    </button>
+
+                    <button
+                      onClick={() => enviarWhatsappDirecto(s.telefono_cliente_final, msgCorto)}
+                      className="px-3 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" /> Enviar a WhatsApp
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        if (bloqueadoPorDeuda) {
+                          return notificar("⛔ Tienes 3 cuentas sin pagar al Admin.", "error");
+                        }
+                        setSubRenovarRev(s);
+                        setMesesRenovarRev(1);
+                        setDiasRenovarRev(30);
+                        setPrecioCobradoRenovarRev(s.precio_venta_revendedor || "");
+                      }}
+                      className="px-3.5 py-2 bg-amber-400 text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Renovar Ahora
+                    </button>
+                  </div>
                 </div>
               );
             })
@@ -986,7 +1155,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 4: ESTADÍSTICAS CON GRÁFICA BURSÁTIL + PREDICCIÓN IA */}
+      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA */}
       {tabRev === "estadisticas" && (
         <div className="space-y-5">
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
@@ -1053,17 +1222,8 @@ export default function PortalRevendedor({
                   <TrendingUp className="w-4 h-4" /> Mi Curva Bursátil de Ganancias & Predicción IA
                 </h3>
                 <p className="text-[11px] text-gray-400">
-                  Toca cualquier punto o pico para ver tu ganancia exacta y tu proyección de los próximos 3 días. Previsión a 30 días:{" "}
-                  <b className="text-cyan-300">Bs {previsionMensualRev.toFixed(2)}</b>.
+                  Previsión a 30 días: <b className="text-cyan-300">Bs {previsionMensualRev.toFixed(2)}</b>.
                 </p>
-              </div>
-              <div className="flex items-center gap-3 text-[11px]">
-                <span className="flex items-center gap-1 text-[#66FF00] font-bold">
-                  <span className="w-3 h-1 bg-[#66FF00] inline-block rounded" /> Mi Ganancia Real
-                </span>
-                <span className="flex items-center gap-1 text-cyan-300 font-bold">
-                  <span className="w-3 h-1 bg-cyan-400 inline-block rounded" /> Mi Predicción (+3d)
-                </span>
               </div>
             </div>
 
@@ -1075,33 +1235,15 @@ export default function PortalRevendedor({
                     : "bg-[#070B06] border-[#66FF00]/60 text-white"
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${
-                      puntoSeleccionado.esPrediccion ? "bg-cyan-400 text-black" : "bg-[#66FF00] text-black"
-                    }`}
-                  >
-                    {puntoSeleccionado.esPrediccion ? "🔮 Mi Predicción Futura" : "📈 Mi Pico Real"}
-                  </span>
-                  <span className="font-mono font-bold text-sm">{formatearFechaDMA(puntoSeleccionado.fecha)}</span>
-                </div>
-
-                <div className="flex flex-wrap gap-4">
-                  <span>Mis ventas: <b>{puntoSeleccionado.ventas}</b></span>
-                  <span>Cobrado: <b>Bs {puntoSeleccionado.ingreso.toFixed(2)}</b></span>
-                  <span className={puntoSeleccionado.esPrediccion ? "text-cyan-300 font-black" : "text-[#66FF00] font-black"}>
-                    {puntoSeleccionado.esPrediccion ? "Ganancia Proyectada:" : "Mi Ganancia Neta:"} Bs{" "}
-                    {puntoSeleccionado.ganancia.toFixed(2)}
-                  </span>
-                </div>
+                <span className="font-mono font-bold">{formatearFechaDMA(puntoSeleccionado.fecha)}</span>
+                <span>Ventas: <b>{puntoSeleccionado.ventas}</b></span>
+                <span className="text-[#66FF00] font-black">
+                  Ganancia: Bs {puntoSeleccionado.ganancia.toFixed(2)}
+                </span>
               </div>
             )}
 
-            {puntosSVG.length === 0 ? (
-              <p className="text-xs text-gray-500 py-8 text-center">
-                Aún no hay ventas con precio anotado en este período.
-              </p>
-            ) : (
+            {puntosSVG.length > 0 && (
               <div className="relative w-full overflow-x-auto">
                 <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-52 select-none overflow-visible">
                   <defs>
@@ -1110,20 +1252,6 @@ export default function PortalRevendedor({
                       <stop offset="100%" stopColor="#66FF00" stopOpacity="0.0" />
                     </linearGradient>
                   </defs>
-
-                  {[0.2, 0.5, 0.8].map((pct, i) => (
-                    <line
-                      key={i}
-                      x1={padX}
-                      y1={padY + pct * (svgHeight - padY * 2)}
-                      x2={svgWidth - padX}
-                      y2={padY + pct * (svgHeight - padY * 2)}
-                      stroke="#1E331A"
-                      strokeDasharray="3 3"
-                      strokeWidth="1"
-                    />
-                  ))}
-
                   {rutaAreaReal && <path d={rutaAreaReal} fill="url(#revPortalGrad)" />}
                   {rutaLineaReal && (
                     <path d={rutaLineaReal} fill="none" stroke="#66FF00" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
@@ -1131,111 +1259,118 @@ export default function PortalRevendedor({
                   {rutaLineaPrediccion && (
                     <path d={rutaLineaPrediccion} fill="none" stroke="#22D3EE" strokeWidth="2.5" strokeDasharray="6 4" strokeLinecap="round" />
                   )}
-
-                  {puntoSeleccionado && (
-                    <line
-                      x1={puntoSeleccionado.x}
-                      y1={padY / 2}
-                      x2={puntoSeleccionado.x}
-                      y2={svgHeight - padY}
-                      stroke={puntoSeleccionado.esPrediccion ? "#22D3EE" : "#66FF00"}
-                      strokeWidth="1.2"
-                      strokeDasharray="2 2"
-                    />
-                  )}
-
-                  {puntosSVG.map((p) => {
-                    const esActivo = puntoSeleccionado && puntoSeleccionado.idx === p.idx;
-                    return (
-                      <g
-                        key={p.fecha}
-                        onMouseEnter={() => setPuntoActivoIdx(p.idx)}
-                        onClick={() => setPuntoActivoIdx(p.idx)}
-                        className="cursor-pointer"
-                      >
-                        <circle cx={p.x} cy={p.yGan} r="16" fill="transparent" />
-                        <circle
-                          cx={p.x}
-                          cy={p.yGan}
-                          r={esActivo ? "6.5" : "4"}
-                          fill={p.esPrediccion ? "#22D3EE" : "#66FF00"}
-                          stroke="#070B06"
-                          strokeWidth="2"
-                        />
-                        <text
-                          x={p.x}
-                          y={p.yGan - 10}
-                          textAnchor="middle"
-                          fill={p.esPrediccion ? "#67E8F9" : "#66FF00"}
-                          fontSize="9"
-                          fontWeight="bold"
-                        >
-                          {p.ganancia.toFixed(0)}
-                        </text>
-                        <text
-                          x={p.x}
-                          y={svgHeight - 6}
-                          textAnchor="middle"
-                          fill={p.esPrediccion ? "#22D3EE" : "#9CA3AF"}
-                          fontSize="9"
-                        >
-                          {formatearFechaDMA(p.fecha).slice(0, 5)}
-                        </text>
-                      </g>
-                    );
-                  })}
+                  {puntosSVG.map((p) => (
+                    <g
+                      key={p.fecha}
+                      onMouseEnter={() => setPuntoActivoIdx(p.idx)}
+                      onClick={() => setPuntoActivoIdx(p.idx)}
+                      className="cursor-pointer"
+                    >
+                      <circle cx={p.x} cy={p.yGan} r="16" fill="transparent" />
+                      <circle cx={p.x} cy={p.yGan} r="4.5" fill={p.esPrediccion ? "#22D3EE" : "#66FF00"} stroke="#070B06" strokeWidth="2" />
+                      <text x={p.x} y={p.yGan - 10} textAnchor="middle" fill="#66FF00" fontSize="9" fontWeight="bold">
+                        {p.ganancia.toFixed(0)}
+                      </text>
+                      <text x={p.x} y={svgHeight - 6} textAnchor="middle" fill="#9CA3AF" fontSize="9">
+                        {formatearFechaDMA(p.fecha).slice(0, 5)}
+                      </text>
+                    </g>
+                  ))}
                 </svg>
               </div>
             )}
           </div>
+        </div>
+      )}
 
-          <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
-                <Wallet className="w-4 h-4" /> Movimientos Manuales en {revendedor.nombre_billetera || "Mi Billetera"}
+      {/* MODAL PARA QUE EL REVENDEDOR RENUEVE UNA CUENTA Y ENVÍE ALERTA DE COBRO AL ADMIN */}
+      {subRenovarRev && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <form
+            onSubmit={confirmarRenovacionPorRevendedor}
+            className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal"
+          >
+            <div className="flex justify-between items-center border-b border-[#233820] pb-2">
+              <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
+                <RefreshCw className="w-5 h-5" /> Renovar {subRenovarRev.plataforma}
               </h3>
-              <button
-                onClick={() => setModalAjusteBanca(true)}
-                className="px-3 py-1.5 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer"
-              >
-                + Nuevo Gasto / Ingreso
+              <button type="button" onClick={() => setSubRenovarRev(null)} className="text-gray-400">
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {movimientosRevendedor.length === 0 ? (
-              <p className="text-xs text-gray-500 py-4 text-center">
-                Aún no registraste gastos o ingresos extras en tu billetera.
+            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3 text-xs space-y-1">
+              <p className="text-gray-300">
+                Cliente: <b className="text-white">{subRenovarRev.nombre_cliente_final || "Tu Cliente"}</b> ({subRenovarRev.correo_cuenta})
               </p>
-            ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {movimientosRevendedor.map((m) => (
-                  <div
-                    key={m.id}
-                    className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2.5 flex justify-between items-center text-xs"
-                  >
-                    <div>
-                      <span className="font-bold text-white">{m.tipo}: </span>
-                      <span className="text-gray-300">{m.descripcion}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`font-black ${Number(m.monto) >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
-                        {Number(m.monto) >= 0 ? `+Bs ${m.monto}` : `-Bs ${Math.abs(m.monto)}`}
-                      </span>
-                      <button
-                        onClick={async () => {
-                          await supabase.from("movimientos_revendedor").delete().eq("id", m.id);
-                          await recargarTodo();
-                        }}
-                        className="text-gray-500 hover:text-red-400"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+              <p className="text-orange-300">
+                Tu costo de renovación ({mesesRenovarRev}M / {diasRenovarRev}d):{" "}
+                <b className="text-white">
+                  Bs {(obtenerPrecioRevendedorPlat(subRenovarRev.plataforma) * Number(mesesRenovarRev || 1)).toFixed(2)}
+                </b>
+              </p>
+            </div>
+
+            <div className="flex gap-1">
+              {[
+                { valor: 1, dias: 30, texto: "1M (30d)" },
+                { valor: 2, dias: 60, texto: "2M (60d)" },
+                { valor: 3, dias: 90, texto: "3M (90d)" },
+                { valor: 6, dias: 180, texto: "6M (180d)" }
+              ].map((op) => (
+                <button
+                  key={op.valor}
+                  type="button"
+                  onClick={() => {
+                    setMesesRenovarRev(op.valor);
+                    setDiasRenovarRev(op.dias);
+                  }}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-extrabold border cursor-pointer ${
+                    Number(mesesRenovarRev) === op.valor
+                      ? "bg-amber-400 text-black border-amber-400"
+                      : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
+                  {op.texto}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-gray-400">Días a sumar:</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={diasRenovarRev}
+                  onChange={(e) => {
+                    const d = Math.max(1, Number(e.target.value || 30));
+                    setDiasRenovarRev(d);
+                    setMesesRenovarRev(Math.max(1, Math.round(d / 30)));
+                  }}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white text-center font-bold"
+                />
               </div>
-            )}
-          </div>
+              <div>
+                <label className="text-[11px] text-[#66FF00] font-bold">Precio cobrado a tu cliente (Bs):</label>
+                <input
+                  type="text"
+                  value={precioCobradoRenovarRev}
+                  onChange={(e) => setPrecioCobradoRenovarRev(limpiarMontoConSigno(e.target.value))}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold text-center"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setSubRenovarRev(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button type="submit" disabled={guardandoRenovRev} className="flex-1 py-2.5 bg-amber-400 text-black rounded-xl text-xs font-black cursor-pointer">
+                {guardandoRenovRev ? "Renovando..." : "Confirmar Renovación"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -1294,36 +1429,53 @@ export default function PortalRevendedor({
               </div>
             </div>
 
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer"
-            >
+            <button type="submit" className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
               Guardar Cambios
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                const msg = generarMensajeCambioCredencial(
-                  "PIN de tu perfil",
-                  perfilPropioModal.matriz.plataforma,
-                  perfilPropioModal.matriz.correo,
-                  perfilPropioModal.matriz.password,
-                  perfilPropioModal.perfil.nombre_perfil,
-                  pinEditRev
-                );
-                navigator.clipboard.writeText(msg);
-                notificar("Aviso corto de cambio de PIN copiado");
-              }}
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Copy className="w-4 h-4" /> Copiar Aviso de Cambio de PIN (Morado)
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const msg = generarMensajeCambioCredencial(
+                    "PIN de tu perfil",
+                    perfilPropioModal.matriz.plataforma,
+                    perfilPropioModal.matriz.correo,
+                    perfilPropioModal.matriz.password,
+                    perfilPropioModal.perfil.nombre_perfil,
+                    pinEditRev
+                  );
+                  navigator.clipboard.writeText(msg);
+                  notificar("Aviso corto de cambio de PIN copiado");
+                }}
+                className="py-2.5 bg-purple-600 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copiar Aviso PIN
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const msg = generarMensajeCambioCredencial(
+                    "PIN de tu perfil",
+                    perfilPropioModal.matriz.plataforma,
+                    perfilPropioModal.matriz.correo,
+                    perfilPropioModal.matriz.password,
+                    perfilPropioModal.perfil.nombre_perfil,
+                    pinEditRev
+                  );
+                  enviarWhatsappDirecto(telCliEditRev, msg);
+                }}
+                className="py-2.5 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" /> Enviar por WhatsApp
+              </button>
+            </div>
           </form>
         </div>
       )}
 
-      {/* MODAL ANOTAR CLIENTE FINAL Y PRECIO */}
+      {/* MODAL ANOTAR CLIENTE FINAL */}
       {subAnotar && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1342,7 +1494,6 @@ export default function PortalRevendedor({
               <label className="text-xs text-gray-400">Nombre de tu Cliente Final *</label>
               <input
                 type="text"
-                placeholder="Ej: Carlos Pérez"
                 value={nomFinal}
                 onChange={(e) => setNomFinal(e.target.value)}
                 className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
@@ -1352,7 +1503,6 @@ export default function PortalRevendedor({
               <label className="text-xs text-gray-400">Teléfono / WhatsApp de tu Cliente *</label>
               <input
                 type="text"
-                placeholder="Ej: 71234567"
                 value={telFinal}
                 onChange={(e) => setTelFinal(e.target.value)}
                 className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
@@ -1364,7 +1514,6 @@ export default function PortalRevendedor({
               </label>
               <input
                 type="text"
-                placeholder="Ej: 25"
                 value={precioFinal}
                 onChange={(e) => setPrecioFinal(limpiarMontoConSigno(e.target.value))}
                 className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
@@ -1382,47 +1531,38 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL SACAR CUENTA DE STOCK CON SELECTOR DE MESES Y DÍAS PERSONALIZADOS    */}
-      {/* ========================================================================= */}
+      {/* MODAL SACAR CUENTA DE STOCK */}
       {matrizVender && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
             onSubmit={venderPerfilDeMatriz}
-            className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal"
+            className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4"
           >
             <div className="flex justify-between items-center border-b border-[#233820] pb-2">
               <h3 className="font-black text-[#66FF00] text-base">
                 Sacar 1 Perfil de {matrizVender.plataforma}
               </h3>
-              <button type="button" onClick={() => setMatrizVender(null)} className="text-gray-400 hover:text-white">
+              <button type="button" onClick={() => setMatrizVender(null)} className="text-gray-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* RESUMEN DINÁMICO DE COSTO Y VENCIMIENTO */}
             <div className="text-xs text-orange-300 bg-orange-950/40 border border-orange-500/40 p-3 rounded-2xl space-y-1">
               <p>
-                Costo base: <b>Bs {obtenerPrecioRevendedorPlat(matrizVender.plataforma)} / mes</b> · Total a pagar a Admin por{" "}
-                <b>{mesesStock}M ({diasStockPersonalizados} días)</b>:{" "}
+                Total a pagar a Admin por <b>{mesesStock}M ({diasStockPersonalizados} días)</b>:{" "}
                 <b className="text-white text-sm">
                   Bs {(obtenerPrecioRevendedorPlat(matrizVender.plataforma) * Number(mesesStock || 1)).toFixed(2)}
                 </b>
               </p>
               <p className="text-[11px] text-gray-300">
-                Fecha de corte calculada:{" "}
+                Fecha de corte:{" "}
                 <b className="text-[#66FF00]">
                   {formatearFechaDMA(sumarDiasBoliviaISO(Number(diasStockPersonalizados || 30), hoyISO))}
                 </b>
               </p>
             </div>
 
-            {/* SELECTOR DE MESES O DÍAS IGUAL QUE EN EL PANEL DE ADMIN */}
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2.5">
-              <label className="text-xs text-[#66FF00] font-extrabold block">
-                Duración del Plan: {diasStockPersonalizados} días ({mesesStock}M)
-              </label>
-
               <div className="flex gap-1">
                 {[
                   { valor: 1, texto: "1M (30d)" },
@@ -1458,7 +1598,7 @@ export default function PortalRevendedor({
                   />
                 </div>
                 <div>
-                  <span className="text-[10px] text-[#66FF00] font-bold">O escribe Días (Ej: 90):</span>
+                  <span className="text-[10px] text-[#66FF00] font-bold">O escribe Días:</span>
                   <input
                     type="number"
                     min="1"
@@ -1470,42 +1610,29 @@ export default function PortalRevendedor({
               </div>
             </div>
 
-            <div>
-              <label className="text-xs text-gray-400">Nombre de tu Cliente Final *</label>
-              <input
-                type="text"
-                placeholder="Ej: Juan Pérez"
-                value={nomVentaStock}
-                onChange={(e) => setNomVentaStock(e.target.value)}
-                className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
-              />
-            </div>
+            <input
+              type="text"
+              placeholder="Nombre de tu Cliente Final *"
+              value={nomVentaStock}
+              onChange={(e) => setNomVentaStock(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Teléfono de tu Cliente Final *"
+              value={telVentaStock}
+              onChange={(e) => setTelVentaStock(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Precio Total al que se lo vendiste (Bs) *"
+              value={precioVentaStock}
+              onChange={(e) => setPrecioVentaStock(limpiarMontoConSigno(e.target.value))}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
+            />
 
-            <div>
-              <label className="text-xs text-gray-400">Teléfono de tu Cliente Final *</label>
-              <input
-                type="text"
-                placeholder="Ej: 71234567"
-                value={telVentaStock}
-                onChange={(e) => setTelVentaStock(e.target.value)}
-                className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-[#66FF00] font-bold">
-                Precio Total al que se lo vendiste a tu cliente (Bs) *
-              </label>
-              <input
-                type="text"
-                placeholder="Ej: 25"
-                value={precioVentaStock}
-                onChange={(e) => setPrecioVentaStock(limpiarMontoConSigno(e.target.value))}
-                className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
-              />
-            </div>
-
-            <div className="flex gap-2 pt-1">
+            <div className="flex gap-2">
               <button type="button" onClick={() => setMatrizVender(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
                 Cancelar
               </button>
@@ -1517,7 +1644,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL REGISTRAR MOVIMIENTO EN BILLETERA */}
+      {/* MODAL AJUSTE DE BILLETERA */}
       {modalAjusteBanca && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1532,15 +1659,12 @@ export default function PortalRevendedor({
                 <X className="w-5 h-5" />
               </button>
             </div>
-
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setTipoMovBanca("gasto")}
                 className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                  tipoMovBanca === "gasto"
-                    ? "bg-red-600 text-white border-red-400"
-                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  tipoMovBanca === "gasto" ? "bg-red-600 text-white border-red-400" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                 }`}
               >
                 ➖ Gasto / Retiro (-)
@@ -1549,32 +1673,23 @@ export default function PortalRevendedor({
                 type="button"
                 onClick={() => setTipoMovBanca("ingreso")}
                 className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                  tipoMovBanca === "ingreso"
-                    ? "bg-[#66FF00] text-black border-[#66FF00]"
-                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  tipoMovBanca === "ingreso" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                 }`}
               >
                 ➕ Ingreso Extra (+)
               </button>
             </div>
-
-            <div>
-              <label className="text-xs text-gray-400">
-                Monto (Bs) — (Acepta números y signos + / -, bloquea letras)
-              </label>
-              <input
-                type="text"
-                autoComplete="off"
-                placeholder={tipoMovBanca === "gasto" ? "Ej: 15 o -15" : "Ej: 20 o +20"}
-                value={montoBanca}
-                onChange={(e) => setMontoBanca(limpiarMontoConSigno(e.target.value))}
-                className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-sm text-white font-bold"
-              />
-            </div>
-
             <input
               type="text"
-              placeholder="Descripción (Ej: Retiro o publicidad)"
+              autoComplete="off"
+              placeholder="Monto Bs"
+              value={montoBanca}
+              onChange={(e) => setMontoBanca(limpiarMontoConSigno(e.target.value))}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-sm text-white font-bold"
+            />
+            <input
+              type="text"
+              placeholder="Descripción"
               value={descBanca}
               onChange={(e) => setDescBanca(e.target.value)}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
@@ -1591,13 +1706,13 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL MENSAJE DE ENTREGA */}
+      {/* MODAL MENSAJE DE ENTREGA CON BOTÓN ENVIAR PEDIDO DIRECTO A WHATSAPP */}
       {mensajeModal && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-[#66FF00] font-black text-sm flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5" /> Datos Listos para Enviar
+                <CheckCircle2 className="w-5 h-5" /> Datos Listos para Entregar
               </h3>
               <button onClick={() => setMensajeModal(null)} className="text-gray-400">
                 <X className="w-5 h-5" />
@@ -1609,24 +1724,26 @@ export default function PortalRevendedor({
               value={mensajeModal.completo}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-2xl p-3 text-xs text-white font-mono"
             />
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(mensajeModal.completo);
                   notificar("¡Copiado!");
                 }}
-                className="py-2.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
+                className="py-3 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Copy className="w-4 h-4" /> Copiar
+                <Copy className="w-4 h-4" /> Copiar Mensaje
               </button>
               <button
-                onClick={() => {
-                  if (navigator.share) navigator.share({ text: mensajeModal.completo });
-                  else navigator.clipboard.writeText(mensajeModal.completo);
-                }}
-                className="py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
+                onClick={() =>
+                  enviarWhatsappDirecto(
+                    mensajeModal.telefonoClienteFinal || "",
+                    mensajeModal.completo
+                  )
+                }
+                className="py-3 bg-[#66FF00] text-black rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_20px_rgba(102,255,0,0.4)]"
               >
-                <Share2 className="w-4 h-4" /> Compartir
+                <Send className="w-4 h-4" /> 📲 Enviar Pedido por WhatsApp
               </button>
             </div>
           </div>

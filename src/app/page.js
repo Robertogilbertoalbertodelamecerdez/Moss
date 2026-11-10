@@ -73,7 +73,7 @@ export default function MossCRM() {
   const [notificaciones, setNotificaciones] = useState([]);
 
   const [modalYolo, setModalYolo] = useState(false);
-  const [tipoAjusteYolo, setTipoAjusteYolo] = useState("gasto"); // 'gasto' | 'ingreso'
+  const [tipoAjusteYolo, setTipoAjusteYolo] = useState("gasto");
   const [montoAjusteYolo, setMontoAjusteYolo] = useState("");
   const [descAjusteYolo, setDescAjusteYolo] = useState("");
   const [afectaGanancia, setAfectaGanancia] = useState(false);
@@ -116,7 +116,7 @@ export default function MossCRM() {
       supabase.from("revendedores").select("*").order("creado_en", { ascending: false }),
       supabase.from("movimientos_yolo").select("*").order("fecha", { ascending: false }),
       supabase.from("movimientos_revendedor").select("*").order("fecha", { ascending: false }),
-      supabase.from("plataformas").select("*").order("creado_en", { ascending: true }),
+      supabase.from("plataformas").select("*").order("orden", { ascending: true }).order("creado_en", { ascending: true }),
       supabase.from("ajustes_sistema").select("*"),
       supabase.from("notificaciones_sistema").select("*").order("creado_en", { ascending: false }).limit(60)
     ]);
@@ -132,9 +132,10 @@ export default function MossCRM() {
 
     if (platRes.data && platRes.data.length > 0) {
       setPlataformasList(
-        platRes.data.map((p) => ({
+        platRes.data.map((p, idx) => ({
           id: p.id,
           nombre: p.nombre,
+          orden: p.orden ?? idx + 1,
           perfilesDefault: p.perfiles_default ?? 5,
           tieneExtra2020: p.tiene_extra_2020 ?? false,
           pidePass: p.pide_pass ?? true,
@@ -233,6 +234,34 @@ export default function MossCRM() {
     notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
   };
 
+  // Liquidar todas las cuentas pendientes de pago de golpe
+  const cobrarTodasLasPendientes = async () => {
+    const pendientes = notificaciones.filter((n) => n.tipo === "venta_revendedor" && !n.pagado);
+    if (pendientes.length === 0) return;
+
+    let sumaTotal = 0;
+    for (const n of pendientes) {
+      sumaTotal += Number(n.monto_cobrar || 0);
+      await supabase.from("notificaciones_sistema").update({ pagado: true, leido: true }).eq("id", n.id);
+      if (n.suscripcion_id) {
+        await supabase.from("suscripciones").update({ pagado_al_admin: true }).eq("id", n.suscripcion_id);
+      }
+      if (Number(n.monto_cobrar) > 0) {
+        await supabase.from("movimientos_yolo").insert([
+          {
+            tipo: "Ingreso Venta",
+            monto: Math.abs(Number(n.monto_cobrar)),
+            afecta_ganancia_neta: true,
+            descripcion: `Liquidación de cobro revendedor ${n.nombre_revendedor || ""} (${n.titulo})`,
+            referencia_id: n.suscripcion_id
+          }
+        ]);
+      }
+    }
+    await recargarTodo();
+    notificar(`¡${pendientes.length} cobros marcados como Pagados (+Bs ${sumaTotal.toFixed(2)})!`);
+  };
+
   const hoyBolivia = obtenerFechaBoliviaISO();
   const hace7DiasBolivia = sumarDiasBoliviaISO(-6, hoyBolivia);
   const mesActualBolivia = hoyBolivia.slice(0, 7);
@@ -300,7 +329,12 @@ export default function MossCRM() {
     if (s.en_papelera || s.estado !== "Activa") return false;
     const corte = new Date(s.fecha_corte + "T00:00:00-04:00");
     const dias = Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
-    return dias <= 3 && !s.avisado_renovacion;
+    const venceCliente = dias <= 3 && !s.avisado_renovacion;
+    const venceProveedorIntermedio =
+      s.fecha_renovacion_proveedor &&
+      s.fecha_renovacion_proveedor < s.fecha_corte &&
+      Math.ceil((new Date(s.fecha_renovacion_proveedor + "T00:00:00-04:00") - hoy) / (1000 * 60 * 60 * 24)) <= 3;
+    return venceCliente || venceProveedorIntermedio;
   }).length;
 
   const cantidadCaidos = suscripciones.filter((s) => !s.en_papelera && s.estado === "Caida").length;
@@ -746,7 +780,7 @@ export default function MossCRM() {
               <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[90vh] overflow-y-auto animate-modal">
                 <div className="flex justify-between items-center border-b border-[#233820] pb-3">
                   <h3 className="font-black text-[#66FF00] text-base flex items-center gap-2">
-                    <Bell className="w-5 h-5" /> Centro de Cobros a Revendedores & Registro de Errores
+                    <Bell className="w-5 h-5" /> Centro de Cobros (Stock y Renovaciones de Revendedores)
                   </h3>
                   <button onClick={() => setModalNotificaciones(false)} className="text-gray-400 hover:text-white">
                     <X className="w-5 h-5" />
@@ -754,13 +788,23 @@ export default function MossCRM() {
                 </div>
 
                 <div className="space-y-2.5">
-                  <h4 className="text-xs font-extrabold uppercase text-amber-300">
-                    🛒 Cuentas de Stock sacadas por Revendedores ({notificaciones.filter((n) => n.tipo === "venta_revendedor").length})
-                  </h4>
+                  <div className="flex flex-wrap justify-between items-center gap-2">
+                    <h4 className="text-xs font-extrabold uppercase text-amber-300">
+                      🛒 Cuentas de Stock y Renovaciones por Cobrar ({notificaciones.filter((n) => n.tipo === "venta_revendedor").length})
+                    </h4>
+                    {cobrosPendientesCount > 1 && (
+                      <button
+                        onClick={cobrarTodasLasPendientes}
+                        className="px-3.5 py-1.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer"
+                      >
+                        ✅ Marcar Todas como Pagadas ({cobrosPendientesCount})
+                      </button>
+                    )}
+                  </div>
 
                   {notificaciones.filter((n) => n.tipo === "venta_revendedor").length === 0 ? (
                     <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
-                      Ningún revendedor ha sacado perfiles de tu Stock todavía.
+                      No hay cuentas ni renovaciones pendientes de cobro.
                     </p>
                   ) : (
                     notificaciones
@@ -846,11 +890,11 @@ export default function MossCRM() {
                             <button
                               onClick={() => {
                                 navigator.clipboard.writeText(err.detalle_tecnico || err.mensaje);
-                                notificar("Error copiado para pegar en el chat");
+                                notificar("Error copiado");
                               }}
-                              className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                              className="px-3 py-1.5 bg-red-600 text-white font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                             >
-                              <Copy className="w-3.5 h-3.5" /> Copiar Error
+                              <Copy className="w-3.5 h-3.5" /> Copiar
                             </button>
                             <button
                               onClick={async () => {
@@ -870,7 +914,6 @@ export default function MossCRM() {
             </div>
           )}
 
-          {/* MODAL AJUSTAR SALDO YOLO CON TECLADO UNIVERSAL + BLOQUEO DE LETRAS */}
           {modalYolo && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <form
@@ -912,13 +955,11 @@ export default function MossCRM() {
                 </div>
 
                 <div>
-                  <label className="text-xs text-gray-400">
-                    Monto (Bs) — (Acepta números y signos + / -, bloquea letras)
-                  </label>
+                  <label className="text-xs text-gray-400">Monto (Bs)</label>
                   <input
                     type="text"
                     autoComplete="off"
-                    placeholder={tipoAjusteYolo === "gasto" ? "Ej: 15.50 o -15.50" : "Ej: 50 o +50"}
+                    placeholder="Ej: 15.50"
                     value={montoAjusteYolo}
                     onChange={(e) => setMontoAjusteYolo(limpiarMontoConSigno(e.target.value))}
                     className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-white font-bold"
