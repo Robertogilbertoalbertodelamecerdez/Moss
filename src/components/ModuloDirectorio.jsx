@@ -6,6 +6,7 @@ import {
   formatearFechaDMA,
   sumarDiasBoliviaISO
 } from "@/config";
+import { extraerDatosProveedor } from "@/utils/extractorProveedor";
 import { generarMensajeEntrega, enviarWhatsappDirecto } from "@/utils/mensajesMoss";
 import {
   Search,
@@ -21,7 +22,8 @@ import {
   MessageSquare,
   Copy,
   CheckCircle2,
-  Send
+  Send,
+  Sparkles
 } from "lucide-react";
 
 export default function ModuloDirectorio({
@@ -42,19 +44,23 @@ export default function ModuloDirectorio({
 
   const [mensajeActivo, setMensajeActivo] = useState(null);
 
+  // Estados del Modal de Reemplazo (Matriz Stock o Proveedor a mano)
   const [subReemplazo, setSubReemplazo] = useState(null);
-  const [origenReemp, setOrigenReemp] = useState("stock");
+  const [origenReemp, setOrigenReemp] = useState("proveedor");
   const [matrizReempId, setMatrizReempId] = useState("");
   const [provReempId, setProvReempId] = useState("");
+  const [textoCrudoReemp, setTextoCrudoReemp] = useState("");
   const [correoReemp, setCorreoReemp] = useState("");
   const [passReemp, setPassReemp] = useState("");
   const [perfilReemp, setPerfilReemp] = useState("");
   const [pinReemp, setPinReemp] = useState("");
   const [costoReemp, setCostoReemp] = useState(0);
 
+  // Estados del Modal de Reembolso
   const [subReembolso, setSubReembolso] = useState(null);
   const [montoReembolsoCalc, setMontoReembolsoCalc] = useState(0);
 
+  // Estados del Modal de Edición Total
   const [subEditar, setSubEditar] = useState(null);
   const [matrizNuevaEdicionId, setMatrizNuevaEdicionId] = useState("");
 
@@ -88,6 +94,177 @@ export default function ModuloDirectorio({
       s.tipo_comprador === "revendedor"
     );
     setMensajeActivo(msg);
+  };
+
+  // Abre el modal de Dar Reemplazo precargando los mismos datos de la cuenta caída
+  const abrirModalReemplazo = (s) => {
+    const matricesMismaPlat = matrices.filter(
+      (m) =>
+        !m.en_papelera &&
+        m.estado === "Activa" &&
+        m.plataforma === s.plataforma &&
+        (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
+    );
+    const tieneStock = matricesMismaPlat.length > 0;
+
+    setSubReemplazo(s);
+    setOrigenReemp(tieneStock ? "stock" : "proveedor");
+    setMatrizReempId(matricesMismaPlat[0]?.id || "");
+    setProvReempId(s.proveedor_id || proveedores[0]?.id || "");
+    setTextoCrudoReemp("");
+    setCorreoReemp("");
+    setPassReemp("");
+    setPerfilReemp(s.nombre_perfil || "1 Dispositivo");
+    setPinReemp("");
+    setCostoReemp(0);
+  };
+
+  const procesarTextoProveedorReemplazo = (texto) => {
+    setTextoCrudoReemp(texto);
+    const ext = extraerDatosProveedor(texto, plataformasList);
+    if (ext.correo) setCorreoReemp(ext.correo);
+    if (ext.password) setPassReemp(ext.password);
+    if (ext.perfil) setPerfilReemp(ext.perfil);
+    if (ext.pin) setPinReemp(ext.pin);
+    notificar("Datos extraídos para el reemplazo");
+  };
+
+  // Ejecuta el reemplazo manteniendo intacta la Fecha de Vencimiento, Cliente, Revendedor, Plan y Precio
+  const ejecutarReemplazo = async (e) => {
+    e.preventDefault();
+    if (!subReemplazo) return;
+
+    const estabaCaida = subReemplazo.estado === "Caida";
+    let nuevosDatos = {
+      estado: "Activa",
+      // Se mantienen intactos fecha_corte, fecha_venta, dias_totales, meses_contratados, cliente y revendedor
+      fecha_corte: subReemplazo.fecha_corte,
+      fecha_venta: subReemplazo.fecha_venta,
+      dias_totales: subReemplazo.dias_totales,
+      meses_contratados: subReemplazo.meses_contratados,
+      precio_venta: subReemplazo.precio_venta,
+      nombre_cliente: subReemplazo.nombre_cliente,
+      telefono_cliente: subReemplazo.telefono_cliente,
+      nombre_cliente_final: subReemplazo.nombre_cliente_final,
+      telefono_cliente_final: subReemplazo.telefono_cliente_final
+    };
+
+    if (origenReemp === "stock") {
+      const mat = matrices.find((m) => m.id === matrizReempId);
+      if (!mat) return notificar("Selecciona una matriz con espacio libre", "error");
+      const libres = (mat.perfiles_matriz || [])
+        .filter((p) => !p.ocupado && !p.caido)
+        .sort((a, b) => (a.es_extra_final !== b.es_extra_final ? (a.es_extra_final ? 1 : -1) : a.numero_slot - b.numero_slot));
+
+      const slot = libres[0];
+      if (!slot) return notificar("Esa matriz no tiene perfiles libres", "error");
+
+      if (subReemplazo.perfil_id) {
+        await supabase
+          .from("perfiles_matriz")
+          .update({ ocupado: false, caido: estabaCaida ? true : false })
+          .eq("id", subReemplazo.perfil_id);
+      }
+      await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
+
+      nuevosDatos = {
+        ...nuevosDatos,
+        origen: "stock",
+        matriz_id: mat.id,
+        perfil_id: slot.id,
+        proveedor_id: mat.proveedor_id || null,
+        nombre_proveedor: mat.nombre_proveedor || null,
+        telefono_proveedor: mat.telefono_proveedor || null,
+        correo_cuenta: mat.correo,
+        password_cuenta: mat.password,
+        nombre_perfil: slot.nombre_perfil,
+        pin_perfil: slot.pin
+      };
+    } else {
+      if (!correoReemp.trim()) return notificar("Ingresa el nuevo correo de reemplazo", "error");
+
+      if (subReemplazo.perfil_id) {
+        await supabase
+          .from("perfiles_matriz")
+          .update({ ocupado: false, caido: estabaCaida ? true : false })
+          .eq("id", subReemplazo.perfil_id);
+      }
+
+      const provObj = proveedores.find((p) => p.id === (provReempId || proveedores[0]?.id));
+      nuevosDatos = {
+        ...nuevosDatos,
+        origen: "proveedor",
+        matriz_id: null,
+        perfil_id: null,
+        proveedor_id: provObj ? provObj.id : subReemplazo.proveedor_id,
+        nombre_proveedor: provObj ? provObj.nombre : subReemplazo.nombre_proveedor,
+        telefono_proveedor: provObj ? provObj.telefono : subReemplazo.telefono_proveedor,
+        correo_cuenta: correoReemp.trim(),
+        password_cuenta: passReemp.trim(),
+        nombre_perfil: perfilReemp.trim() || subReemplazo.nombre_perfil || "1 Dispositivo",
+        pin_perfil: pinReemp.trim()
+      };
+    }
+
+    const { data: actualizada, error } = await supabase
+      .from("suscripciones")
+      .update(nuevosDatos)
+      .eq("id", subReemplazo.id)
+      .select()
+      .single();
+
+    if (error) return notificar("Error al reemplazar: " + error.message, "error");
+
+    if (Number(costoReemp) > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          tipo: "Costo Proveedor",
+          monto: -Math.abs(Number(costoReemp)),
+          afecta_ganancia_neta: true,
+          descripcion: `Costo reemplazo ${subReemplazo.plataforma} a ${subReemplazo.nombre_cliente}`,
+          referencia_id: subReemplazo.id
+        }
+      ]);
+    }
+
+    setSubReemplazo(null);
+    await recargarTodo();
+    notificar("¡Reemplazo aplicado manteniendo su fecha de corte! Mensaje listo para enviar");
+    if (actualizada) abrirMensajeDeSuscripcion(actualizada, "REEMPLAZO DE CUENTA");
+  };
+
+  const abrirModalReembolso = (s) => {
+    const diasRest = Math.max(0, calcularDiasRestantes(s.fecha_corte));
+    const diasContratados = Number(s.dias_totales || 30);
+    setSubReembolso(s);
+    setMontoReembolsoCalc(((Number(s.precio_venta) / diasContratados) * diasRest).toFixed(2));
+  };
+
+  const ejecutarReembolsoConfirmado = async () => {
+    if (!subReembolso) return;
+    if (subReembolso.perfil_id) {
+      await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subReembolso.perfil_id);
+    }
+    await supabase.from("suscripciones").update({ estado: "Reembolsada", perfil_id: null }).eq("id", subReembolso.id);
+    await supabase.from("movimientos_yolo").insert([
+      {
+        tipo: "Reembolso",
+        monto: -Math.abs(Number(montoReembolsoCalc)),
+        afecta_ganancia_neta: true,
+        descripcion: `Reembolso a ${subReembolso.nombre_cliente}`,
+        referencia_id: subReembolso.id
+      }
+    ]);
+    setSubReembolso(null);
+    await recargarTodo();
+    notificar(`Reembolso de Bs ${montoReembolsoCalc} aplicado`);
+  };
+
+  const cancelarReembolso = async (s) => {
+    await supabase.from("movimientos_yolo").delete().eq("referencia_id", s.id).eq("tipo", "Reembolso");
+    await supabase.from("suscripciones").update({ estado: "Activa" }).eq("id", s.id);
+    await recargarTodo();
+    notificar("Reembolso cancelado");
   };
 
   const handleCambiarPlataformaEnEdicion = (nuevaPlatNombre) => {
@@ -198,7 +375,11 @@ export default function ModuloDirectorio({
       await supabase.from("perfiles_matriz").update({ caido: nuevo === "Caida" }).eq("id", s.perfil_id);
     }
     await recargarTodo();
-    notificar(nuevo === "Caida" ? "Cuenta marcada como Caída" : "Cuenta reactivada");
+    notificar(
+      nuevo === "Caida"
+        ? "Cuenta marcada como Caída. Usa el botón amarillo 'Dar Reemplazo' para reemplazarla."
+        : "Cuenta reactivada"
+    );
   };
 
   const guardarEdicionManual = async (e) => {
@@ -272,7 +453,6 @@ export default function ModuloDirectorio({
         pin_perfil: slot.pin
       };
     } else if (subEditar.perfil_id) {
-      // Si mantuviste la misma matriz y cambiaste el PIN o Perfil, sincronizarlo en perfiles_matriz
       await supabase
         .from("perfiles_matriz")
         .update({
@@ -289,7 +469,6 @@ export default function ModuloDirectorio({
       .select()
       .single();
 
-    // Actualizar también el monto en movimientos_yolo y en la alerta de cobro del revendedor (ej. si cambiaste de 8 a 4 Bs)
     await supabase
       .from("movimientos_yolo")
       .update({
@@ -369,6 +548,7 @@ export default function ModuloDirectorio({
             { id: "revendedores", label: "🤝 Solo Revendedores" },
             { id: "vence_3", label: "Por Vencer (≤ 3 días)" },
             { id: "caidos", label: "⚠️ Caídos" },
+            { id: "reembolsados", label: "Reembolsados" },
             { id: "papelera", label: "🗑️ Papelera" }
           ].map((b) => (
             <button
@@ -384,6 +564,7 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
+      {/* LISTA DE SUSCRIPCIONES CON BOTÓN AMARILLO "DAR REEMPLAZO" Y "REEMBOLSAR" */}
       <div className="space-y-3">
         {suscripcionesFiltradas.map((s) => {
           const dias = calcularDiasRestantes(s.fecha_corte);
@@ -397,7 +578,7 @@ export default function ModuloDirectorio({
             <div
               key={s.id}
               className={`bg-[#111A10] border rounded-2xl p-4 space-y-3 ${
-                s.estado === "Caida" ? "border-red-500" : "border-[#233820]"
+                s.estado === "Caida" ? "border-2 border-red-500 bg-red-950/15" : "border-[#233820]"
               }`}
             >
               <div className="flex flex-wrap justify-between items-start gap-2">
@@ -412,6 +593,11 @@ export default function ModuloDirectorio({
                     <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
                       💰 Te pagó: Bs {s.precio_venta}
                     </span>
+                    {s.estado === "Caida" && (
+                      <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-red-600 text-white animate-pulse">
+                        ⚠️ CUENTA CAÍDA
+                      </span>
+                    )}
                     {tieneRenovIntermediaProv && (
                       <span className="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-500 text-black">
                         📦 Pagado a Prov: {s.meses_pagados_proveedor || 1}M · Avisar el:{" "}
@@ -429,7 +615,6 @@ export default function ModuloDirectorio({
                     )}
                   </h3>
 
-                  {/* CORREO, CLAVE, PERFIL Y PIN VISIBLES EN CADA TARJETA */}
                   <p className="text-xs text-gray-300">
                     Correo: <span className="font-mono text-white">{s.correo_cuenta}</span>
                     {s.password_cuenta ? (
@@ -487,6 +672,34 @@ export default function ModuloDirectorio({
                     {s.estado === "Caida" ? "Quitar Caído" : "Marcar Caído"}
                   </button>
 
+                  {/* BOTÓN AMARILLO DAR REEMPLAZO (SIEMPRE VISIBLE Y DESTACADO CUANDO ESTÁ CAÍDA) */}
+                  <button
+                    onClick={() => abrirModalReemplazo(s)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer ${
+                      s.estado === "Caida"
+                        ? "bg-amber-400 text-black shadow-[0_0_20px_rgba(251,191,36,0.5)] ring-2 ring-amber-300"
+                        : "bg-amber-500 hover:bg-amber-400 text-black"
+                    }`}
+                  >
+                    <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo
+                  </button>
+
+                  {s.estado !== "Reembolsada" ? (
+                    <button
+                      onClick={() => abrirModalReembolso(s)}
+                      className="px-2.5 py-1.5 bg-purple-950/80 text-purple-300 border border-purple-700/50 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <DollarSign className="w-3.5 h-3.5" /> Reembolsar
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => cancelarReembolso(s)}
+                      className="px-2.5 py-1.5 bg-yellow-500 text-black rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" /> Cancelar Reembolso
+                    </button>
+                  )}
+
                   <button
                     onClick={() => enviarAPapelera(s)}
                     className="ml-auto p-1.5 bg-gray-900 text-gray-400 hover:text-red-400 rounded-xl cursor-pointer"
@@ -501,8 +714,231 @@ export default function ModuloDirectorio({
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL EDICIÓN TOTAL: AHORA CON PRECIO COBRADO, COSTO, PERFIL Y PIN        */}
+      {/* MODAL DAR REEMPLAZO (MATRIZ DE STOCK O PROVEEDOR A MANO + MISMA FECHA)     */}
       {/* ========================================================================= */}
+      {subReemplazo && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <form
+            onSubmit={ejecutarReemplazo}
+            className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-lg w-full space-y-4 animate-modal"
+          >
+            <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+              <div>
+                <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
+                  <RefreshCcw className="w-5 h-5" /> Dar Reemplazo de {subReemplazo.plataforma}
+                </h3>
+                <p className="text-[11px] text-gray-300 mt-0.5">
+                  Comprador: <b className="text-white">{subReemplazo.nombre_cliente}</b> ({subReemplazo.telefono_cliente})
+                  {subReemplazo.nombre_cliente_final
+                    ? ` · Cliente Final: ${subReemplazo.nombre_cliente_final}`
+                    : ""}
+                </p>
+              </div>
+              <button type="button" onClick={() => setSubReemplazo(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* CAJA QUE CONFIRMA QUE SE CONSERVA LA MISMA FECHA DE VENCIMIENTO Y DATOS */}
+            <div className="bg-[#070B06] border border-[#66FF00]/50 rounded-2xl p-3 text-xs space-y-1">
+              <p className="text-[#66FF00] font-extrabold">
+                ✓ Se mantienen intactos su fecha de corte y todos sus datos:
+              </p>
+              <p className="text-gray-300">
+                📅 Fecha de Corte que se conserva: <b className="text-white">{formatearFechaDMA(subReemplazo.fecha_corte)}</b> · Plan:{" "}
+                <b>{subReemplazo.dias_totales || 30} días</b> · Pagó: <b>Bs {subReemplazo.precio_venta}</b>
+              </p>
+              <p className="text-[11px] text-gray-500">
+                Cuenta caída anterior: {subReemplazo.correo_cuenta}
+              </p>
+            </div>
+
+            {/* SELECTOR: SACAR PERFIL DE UNA MATRIZ O DAR CUENTA DE PROVEEDOR A MANO */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setOrigenReemp("stock")}
+                className={`py-2.5 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer ${
+                  origenReemp === "stock"
+                    ? "bg-[#66FF00] text-black border-[#66FF00]"
+                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                }`}
+              >
+                <Layers className="w-4 h-4" /> Seleccionar Matriz (Stock)
+              </button>
+              <button
+                type="button"
+                onClick={() => setOrigenReemp("proveedor")}
+                className={`py-2.5 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer ${
+                  origenReemp === "proveedor"
+                    ? "bg-amber-400 text-black border-amber-400"
+                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                }`}
+              >
+                <Truck className="w-4 h-4" /> De Proveedor (A Mano)
+              </button>
+            </div>
+
+            {origenReemp === "stock" ? (
+              <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3.5 space-y-2">
+                <label className="text-xs font-bold text-[#66FF00]">
+                  Elige la Matriz de donde saldrá el perfil de reemplazo:
+                </label>
+                <select
+                  value={matrizReempId}
+                  onChange={(e) => setMatrizReempId(e.target.value)}
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
+                >
+                  <option value="">-- Selecciona Matriz con cupos libres --</option>
+                  {matrices
+                    .filter(
+                      (m) =>
+                        !m.en_papelera &&
+                        m.estado === "Activa" &&
+                        (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
+                    )
+                    .map((m) => {
+                      const libres = (m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido);
+                      return (
+                        <option key={m.id} value={m.id}>
+                          {m.plataforma} — {m.correo} ({libres.length} libres 👉 asignará {libres[0]?.nombre_perfil})
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+            ) : (
+              <div className="bg-[#0B120A] border border-amber-400/50 rounded-2xl p-3.5 space-y-3">
+                <div>
+                  <label className="text-[11px] text-gray-400">Proveedor que dio el reemplazo</label>
+                  <select
+                    value={provReempId}
+                    onChange={(e) => setProvReempId(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                  >
+                    {proveedores.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nombre} ({p.telefono})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-[#66FF00] font-bold flex items-center gap-1">
+                    <Sparkles className="w-3.5 h-3.5" /> Pegar mensaje del proveedor (o llena a mano abajo):
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="Pega aquí correo y clave del reemplazo para extraer automático..."
+                    value={textoCrudoReemp}
+                    onChange={(e) => procesarTextoProveedorReemplazo(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-[#233820] rounded-xl p-2 text-xs text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[11px] text-amber-300 font-bold">Nuevo Correo *</label>
+                    <input
+                      type="text"
+                      placeholder="correo@gmail.com"
+                      value={correoReemp}
+                      onChange={(e) => setCorreoReemp(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-amber-300 font-bold">Nueva Contraseña</label>
+                    <input
+                      type="text"
+                      placeholder="Contraseña"
+                      value={passReemp}
+                      onChange={(e) => setPassReemp(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400">Perfil / Modalidad</label>
+                    <input
+                      type="text"
+                      placeholder="Ej: 1 Dispositivo o Perfil 1"
+                      value={perfilReemp}
+                      onChange={(e) => setPerfilReemp(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400">PIN (Opcional)</label>
+                    <input
+                      type="text"
+                      placeholder="Ej: 1234"
+                      value={pinReemp}
+                      onChange={(e) => setPinReemp(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-gray-400">
+                    Costo extra pagado al proveedor por este reemplazo (Bs) — Pon 0 si fue garantía gratis
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={costoReemp}
+                    onChange={(e) => setCostoReemp(e.target.value)}
+                    className="w-36 mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white block"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSubReemplazo(null)}
+                className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-amber-400 hover:bg-amber-300 text-black rounded-xl text-xs font-black cursor-pointer"
+              >
+                Confirmar Reemplazo y Generar Mensaje
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL REEMBOLSO */}
+      {subReembolso && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-6 max-w-sm w-full space-y-4">
+            <h3 className="font-bold text-purple-300">Calcular Reembolso ({subReembolso.nombre_cliente})</h3>
+            <input
+              type="number"
+              step="0.01"
+              value={montoReembolsoCalc}
+              onChange={(e) => setMontoReembolsoCalc(e.target.value)}
+              className="w-full bg-[#070B06] border border-purple-500 rounded-xl p-2.5 text-white font-bold"
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setSubReembolso(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button onClick={ejecutarReembolsoConfirmado} className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold cursor-pointer">
+                Confirmar Reembolso
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EDICIÓN TOTAL */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -544,7 +980,6 @@ export default function ModuloDirectorio({
               </div>
             </div>
 
-            {/* BLOQUE DE PLAN CONTRATADO EN MESES O DÍAS */}
             <div className="bg-[#0B120A] border border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
               <label className="text-xs font-extrabold text-[#66FF00]">
                 Plan Contratado ({subEditar.dias_totales || 30} días):
@@ -624,11 +1059,10 @@ export default function ModuloDirectorio({
               )}
             </div>
 
-            {/* CAMPOS COMPLETOS: PRECIO COBRADO (EJ: CAMBIAR DE 8 A 4), COSTO, PERFIL Y PIN */}
             <div className="grid grid-cols-2 gap-2.5">
               <div>
                 <label className="text-[11px] text-[#66FF00] font-black">
-                  💰 Precio Cobrado por Ti (Bs) — (Ej: pon 4 si regalaste 1M):
+                  💰 Precio Cobrado por Ti (Bs):
                 </label>
                 <input
                   type="number"
@@ -698,7 +1132,6 @@ export default function ModuloDirectorio({
                   type="text"
                   value={subEditar.nombre_perfil || ""}
                   onChange={(e) => setSubEditar({ ...subEditar, nombre_perfil: e.target.value })}
-                  placeholder="Ej: Perfil 1"
                   className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                 />
               </div>
@@ -709,7 +1142,6 @@ export default function ModuloDirectorio({
                   type="text"
                   value={subEditar.pin_perfil || ""}
                   onChange={(e) => setSubEditar({ ...subEditar, pin_perfil: e.target.value })}
-                  placeholder="Ej: 1234"
                   className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-mono font-bold"
                 />
               </div>

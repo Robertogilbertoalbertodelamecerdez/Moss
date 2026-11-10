@@ -2,7 +2,11 @@
 import React, { useState, useEffect } from "react";
 import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
 import { extraerDatosProveedor } from "@/utils/extractorProveedor";
-import { generarMensajeCambioCredencial, enviarWhatsappDirecto } from "@/utils/mensajesMoss";
+import {
+  generarMensajeCambioCredencial,
+  generarMensajeEntrega,
+  enviarWhatsappDirecto
+} from "@/utils/mensajesMoss";
 import {
   KeyRound,
   AlertTriangle,
@@ -15,8 +19,11 @@ import {
   User,
   UserCheck,
   UserX,
-  Phone,
-  Send
+  Send,
+  RefreshCcw,
+  Truck,
+  Sparkles,
+  CheckCircle2
 } from "lucide-react";
 
 export default function ModuloStock({
@@ -51,10 +58,27 @@ export default function ModuloStock({
   const [matrizCambioPass, setMatrizCambioPass] = useState(null);
   const [nuevaPass, setNuevaPass] = useState("");
 
+  // Modal para reemplazar el correo/clave de una Matriz Caída entera
+  const [matrizReemplazarCompleta, setMatrizReemplazarCompleta] = useState(null);
+  const [nuevoCorreoMatrizReemp, setNuevoCorreoMatrizReemp] = useState("");
+  const [nuevaPassMatrizReemp, setNuevaPassMatrizReemp] = useState("");
+  const [textoCrudoMatrizReemp, setTextoCrudoMatrizReemp] = useState("");
+
   const [perfilModal, setPerfilModal] = useState(null);
   const [nombrePerfilEdit, setNombrePerfilEdit] = useState("");
   const [pinPerfilEdit, setPinPerfilEdit] = useState("");
   const [passMatrizEnPerfilEdit, setPassMatrizEnPerfilEdit] = useState("");
+
+  // Estado dentro de la Personita para darle Reemplazo (Otra Matriz o Proveedor a mano)
+  const [modoReemplazoEnPersonita, setModoReemplazoEnPersonita] = useState(false);
+  const [origenReempPersonita, setOrigenReempPersonita] = useState("stock");
+  const [matrizDestinoReempId, setMatrizDestinoReempId] = useState("");
+  const [correoProvReempPersonita, setCorreoProvReempPersonita] = useState("");
+  const [passProvReempPersonita, setPassProvReempPersonita] = useState("");
+  const [perfilProvReempPersonita, setPerfilProvReempPersonita] = useState("");
+  const [pinProvReempPersonita, setPinProvReempPersonita] = useState("");
+
+  const [mensajeReemplazoListo, setMensajeReemplazoListo] = useState(null);
 
   useEffect(() => {
     setFechaCompra(new Date().toISOString().split("T")[0]);
@@ -65,6 +89,145 @@ export default function ModuloStock({
     setNombrePerfilEdit(perfil.nombre_perfil || "");
     setPinPerfilEdit(perfil.pin || "");
     setPassMatrizEnPerfilEdit(matriz.password || "");
+    setModoReemplazoEnPersonita(false);
+    setCorreoProvReempPersonita("");
+    setPassProvReempPersonita("");
+    setPerfilProvReempPersonita(perfil.nombre_perfil || "1 Dispositivo");
+    setPinProvReempPersonita("");
+  };
+
+  // Reemplazar a un cliente desde la Personita de la Matriz conservando su fecha de vencimiento
+  const ejecutarReemplazoDesdePersonita = async () => {
+    if (!perfilModal?.subOcupante) return;
+    const sub = perfilModal.subOcupante;
+
+    let nuevosDatos = {
+      estado: "Activa",
+      fecha_corte: sub.fecha_corte,
+      fecha_venta: sub.fecha_venta,
+      dias_totales: sub.dias_totales,
+      meses_contratados: sub.meses_contratados,
+      precio_venta: sub.precio_venta
+    };
+
+    if (origenReempPersonita === "stock") {
+      const mat = matrices.find((m) => m.id === matrizDestinoReempId);
+      if (!mat) return notificar("Selecciona la matriz de destino", "error");
+      const libres = (mat.perfiles_matriz || [])
+        .filter((p) => !p.ocupado && !p.caido)
+        .sort((a, b) => a.numero_slot - b.numero_slot);
+      const slot = libres[0];
+      if (!slot) return notificar("Esa matriz no tiene perfiles libres", "error");
+
+      await supabase
+        .from("perfiles_matriz")
+        .update({ ocupado: false, caido: true })
+        .eq("id", perfilModal.perfil.id);
+      await supabase
+        .from("perfiles_matriz")
+        .update({ ocupado: true, caido: false })
+        .eq("id", slot.id);
+
+      nuevosDatos = {
+        ...nuevosDatos,
+        origen: "stock",
+        matriz_id: mat.id,
+        perfil_id: slot.id,
+        correo_cuenta: mat.correo,
+        password_cuenta: mat.password,
+        nombre_perfil: slot.nombre_perfil,
+        pin_perfil: slot.pin
+      };
+    } else {
+      if (!correoProvReempPersonita.trim()) return notificar("Escribe el correo de reemplazo", "error");
+      await supabase
+        .from("perfiles_matriz")
+        .update({ ocupado: false, caido: true })
+        .eq("id", perfilModal.perfil.id);
+
+      nuevosDatos = {
+        ...nuevosDatos,
+        origen: "proveedor",
+        matriz_id: null,
+        perfil_id: null,
+        correo_cuenta: correoProvReempPersonita.trim(),
+        password_cuenta: passProvReempPersonita.trim(),
+        nombre_perfil: perfilProvReempPersonita.trim() || "1 Dispositivo",
+        pin_perfil: pinProvReempPersonita.trim()
+      };
+    }
+
+    const { data: actualizada, error } = await supabase
+      .from("suscripciones")
+      .update(nuevosDatos)
+      .eq("id", sub.id)
+      .select()
+      .single();
+
+    if (error) return notificar("Error: " + error.message, "error");
+
+    const msg = generarMensajeEntrega(
+      actualizada.nombre_cliente,
+      actualizada.telefono_cliente,
+      [
+        {
+          plataforma: actualizada.plataforma,
+          tipoCuenta: actualizada.tipo_cuenta || "1 Dispositivo",
+          correoFinal: actualizada.correo_cuenta,
+          passFinal: actualizada.password_cuenta,
+          perfilFinal: actualizada.nombre_perfil,
+          pinFinal: actualizada.pin_perfil,
+          meses: actualizada.meses_contratados || 1,
+          diasTotales: actualizada.dias_totales || 30,
+          fechaCorte: actualizada.fecha_corte,
+          precioVenta: actualizada.precio_venta
+        }
+      ],
+      "",
+      "REEMPLAZO DE CUENTA",
+      actualizada.tipo_comprador === "revendedor"
+    );
+
+    setPerfilModal(null);
+    setMensajeReemplazoListo(msg);
+    await recargarTodo();
+    notificar("¡Cliente reemplazado manteniendo su misma fecha de vencimiento!");
+  };
+
+  // Reemplazar toda una Matriz Caída por un nuevo Correo y Clave (actualiza a todos sus clientes activos/caídos manteniendo sus fechas de vencimiento)
+  const ejecutarReemplazoMatrizCompleta = async (e) => {
+    e.preventDefault();
+    if (!matrizReemplazarCompleta || !nuevoCorreoMatrizReemp.trim()) {
+      return notificar("Ingresa el nuevo correo para la matriz", "error");
+    }
+
+    await supabase
+      .from("matrices_stock")
+      .update({
+        correo: nuevoCorreoMatrizReemp.trim(),
+        password: nuevaPassMatrizReemp.trim(),
+        estado: "Activa"
+      })
+      .eq("id", matrizReemplazarCompleta.id);
+
+    await supabase
+      .from("perfiles_matriz")
+      .update({ caido: false })
+      .eq("matriz_id", matrizReemplazarCompleta.id);
+
+    await supabase
+      .from("suscripciones")
+      .update({
+        correo_cuenta: nuevoCorreoMatrizReemp.trim(),
+        password_cuenta: nuevaPassMatrizReemp.trim(),
+        estado: "Activa"
+      })
+      .eq("matriz_id", matrizReemplazarCompleta.id)
+      .in("estado", ["Activa", "Caida"]);
+
+    setMatrizReemplazarCompleta(null);
+    await recargarTodo();
+    notificar("¡Matriz y todos sus perfiles reemplazados manteniendo sus fechas de vencimiento!");
   };
 
   const guardarEdicionPerfilModal = async (e) => {
@@ -288,7 +451,7 @@ export default function ModuloStock({
             <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en Stock ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            Cada perfil muestra su PIN y al tocarlo puedes copiar o enviar el aviso de Contraseña o PIN con el número del revendedor.
+            Puedes dar reemplazo de toda una matriz caída o tocar cualquier personita para reemplazar su perfil por otra matriz o proveedor.
           </p>
         </div>
         <div className="flex gap-2">
@@ -345,7 +508,6 @@ export default function ModuloStock({
         </div>
       </div>
 
-      {/* GRILLA DE MATRICES (MUESTRA EL PIN TANTO EN LIBRES COMO EN OCUPADOS) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {matricesFiltradas.map((matriz) => {
           const perfiles = (matriz.perfiles_matriz || []).sort((a, b) => a.numero_slot - b.numero_slot);
@@ -356,7 +518,7 @@ export default function ModuloStock({
             <div
               key={matriz.id}
               className={`bg-[#111A10] border rounded-2xl p-4 space-y-3 ${
-                matriz.estado === "Caida" ? "border-red-500" : "border-[#233820]"
+                matriz.estado === "Caida" ? "border-2 border-red-500 bg-red-950/15" : "border-[#233820]"
               }`}
             >
               <div className="flex justify-between items-start">
@@ -364,6 +526,11 @@ export default function ModuloStock({
                   <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                     {matriz.plataforma}
                   </span>
+                  {matriz.estado === "Caida" && (
+                    <span className="ml-2 px-2 py-0.5 text-[10px] font-black rounded-full bg-red-600 text-white">
+                      ⚠️ MATRIZ CAÍDA
+                    </span>
+                  )}
                   <h3 className="font-bold text-base mt-1 break-all">{matriz.correo}</h3>
                   <p className="text-xs text-gray-400">
                     Clave: <span className="text-white font-mono">{matriz.password || "N/A"}</span> · Costo: Bs {matriz.costo_total}
@@ -383,7 +550,7 @@ export default function ModuloStock({
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                 {perfiles.map((p) => {
                   const subOcupante = suscripciones.find(
-                    (s) => s.perfil_id === p.id && s.estado === "Activa" && !s.en_papelera
+                    (s) => s.perfil_id === p.id && !s.en_papelera && s.estado !== "Reembolsada"
                   );
 
                   return (
@@ -416,7 +583,7 @@ export default function ModuloStock({
                           {p.nombre_perfil} {p.pin ? <span className="text-[#66FF00] font-mono">(PIN {p.pin})</span> : ""}
                         </p>
                         {p.caido ? (
-                          <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído</p>
+                          <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído (Reemplazar)</p>
                         ) : p.ocupado && subOcupante ? (
                           <>
                             <p className="text-[10px] text-orange-300 font-bold truncate">
@@ -443,14 +610,26 @@ export default function ModuloStock({
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white flex items-center gap-1 cursor-pointer"
                 >
-                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave Matriz / Aviso
+                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave / Aviso
+                </button>
+
+                <button
+                  onClick={() => {
+                    setMatrizReemplazarCompleta(matriz);
+                    setNuevoCorreoMatrizReemp(matriz.correo);
+                    setNuevaPassMatrizReemp(matriz.password);
+                    setTextoCrudoMatrizReemp("");
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-xs font-black text-black flex items-center gap-1 cursor-pointer"
+                >
+                  <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo Matriz
                 </button>
 
                 <button
                   onClick={() => setMatrizEditar(matriz)}
                   className="px-2.5 py-1.5 rounded-lg bg-[#1A2B18] text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
                 >
-                  <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Matriz
+                  <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar
                 </button>
 
                 <button
@@ -458,7 +637,7 @@ export default function ModuloStock({
                   className="px-2.5 py-1.5 rounded-lg bg-red-950/60 text-xs text-red-300 border border-red-800/50 flex items-center gap-1 cursor-pointer"
                 >
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  {matriz.estado === "Caida" ? "Marcar Resuelta" : "Marcar Caída"}
+                  {matriz.estado === "Caida" ? "Quitar Caída" : "Marcar Caída"}
                 </button>
               </div>
             </div>
@@ -466,7 +645,63 @@ export default function ModuloStock({
         })}
       </div>
 
-      {/* MODAL DE PERSONITA (INCLUYE TELÉFONO DEL REVENDEDOR EN EL SOPORTE DEL AVISO) */}
+      {/* MODAL REEMPLAZAR MATRIZ COMPLETA */}
+      {matrizReemplazarCompleta && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <form
+            onSubmit={ejecutarReemplazoMatrizCompleta}
+            className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal"
+          >
+            <div className="flex justify-between items-center">
+              <h3 className="font-black text-amber-400 text-base">
+                🔄 Reemplazar Matriz {matrizReemplazarCompleta.plataforma}
+              </h3>
+              <button type="button" onClick={() => setMatrizReemplazarCompleta(null)} className="text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-300">
+              Pega el nuevo correo y contraseña que te dio el proveedor. Todos los clientes dentro de esta matriz conservarán sus perfiles, PINs y fechas de vencimiento.
+            </p>
+            <textarea
+              rows={2}
+              placeholder="Pegar mensaje del proveedor para autocompletar..."
+              value={textoCrudoMatrizReemp}
+              onChange={(e) => {
+                setTextoCrudoMatrizReemp(e.target.value);
+                const ext = extraerDatosProveedor(e.target.value, plataformasList);
+                if (ext.correo) setNuevoCorreoMatrizReemp(ext.correo);
+                if (ext.password) setNuevaPassMatrizReemp(ext.password);
+              }}
+              className="w-full bg-[#070B06] border border-[#233820] rounded-xl p-2 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Nuevo Correo de la Matriz *"
+              value={nuevoCorreoMatrizReemp}
+              onChange={(e) => setNuevoCorreoMatrizReemp(e.target.value)}
+              className="w-full bg-[#070B06] border border-amber-400 rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Nueva Contraseña *"
+              value={nuevaPassMatrizReemp}
+              onChange={(e) => setNuevaPassMatrizReemp(e.target.value)}
+              className="w-full bg-[#070B06] border border-amber-400 rounded-xl p-2.5 text-xs text-white"
+            />
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setMatrizReemplazarCompleta(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button type="submit" className="flex-1 py-2.5 bg-amber-400 text-black rounded-xl text-xs font-black cursor-pointer">
+                Confirmar Reemplazo de Matriz
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL DE PERSONITA (CON BOTÓN DE DAR REEMPLAZO INDIVIDUAL A OTRA MATRIZ O PROVEEDOR) */}
       {perfilModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
@@ -482,57 +717,157 @@ export default function ModuloStock({
               </button>
             </div>
 
-            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-1">
+            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3.5 space-y-2">
               {perfilModal.subOcupante ? (
                 <>
                   <p className="text-sm font-black text-white">
                     {perfilModal.subOcupante.nombre_cliente} ({perfilModal.subOcupante.tipo_comprador === "revendedor" ? "🤝 Revendedor" : "👤 Cliente"})
                   </p>
                   <p className="text-xs text-[#66FF00] font-mono">
-                    📞 {perfilModal.subOcupante.telefono_cliente} · PIN actual: <b>{pinPerfilEdit || "Sin PIN"}</b>
+                    📞 {perfilModal.subOcupante.telefono_cliente} · Vence: {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setModoReemplazoEnPersonita(!modoReemplazoEnPersonita)}
+                    className="w-full py-2 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCcw className="w-4 h-4" /> 🔄 Dar Reemplazo a este Cliente (Matriz o Proveedor)
+                  </button>
                 </>
               ) : (
                 <p className="text-xs text-[#66FF00] font-semibold">● Perfil libre (PIN: {pinPerfilEdit})</p>
               )}
             </div>
 
-            <form onSubmit={guardarEdicionPerfilModal} className="space-y-3">
-              <div>
-                <label className="text-xs text-purple-300 font-bold">Contraseña de la Matriz:</label>
-                <input
-                  type="text"
-                  value={passMatrizEnPerfilEdit}
-                  onChange={(e) => setPassMatrizEnPerfilEdit(e.target.value)}
-                  className="w-full mt-1 bg-[#070B06] border border-purple-500 rounded-xl p-2 text-xs text-white font-mono"
-                />
-              </div>
+            {modoReemplazoEnPersonita && perfilModal.subOcupante ? (
+              <div className="bg-[#0B120A] border-2 border-amber-400 rounded-2xl p-3.5 space-y-3">
+                <p className="text-xs font-black text-amber-300">
+                  Elige cómo reemplazar este perfil (conserva corte {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}):
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOrigenReempPersonita("stock")}
+                    className={`py-2 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      origenReempPersonita === "stock"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    Otra Matriz (Stock)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrigenReempPersonita("proveedor")}
+                    className={`py-2 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      origenReempPersonita === "proveedor"
+                        ? "bg-amber-400 text-black border-amber-400"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    Proveedor (A Mano)
+                  </button>
+                </div>
 
-              <div className="grid grid-cols-2 gap-3">
+                {origenReempPersonita === "stock" ? (
+                  <select
+                    value={matrizDestinoReempId}
+                    onChange={(e) => setMatrizDestinoReempId(e.target.value)}
+                    className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+                  >
+                    <option value="">-- Seleccionar Matriz con cupo libre --</option>
+                    {matrices
+                      .filter(
+                        (m) =>
+                          !m.en_papelera &&
+                          m.estado === "Activa" &&
+                          (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
+                      )
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.plataforma} — {m.correo}
+                        </option>
+                      ))}
+                  </select>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Nuevo Correo *"
+                      value={correoProvReempPersonita}
+                      onChange={(e) => setCorreoProvReempPersonita(e.target.value)}
+                      className="bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Nueva Clave"
+                      value={passProvReempPersonita}
+                      onChange={(e) => setPassProvReempPersonita(e.target.value)}
+                      className="bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Perfil"
+                      value={perfilProvReempPersonita}
+                      onChange={(e) => setPerfilProvReempPersonita(e.target.value)}
+                      className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                    />
+                    <input
+                      type="text"
+                      placeholder="PIN"
+                      value={pinProvReempPersonita}
+                      onChange={(e) => setPinProvReempPersonita(e.target.value)}
+                      className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={ejecutarReemplazoDesdePersonita}
+                  className="w-full py-2.5 bg-amber-400 text-black font-black rounded-xl text-xs cursor-pointer"
+                >
+                  Confirmar Reemplazo y Obtener Mensaje
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={guardarEdicionPerfilModal} className="space-y-3">
                 <div>
-                  <label className="text-xs text-gray-400">Nombre Perfil</label>
+                  <label className="text-xs text-purple-300 font-bold">Contraseña de la Matriz:</label>
                   <input
                     type="text"
-                    value={nombrePerfilEdit}
-                    onChange={(e) => setNombrePerfilEdit(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                    value={passMatrizEnPerfilEdit}
+                    onChange={(e) => setPassMatrizEnPerfilEdit(e.target.value)}
+                    className="w-full mt-1 bg-[#070B06] border border-purple-500 rounded-xl p-2 text-xs text-white font-mono"
                   />
                 </div>
-                <div>
-                  <label className="text-xs text-[#66FF00] font-bold">📌 PIN del Perfil</label>
-                  <input
-                    type="text"
-                    value={pinPerfilEdit}
-                    onChange={(e) => setPinPerfilEdit(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-mono font-bold"
-                  />
-                </div>
-              </div>
 
-              <button type="submit" className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
-                Guardar Cambios (Clave / Perfil / PIN)
-              </button>
-            </form>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-400">Nombre Perfil</label>
+                    <input
+                      type="text"
+                      value={nombrePerfilEdit}
+                      onChange={(e) => setNombrePerfilEdit(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#66FF00] font-bold">📌 PIN del Perfil</label>
+                    <input
+                      type="text"
+                      value={pinPerfilEdit}
+                      onChange={(e) => setPinPerfilEdit(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-mono font-bold"
+                    />
+                  </div>
+                </div>
+
+                <button type="submit" className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
+                  Guardar Cambios (Clave / Perfil / PIN)
+                </button>
+              </form>
+            )}
 
             <div className="pt-2 border-t border-[#1E331A] space-y-2">
               <div className="grid grid-cols-2 gap-2">
@@ -635,7 +970,46 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL CAMBIO DE CLAVE GENERAL DE LA MATRIZ (CON NÚMERO DEL REVENDEDOR EN SOPORTE) */}
+      {/* MODAL MENSAJE DE REEMPLAZO LISTO */}
+      {mensajeReemplazoListo && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-[#66FF00] font-black text-base flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5" /> Reemplazo para {mensajeReemplazoListo.cliente}
+              </h3>
+              <button onClick={() => setMensajeReemplazoListo(null)} className="text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <textarea
+              readOnly
+              rows={9}
+              value={mensajeReemplazoListo.completo}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-2xl p-3 text-xs text-gray-200 font-mono"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(mensajeReemplazoListo.completo);
+                  notificar("¡Mensaje copiado!");
+                }}
+                className="py-3 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Copy className="w-4 h-4" /> Copiar Mensaje
+              </button>
+              <button
+                onClick={() => enviarWhatsappDirecto(mensajeReemplazoListo.telefono, mensajeReemplazoListo.completo)}
+                className="py-3 bg-[#66FF00] text-black rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Send className="w-4 h-4" /> 📲 Enviar por WhatsApp
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CAMBIO DE CLAVE GENERAL DE LA MATRIZ */}
       {matrizCambioPass && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-5 max-w-md w-full space-y-4">
@@ -661,9 +1035,6 @@ export default function ModuloStock({
             </div>
 
             <div className="space-y-1.5 max-h-60 overflow-y-auto pt-2 border-t border-[#1E331A]">
-              <p className="text-[11px] text-gray-400">
-                Copiar o enviar aviso con el número de soporte del revendedor incluido:
-              </p>
               {suscripciones
                 .filter((s) => s.matriz_id === matrizCambioPass.id && s.estado === "Activa" && !s.en_papelera)
                 .map((c) => {
@@ -707,6 +1078,53 @@ export default function ModuloStock({
         </div>
       )}
 
+      {/* MODAL EDITAR MATRIZ */}
+      {matrizEditar && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <form onSubmit={guardarEdicionMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-3">
+            <h3 className="font-black text-[#66FF00]">Editar Matriz</h3>
+            <select
+              value={matrizEditar.plataforma}
+              onChange={(e) => setMatrizEditar({ ...matrizEditar, plataforma: e.target.value })}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+            >
+              {plataformasList.map((p) => (
+                <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={matrizEditar.correo}
+              onChange={(e) => setMatrizEditar({ ...matrizEditar, correo: e.target.value })}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+            />
+            <input
+              type="text"
+              value={matrizEditar.password || ""}
+              onChange={(e) => setMatrizEditar({ ...matrizEditar, password: e.target.value })}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+            />
+            <input
+              type="number"
+              step="0.01"
+              value={matrizEditar.costo_total}
+              onChange={(e) => setMatrizEditar({ ...matrizEditar, costo_total: e.target.value })}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+            />
+            <input
+              type="date"
+              value={matrizEditar.fecha_corte_matriz}
+              onChange={(e) => setMatrizEditar({ ...matrizEditar, fecha_corte_matriz: e.target.value })}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+            />
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={() => setMatrizEditar(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
+              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">Guardar</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* MODAL NUEVA MATRIZ */}
       {modalNuevaMatriz && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -732,6 +1150,21 @@ export default function ModuloStock({
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setModalNuevaMatriz(false)} className="px-4 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
               <button type="submit" disabled={cargando} className="flex-1 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">Guardar Matriz</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL NUEVO PROVEEDOR */}
+      {modalNuevoProv && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
+          <form onSubmit={guardarNuevoProveedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-3">
+            <h3 className="font-black text-[#66FF00]">Registrar Proveedor</h3>
+            <input type="text" placeholder="Nombre" value={nuevoProvNombre} onChange={(e) => setNuevoProvNombre(e.target.value)} className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white" />
+            <input type="text" placeholder="Teléfono" value={nuevoProvTelefono} onChange={(e) => setNuevoProvTelefono(e.target.value)} className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white" />
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setModalNuevoProv(false)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
+              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold">Guardar</button>
             </div>
           </form>
         </div>
