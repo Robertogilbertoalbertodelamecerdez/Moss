@@ -44,7 +44,6 @@ export default function ModuloDirectorio({
 
   const [mensajeActivo, setMensajeActivo] = useState(null);
 
-  // Estados del Modal de Reemplazo (Matriz Stock o Proveedor a mano)
   const [subReemplazo, setSubReemplazo] = useState(null);
   const [origenReemp, setOrigenReemp] = useState("proveedor");
   const [matrizReempId, setMatrizReempId] = useState("");
@@ -56,11 +55,9 @@ export default function ModuloDirectorio({
   const [pinReemp, setPinReemp] = useState("");
   const [costoReemp, setCostoReemp] = useState(0);
 
-  // Estados del Modal de Reembolso
   const [subReembolso, setSubReembolso] = useState(null);
   const [montoReembolsoCalc, setMontoReembolsoCalc] = useState(0);
 
-  // Estados del Modal de Edición Total
   const [subEditar, setSubEditar] = useState(null);
   const [matrizNuevaEdicionId, setMatrizNuevaEdicionId] = useState("");
 
@@ -71,7 +68,15 @@ export default function ModuloDirectorio({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
-  const abrirMensajeDeSuscripcion = (s, titulo = null) => {
+  // Si la cuenta tiene fue_reemplazada === true, abre siempre con el título "REEMPLAZO DE CUENTA"
+  const abrirMensajeDeSuscripcion = (s, tituloForzado = null) => {
+    const tituloUsar =
+      tituloForzado !== null
+        ? tituloForzado
+        : s.fue_reemplazada
+        ? "REEMPLAZO DE CUENTA"
+        : null;
+
     const msg = generarMensajeEntrega(
       s.nombre_cliente,
       s.telefono_cliente,
@@ -90,13 +95,12 @@ export default function ModuloDirectorio({
         }
       ],
       linkWhatsappMoss,
-      titulo,
+      tituloUsar,
       s.tipo_comprador === "revendedor"
     );
     setMensajeActivo(msg);
   };
 
-  // Abre el modal de Dar Reemplazo precargando los mismos datos de la cuenta caída
   const abrirModalReemplazo = (s) => {
     const matricesMismaPlat = matrices.filter(
       (m) =>
@@ -129,7 +133,6 @@ export default function ModuloDirectorio({
     notificar("Datos extraídos para el reemplazo");
   };
 
-  // Ejecuta el reemplazo manteniendo intacta la Fecha de Vencimiento, Cliente, Revendedor, Plan y Precio
   const ejecutarReemplazo = async (e) => {
     e.preventDefault();
     if (!subReemplazo) return;
@@ -137,7 +140,7 @@ export default function ModuloDirectorio({
     const estabaCaida = subReemplazo.estado === "Caida";
     let nuevosDatos = {
       estado: "Activa",
-      // Se mantienen intactos fecha_corte, fecha_venta, dias_totales, meses_contratados, cliente y revendedor
+      fue_reemplazada: true,
       fecha_corte: subReemplazo.fecha_corte,
       fecha_venta: subReemplazo.fecha_venta,
       dias_totales: subReemplazo.dias_totales,
@@ -229,7 +232,7 @@ export default function ModuloDirectorio({
 
     setSubReemplazo(null);
     await recargarTodo();
-    notificar("¡Reemplazo aplicado manteniendo su fecha de corte! Mensaje listo para enviar");
+    notificar("¡Reemplazo guardado! Siempre que consultes esta cuenta saldrá como Reemplazo.");
     if (actualizada) abrirMensajeDeSuscripcion(actualizada, "REEMPLAZO DE CUENTA");
   };
 
@@ -489,7 +492,7 @@ export default function ModuloDirectorio({
     setMatrizNuevaEdicionId("");
     await recargarTodo();
     notificar("¡Precio, PIN y datos actualizados con éxito!");
-    if (editada) abrirMensajeDeSuscripcion(editada, "DATOS ACTUALIZADOS");
+    if (editada) abrirMensajeDeSuscripcion(editada);
   };
 
   const enviarAPapelera = async (s) => {
@@ -564,7 +567,6 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
-      {/* LISTA DE SUSCRIPCIONES CON BOTÓN AMARILLO "DAR REEMPLAZO" Y "REEMBOLSAR" */}
       <div className="space-y-3">
         {suscripcionesFiltradas.map((s) => {
           const dias = calcularDiasRestantes(s.fecha_corte);
@@ -593,6 +595,11 @@ export default function ModuloDirectorio({
                     <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
                       💰 Te pagó: Bs {s.precio_venta}
                     </span>
+                    {s.fue_reemplazada && (
+                      <span className="px-2 py-0.5 text-[10px] font-black rounded-full bg-amber-400 text-black">
+                        🔄 Reemplazada
+                      </span>
+                    )}
                     {s.estado === "Caida" && (
                       <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-red-600 text-white animate-pulse">
                         ⚠️ CUENTA CAÍDA
@@ -645,7 +652,8 @@ export default function ModuloDirectorio({
                     onClick={() => abrirMensajeDeSuscripcion(s)}
                     className="px-3 py-1.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer"
                   >
-                    <MessageSquare className="w-3.5 h-3.5" /> Entregar / WhatsApp
+                    <MessageSquare className="w-3.5 h-3.5" />{" "}
+                    {s.fue_reemplazada ? "Ver Reemplazo / WhatsApp" : "Entregar / WhatsApp"}
                   </button>
 
                   <button
@@ -672,7 +680,6 @@ export default function ModuloDirectorio({
                     {s.estado === "Caida" ? "Quitar Caído" : "Marcar Caído"}
                   </button>
 
-                  {/* BOTÓN AMARILLO DAR REEMPLAZO (SIEMPRE VISIBLE Y DESTACADO CUANDO ESTÁ CAÍDA) */}
                   <button
                     onClick={() => abrirModalReemplazo(s)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer ${
@@ -713,9 +720,7 @@ export default function ModuloDirectorio({
         })}
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODAL DAR REEMPLAZO (MATRIZ DE STOCK O PROVEEDOR A MANO + MISMA FECHA)     */}
-      {/* ========================================================================= */}
+      {/* MODAL DAR REEMPLAZO */}
       {subReemplazo && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -729,9 +734,6 @@ export default function ModuloDirectorio({
                 </h3>
                 <p className="text-[11px] text-gray-300 mt-0.5">
                   Comprador: <b className="text-white">{subReemplazo.nombre_cliente}</b> ({subReemplazo.telefono_cliente})
-                  {subReemplazo.nombre_cliente_final
-                    ? ` · Cliente Final: ${subReemplazo.nombre_cliente_final}`
-                    : ""}
                 </p>
               </div>
               <button type="button" onClick={() => setSubReemplazo(null)} className="text-gray-400 hover:text-white">
@@ -739,7 +741,6 @@ export default function ModuloDirectorio({
               </button>
             </div>
 
-            {/* CAJA QUE CONFIRMA QUE SE CONSERVA LA MISMA FECHA DE VENCIMIENTO Y DATOS */}
             <div className="bg-[#070B06] border border-[#66FF00]/50 rounded-2xl p-3 text-xs space-y-1">
               <p className="text-[#66FF00] font-extrabold">
                 ✓ Se mantienen intactos su fecha de corte y todos sus datos:
@@ -748,12 +749,8 @@ export default function ModuloDirectorio({
                 📅 Fecha de Corte que se conserva: <b className="text-white">{formatearFechaDMA(subReemplazo.fecha_corte)}</b> · Plan:{" "}
                 <b>{subReemplazo.dias_totales || 30} días</b> · Pagó: <b>Bs {subReemplazo.precio_venta}</b>
               </p>
-              <p className="text-[11px] text-gray-500">
-                Cuenta caída anterior: {subReemplazo.correo_cuenta}
-              </p>
             </div>
 
-            {/* SELECTOR: SACAR PERFIL DE UNA MATRIZ O DAR CUENTA DE PROVEEDOR A MANO */}
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -882,7 +879,7 @@ export default function ModuloDirectorio({
 
                 <div>
                   <label className="text-[11px] text-gray-400">
-                    Costo extra pagado al proveedor por este reemplazo (Bs) — Pon 0 si fue garantía gratis
+                    Costo extra pagado al proveedor por este reemplazo (Bs)
                   </label>
                   <input
                     type="number"
@@ -1199,7 +1196,7 @@ export default function ModuloDirectorio({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <textarea readOnly rows={10} value={mensajeActivo.completo} className="w-full bg-[#070B06] border border-[#2A4226] rounded-2xl p-3 text-xs text-gray-200 font-mono" />
+            <textarea readOnly rows={11} value={mensajeActivo.completo} className="w-full bg-[#070B06] border border-[#2A4226] rounded-2xl p-3 text-xs text-gray-200 font-mono" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 onClick={() => {

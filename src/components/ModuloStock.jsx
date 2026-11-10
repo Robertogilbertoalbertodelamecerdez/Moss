@@ -10,7 +10,6 @@ import {
 import {
   KeyRound,
   AlertTriangle,
-  Trash2,
   Edit3,
   X,
   Copy,
@@ -21,8 +20,6 @@ import {
   UserX,
   Send,
   RefreshCcw,
-  Truck,
-  Sparkles,
   CheckCircle2
 } from "lucide-react";
 
@@ -58,7 +55,6 @@ export default function ModuloStock({
   const [matrizCambioPass, setMatrizCambioPass] = useState(null);
   const [nuevaPass, setNuevaPass] = useState("");
 
-  // Modal para reemplazar el correo/clave de una Matriz Caída entera
   const [matrizReemplazarCompleta, setMatrizReemplazarCompleta] = useState(null);
   const [nuevoCorreoMatrizReemp, setNuevoCorreoMatrizReemp] = useState("");
   const [nuevaPassMatrizReemp, setNuevaPassMatrizReemp] = useState("");
@@ -69,7 +65,6 @@ export default function ModuloStock({
   const [pinPerfilEdit, setPinPerfilEdit] = useState("");
   const [passMatrizEnPerfilEdit, setPassMatrizEnPerfilEdit] = useState("");
 
-  // Estado dentro de la Personita para darle Reemplazo (Otra Matriz o Proveedor a mano)
   const [modoReemplazoEnPersonita, setModoReemplazoEnPersonita] = useState(false);
   const [origenReempPersonita, setOrigenReempPersonita] = useState("stock");
   const [matrizDestinoReempId, setMatrizDestinoReempId] = useState("");
@@ -96,13 +91,13 @@ export default function ModuloStock({
     setPinProvReempPersonita("");
   };
 
-  // Reemplazar a un cliente desde la Personita de la Matriz conservando su fecha de vencimiento
   const ejecutarReemplazoDesdePersonita = async () => {
     if (!perfilModal?.subOcupante) return;
     const sub = perfilModal.subOcupante;
 
     let nuevosDatos = {
       estado: "Activa",
+      fue_reemplazada: true,
       fecha_corte: sub.fecha_corte,
       fecha_venta: sub.fecha_venta,
       dias_totales: sub.dias_totales,
@@ -191,10 +186,9 @@ export default function ModuloStock({
     setPerfilModal(null);
     setMensajeReemplazoListo(msg);
     await recargarTodo();
-    notificar("¡Cliente reemplazado manteniendo su misma fecha de vencimiento!");
+    notificar("¡Cliente reemplazado y marcado como Reemplazo!");
   };
 
-  // Reemplazar toda una Matriz Caída por un nuevo Correo y Clave (actualiza a todos sus clientes activos/caídos manteniendo sus fechas de vencimiento)
   const ejecutarReemplazoMatrizCompleta = async (e) => {
     e.preventDefault();
     if (!matrizReemplazarCompleta || !nuevoCorreoMatrizReemp.trim()) {
@@ -220,6 +214,7 @@ export default function ModuloStock({
       .update({
         correo_cuenta: nuevoCorreoMatrizReemp.trim(),
         password_cuenta: nuevaPassMatrizReemp.trim(),
+        fue_reemplazada: true,
         estado: "Activa"
       })
       .eq("matriz_id", matrizReemplazarCompleta.id)
@@ -227,7 +222,7 @@ export default function ModuloStock({
 
     setMatrizReemplazarCompleta(null);
     await recargarTodo();
-    notificar("¡Matriz y todos sus perfiles reemplazados manteniendo sus fechas de vencimiento!");
+    notificar("¡Matriz reemplazada! Todos sus clientes quedaron marcados con mensaje de Reemplazo.");
   };
 
   const guardarEdicionPerfilModal = async (e) => {
@@ -660,9 +655,6 @@ export default function ModuloStock({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-gray-300">
-              Pega el nuevo correo y contraseña que te dio el proveedor. Todos los clientes dentro de esta matriz conservarán sus perfiles, PINs y fechas de vencimiento.
-            </p>
             <textarea
               rows={2}
               placeholder="Pegar mensaje del proveedor para autocompletar..."
@@ -701,7 +693,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL DE PERSONITA (CON BOTÓN DE DAR REEMPLAZO INDIVIDUAL A OTRA MATRIZ O PROVEEDOR) */}
+      {/* MODAL DE PERSONITA */}
       {perfilModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
@@ -741,9 +733,6 @@ export default function ModuloStock({
 
             {modoReemplazoEnPersonita && perfilModal.subOcupante ? (
               <div className="bg-[#0B120A] border-2 border-amber-400 rounded-2xl p-3.5 space-y-3">
-                <p className="text-xs font-black text-amber-300">
-                  Elige cómo reemplazar este perfil (conserva corte {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}):
-                </p>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -917,53 +906,6 @@ export default function ModuloStock({
                 >
                   <Send className="w-3.5 h-3.5" /> Enviar Clave WhatsApp
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const telRev =
-                      perfilModal.subOcupante?.tipo_comprador === "revendedor"
-                        ? perfilModal.subOcupante.telefono_cliente
-                        : "";
-                    const msg = generarMensajeCambioCredencial(
-                      "PIN de tu perfil",
-                      perfilModal.matriz.plataforma,
-                      perfilModal.matriz.correo,
-                      passMatrizEnPerfilEdit,
-                      nombrePerfilEdit,
-                      pinPerfilEdit,
-                      telRev
-                    );
-                    navigator.clipboard.writeText(msg);
-                    notificar("¡Aviso de PIN copiado!");
-                  }}
-                  className="py-2.5 px-2 bg-purple-900 text-purple-100 border border-purple-400 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Copy className="w-3.5 h-3.5" /> Copiar Aviso PIN
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const telRev =
-                      perfilModal.subOcupante?.tipo_comprador === "revendedor"
-                        ? perfilModal.subOcupante.telefono_cliente
-                        : "";
-                    const msg = generarMensajeCambioCredencial(
-                      "PIN de tu perfil",
-                      perfilModal.matriz.plataforma,
-                      perfilModal.matriz.correo,
-                      passMatrizEnPerfilEdit,
-                      nombrePerfilEdit,
-                      pinPerfilEdit,
-                      telRev
-                    );
-                    enviarWhatsappDirecto(perfilModal.subOcupante?.telefono_cliente || "", msg);
-                  }}
-                  className="py-2.5 px-2 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00] rounded-xl text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Send className="w-3.5 h-3.5" /> Enviar PIN WhatsApp
-                </button>
               </div>
             </div>
           </div>
@@ -1032,47 +974,6 @@ export default function ModuloStock({
               >
                 Guardar Clave
               </button>
-            </div>
-
-            <div className="space-y-1.5 max-h-60 overflow-y-auto pt-2 border-t border-[#1E331A]">
-              {suscripciones
-                .filter((s) => s.matriz_id === matrizCambioPass.id && s.estado === "Activa" && !s.en_papelera)
-                .map((c) => {
-                  const telRev = c.tipo_comprador === "revendedor" ? c.telefono_cliente : "";
-                  const msgCliente = generarMensajeCambioCredencial(
-                    "Contraseña",
-                    c.plataforma,
-                    c.correo_cuenta,
-                    nuevaPass,
-                    c.nombre_perfil,
-                    c.pin_perfil,
-                    telRev
-                  );
-                  return (
-                    <div key={c.id} className="flex justify-between items-center bg-[#070B06] p-2 rounded-xl text-xs gap-2">
-                      <span className="truncate">
-                        <b>{c.nombre_cliente}</b> ({c.nombre_perfil} · PIN {c.pin_perfil})
-                      </span>
-                      <div className="flex gap-1 shrink-0">
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(msgCliente);
-                            notificar(`Aviso copiado para ${c.nombre_cliente}`);
-                          }}
-                          className="px-2 py-1 bg-purple-600 text-white rounded-lg text-[10px] font-bold cursor-pointer"
-                        >
-                          Copiar
-                        </button>
-                        <button
-                          onClick={() => enviarWhatsappDirecto(c.telefono_cliente, msgCliente)}
-                          className="px-2 py-1 bg-[#66FF00] text-black rounded-lg text-[10px] font-black cursor-pointer"
-                        >
-                          WhatsApp
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
             </div>
           </div>
         </div>

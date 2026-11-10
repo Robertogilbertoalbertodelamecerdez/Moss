@@ -22,6 +22,8 @@ function obtenerTextoPlanDias(item) {
   return `${dias} ${dias === 1 ? "día" : "días"}`;
 }
 
+const BLOQUE_REGLAS_GARANTIA = `\n\n📋 *REGLAS Y GARANTÍA:*\n- ❌ Solo 1 dispositivo.\n- ❌ No cambiar correo o clave.\n- 🛠️ Soporte de caídas en 24 horas.\n- 💵 Te damos reembolso si la caída supera 24 h.`;
+
 // 1. Mensaje de Entrega / Reemplazo / Edición
 export function generarMensajeEntrega(
   nombre,
@@ -33,6 +35,10 @@ export function generarMensajeEntrega(
 ) {
   const esCombo = listaItems.length > 1;
   const totalCobrado = listaItems.reduce((acc, i) => acc + Number(i.precioVenta || 0), 0);
+
+  // Solo muestra REGLAS Y GARANTÍA cuando es una entrega nueva (no cuando es Reemplazo ni Renovación)
+  const esReemplazoORenovacion = Boolean(tituloPersonalizado);
+  const textoReglas = esReemplazoORenovacion ? "" : BLOQUE_REGLAS_GARANTIA;
 
   if (esRevendedor) {
     const bloquesRev = listaItems
@@ -75,13 +81,14 @@ export function generarMensajeEntrega(
         ? `\n\n🛠️ *Soporte:* ${numRevendedor} / 78953018`
         : `\n\n🛠️ *Soporte:* 78953018`;
 
-    const msgRevendedor = `${encabezadoRev}\n\n${bloquesRev}${lineaSoporte}`;
+    const msgRevendedor = `${encabezadoRev}\n\n${bloquesRev}${textoReglas}${lineaSoporte}`;
     return { completo: msgRevendedor, resumido: msgRevendedor, telefono: tel, cliente: nombre };
   }
 
-  const bloqueOfertas = linkWhatsappMoss?.trim()
-    ? `\n\n🎁 *Comunidad MOSS:*\n${linkWhatsappMoss.trim()}`
-    : "";
+  const bloqueOfertas =
+    !esReemplazoORenovacion && linkWhatsappMoss?.trim()
+      ? `\n\n🎁 *Comunidad MOSS:*\n${linkWhatsappMoss.trim()}`
+      : "";
 
   const bloques = listaItems
     .map((item, idx) => {
@@ -118,7 +125,7 @@ export function generarMensajeEntrega(
     : `🌿 *MOSS - ENTREGA DE CUENTA*`;
 
   const lineaTotal = esCombo ? `\n\n💰 *Total Combo:* Bs ${totalCobrado.toFixed(2)}` : "";
-  const completo = `${encabezado}\n\n¡Hola *${nombre}*!\n\n${bloques}${lineaTotal}\n\n🛠️ *Soporte:* 78953018${bloqueOfertas}`;
+  const completo = `${encabezado}\n\n¡Hola *${nombre}*!\n\n${bloques}${lineaTotal}${textoReglas}\n\n🛠️ *Soporte:* 78953018${bloqueOfertas}`;
 
   const resumido = listaItems
     .map((item) => {
@@ -130,14 +137,15 @@ export function generarMensajeEntrega(
         item.perfilFinal && !esInv
           ? `\n👤 Perfil: ${item.perfilFinal}${item.pinFinal ? ` | PIN: ${item.pinFinal}` : ""}`
           : "";
-      return `*${item.plataforma} (MOSS)*\n📧 Correo: ${item.correoFinal}${pass}${perfil}\n⏳ Plan: ${textoPlan} | 📅 Vence: ${vence}\n🛠️ Soporte: 78953018`;
+      const tituloCorto = tituloPersonalizado ? ` - ${tituloPersonalizado.toUpperCase()}` : "";
+      return `*${item.plataforma} (MOSS${tituloCorto})*\n📧 Correo: ${item.correoFinal}${pass}${perfil}\n⏳ Plan: ${textoPlan} | 📅 Vence: ${vence}${textoReglas}\n🛠️ Soporte: 78953018`;
     })
     .join("\n\n");
 
   return { completo, resumido, telefono: tel, cliente: nombre };
 }
 
-// 2. Mensaje Corto Individual de Renovación
+// 2. Mensaje Corto Individual de Renovación (Sin Reglas y Garantía)
 export function generarMensajeRenovacionCorto(s, textoDias) {
   const corteDMA = formatearFechaDMA(s.fecha_corte);
   const esRev = s.tipo_comprador === "revendedor";
@@ -176,7 +184,7 @@ export function generarMensajeLoteRenovacionRevendedor(nombreRevendedor, listaSu
   return `📋 *LISTA DE RENOVACIONES PENDIENTES (${listaSubs.length} CUENTAS)*\n🤝 *Revendedor:* ${nombreRevendedor}\n\n${items}\n\n_Confírmame cuáles de tus clientes van a renovar para mantenerles el cupo activo._`;
 }
 
-// 4. Mensaje Corto Morado de Cambio de Contraseña o PIN (Incluye teléfono del revendedor en Soporte si aplica)
+// 4. Mensaje Corto Morado de Cambio de Contraseña o PIN
 export function generarMensajeCambioCredencial(
   tipoCambio,
   plataforma,
