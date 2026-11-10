@@ -4,6 +4,8 @@ import {
   supabase,
   formatearFechaDMA,
   obtenerFechaBoliviaISO,
+  obtenerLunesDeSemanaBolivia,
+  obtenerDomingoDeSemanaBolivia,
   sumarDiasBoliviaISO,
   extraerFechaLocalISO
 } from "@/config";
@@ -60,14 +62,6 @@ function armarSerieConPrediccion(mapaPorFecha) {
   };
 }
 
-function obtenerLunesDeSemanaBolivia(fechaHoyISO) {
-  const d = new Date(fechaHoyISO + "T12:00:00-04:00");
-  const day = d.getDay();
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diffToMonday);
-  return obtenerFechaBoliviaISO(d);
-}
-
 export default function ModuloEstadisticas({
   suscripciones = [],
   matrices = [],
@@ -79,22 +73,21 @@ export default function ModuloEstadisticas({
 }) {
   const hoyISO = obtenerFechaBoliviaISO();
   const lunesSemanaActualISO = obtenerLunesDeSemanaBolivia(hoyISO);
+  const domingoSemanaActualISO = obtenerDomingoDeSemanaBolivia(hoyISO);
   const mesActualISO = hoyISO.slice(0, 7);
   const anioActualISO = hoyISO.slice(0, 4);
 
-  const [periodo, setPeriodo] = useState("mes");
+  // Período de Estadísticas: 'dia' | 'semana' (Lunes a Domingo) | 'mes' | 'anio' | 'todo'
+  const [periodo, setPeriodo] = useState("semana");
   const [fechaEspecifica, setFechaEspecifica] = useState(hoyISO);
   const [mesEspecifico, setMesEspecifico] = useState(mesActualISO);
   const [anioEspecifico, setAnioEspecifico] = useState(anioActualISO);
 
-  // Solo filtra entre Todos, Clientes o Total General de Revendedores (SIN nombres individuales)
   const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos");
 
-  // Botón para abrir/ocultar las estadísticas generales de revendedores
   const [verEstadisticasRevendedores, setVerEstadisticasRevendedores] = useState(false);
   const [modoMetricaRevendedores, setModoMetricaRevendedores] = useState("para_mi");
 
-  // Modal de Bono Semanal (Sin mostrar nombres individuales en cuánto generó cada uno)
   const [modalBonoAbierto, setModalBonoAbierto] = useState(false);
   const [cantidadGanadoresTop, setCantidadGanadoresTop] = useState(3);
   const [pctTop1, setPctTop1] = useState(5);
@@ -137,7 +130,7 @@ export default function ModuloEstadisticas({
     return cobroAClienteFinal > 0 ? cobroAClienteFinal - pagoAlAdmin : 0;
   };
 
-  // Cálculo del Ciclo Semanal de Domingos (Muestra Totales y Puestos #1, #2, #3 sin exponer nombres individuales)
+  // Ciclo Semanal de Lunes a Domingo
   const rankingSemanalBono = useMemo(() => {
     const mapa = {};
     revendedores.forEach((r) => {
@@ -154,7 +147,7 @@ export default function ModuloEstadisticas({
       .filter((s) => !s.en_papelera && s.tipo_comprador === "revendedor")
       .forEach((s) => {
         const f = extraerFechaLocalISO(s.fecha_venta);
-        if (f < lunesSemanaActualISO || f > hoyISO) return;
+        if (f < lunesSemanaActualISO || f > domingoSemanaActualISO) return;
         if (
           timestampUltimoReinicio &&
           s.creado_en &&
@@ -209,7 +202,7 @@ export default function ModuloEstadisticas({
     suscripciones,
     matrices,
     lunesSemanaActualISO,
-    hoyISO,
+    domingoSemanaActualISO,
     pctTop1,
     pctTop2,
     pctTop3,
@@ -219,7 +212,6 @@ export default function ModuloEstadisticas({
 
   const ganadoresActivosPodio = rankingSemanalBono.filter((r) => r.entraEnPodio);
 
-  // Totales Generales de Revendedores en la Semana (Sin nombres individuales)
   const totalProfitSemanalRevendedores = rankingSemanalBono.reduce(
     (acc, r) => acc + r.gananciaNetaParaAdmin,
     0
@@ -295,12 +287,14 @@ export default function ModuloEstadisticas({
     return movimientosYolo.filter((m) => String(m.tipo || "").startsWith("Bono Revendedor"));
   }, [movimientosYolo]);
 
+  // Filtro de ventas por Día, Esta Semana (Lunes a Domingo), Mes, Año o Histórico
   const ventasFiltradas = useMemo(() => {
     return suscripciones
       .filter((s) => {
         if (s.en_papelera) return false;
         const f = extraerFechaLocalISO(s.fecha_venta);
         if (periodo === "dia" && f !== fechaEspecifica) return false;
+        if (periodo === "semana" && (f < lunesSemanaActualISO || f > domingoSemanaActualISO)) return false;
         if (periodo === "mes" && !f.startsWith(mesEspecifico)) return false;
         if (periodo === "anio" && !f.startsWith(anioEspecifico)) return false;
 
@@ -309,17 +303,27 @@ export default function ModuloEstadisticas({
         return true;
       })
       .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
-  }, [suscripciones, periodo, fechaEspecifica, mesEspecifico, anioEspecifico, filtroTipoComprador]);
+  }, [
+    suscripciones,
+    periodo,
+    fechaEspecifica,
+    lunesSemanaActualISO,
+    domingoSemanaActualISO,
+    mesEspecifico,
+    anioEspecifico,
+    filtroTipoComprador
+  ]);
 
   const movimientosFiltrados = useMemo(() => {
     return movimientosYolo.filter((m) => {
       const f = extraerFechaLocalISO(m.fecha);
       if (periodo === "dia" && f !== fechaEspecifica) return false;
+      if (periodo === "semana" && (f < lunesSemanaActualISO || f > domingoSemanaActualISO)) return false;
       if (periodo === "mes" && !f.startsWith(mesEspecifico)) return false;
       if (periodo === "anio" && !f.startsWith(anioEspecifico)) return false;
       return true;
     });
-  }, [movimientosYolo, periodo, fechaEspecifica, mesEspecifico, anioEspecifico]);
+  }, [movimientosYolo, periodo, fechaEspecifica, lunesSemanaActualISO, domingoSemanaActualISO, mesEspecifico, anioEspecifico]);
 
   const totalVendidoPeriodo = ventasFiltradas.reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
   const gananciaVentasPeriodo = ventasFiltradas.reduce((acc, s) => acc + calcularGananciaAdminDeVenta(s), 0);
@@ -340,7 +344,7 @@ export default function ModuloEstadisticas({
     return armarSerieConPrediccion(mapa);
   }, [ventasFiltradas, matrices]);
 
-  // Estadísticas Generales de Revendedores (SOLO TOTAL GENERAL, sin nombres individuales)
+  // Estadísticas Generales de Revendedores (Incluye filtro de Esta Semana Lunes a Domingo)
   const {
     serie: serieRevendedores,
     prevision30d: previsionRevendedores30d,
@@ -356,6 +360,7 @@ export default function ModuloEstadisticas({
         if (s.en_papelera || s.tipo_comprador !== "revendedor") return false;
         const f = extraerFechaLocalISO(s.fecha_venta);
         if (periodo === "dia" && f !== fechaEspecifica) return false;
+        if (periodo === "semana" && (f < lunesSemanaActualISO || f > domingoSemanaActualISO)) return false;
         if (periodo === "mes" && !f.startsWith(mesEspecifico)) return false;
         if (periodo === "anio" && !f.startsWith(anioEspecifico)) return false;
         return true;
@@ -393,7 +398,17 @@ export default function ModuloEstadisticas({
       totalProfitParaMiRev: sumaProfitParaMi,
       totalGananciaDeEllosRev: sumaGananciaDeEllos
     };
-  }, [suscripciones, matrices, periodo, fechaEspecifica, mesEspecifico, anioEspecifico, modoMetricaRevendedores]);
+  }, [
+    suscripciones,
+    matrices,
+    periodo,
+    fechaEspecifica,
+    lunesSemanaActualISO,
+    domingoSemanaActualISO,
+    mesEspecifico,
+    anioEspecifico,
+    modoMetricaRevendedores
+  ]);
 
   const construirGeometriaSVG = (serie, activeIdx) => {
     const svgWidth = 680;
@@ -447,13 +462,17 @@ export default function ModuloEstadisticas({
               <BarChart3 className="w-6 h-6 text-[#66FF00]" /> Estadísticas & Trading de Profit MOSS
             </h2>
             <p className="text-xs text-gray-400">
-              Hoy en Santa Cruz: <b className="text-[#66FF00]">{formatearFechaDMA(hoyISO)}</b>
+              Hoy en Santa Cruz: <b className="text-[#66FF00]">{formatearFechaDMA(hoyISO)}</b> · Ciclo semanal:{" "}
+              <b className="text-white">
+                Lun {formatearFechaDMA(lunesSemanaActualISO).slice(0, 5)} al Dom {formatearFechaDMA(domingoSemanaActualISO).slice(0, 5)}
+              </b>
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {[
               { id: "dia", label: "Por Día" },
+              { id: "semana", label: "Esta Semana (Lun - Dom)" },
               { id: "mes", label: "Por Mes" },
               { id: "anio", label: "Por Año" },
               { id: "todo", label: "Histórico" }
@@ -500,7 +519,6 @@ export default function ModuloEstadisticas({
           </div>
         </div>
 
-        {/* BARRA DE FILTRO GENERAL + BOTÓN PARA VER ESTADÍSTICAS GENERALES DE REVENDEDORES */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#1E331A]">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-gray-400 font-bold mr-1">Filtrar vista:</span>
@@ -676,9 +694,7 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* ESTADÍSTICAS DE REVENDEDORES (OCULTA TRAS EL BOTÓN Y SOLO EN TOTAL GENERAL) */}
-      {/* ========================================================================= */}
+      {/* ESTADÍSTICAS GENERALES DE REVENDEDORES (OCULTA TRAS BOTÓN, SOLO TOTAL GENERAL) */}
       {verEstadisticasRevendedores && (
         <div className="bg-[#111A10] border-2 border-purple-500/40 rounded-3xl p-5 space-y-4 shadow-lg animate-modal">
           <div className="flex justify-between items-center">
@@ -687,7 +703,7 @@ export default function ModuloEstadisticas({
                 <Users className="w-5 h-5 text-purple-400" /> Estadísticas Generales de Revendedores (Total Consolidado)
               </h3>
               <p className="text-[11px] text-gray-400">
-                Muestra el total combinado de todos los revendedores sin detallar nombres individuales.
+                Muestra el total combinado en el período elegido arriba ({periodo === "semana" ? `Esta Semana Lun ${formatearFechaDMA(lunesSemanaActualISO).slice(0, 5)} - Dom ${formatearFechaDMA(domingoSemanaActualISO).slice(0, 5)}` : periodo}).
               </p>
             </div>
             <button
@@ -817,16 +833,14 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODAL EMERGENTE DE BONO SEMANAL (TOTALES Y PUESTOS SIN NOMBRES INDIVIDUALES) */}
-      {/* ========================================================================= */}
+      {/* MODAL EMERGENTE DE BONO SEMANAL (LUNES A DOMINGO) */}
       {modalBonoAbierto && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto animate-modal">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
               <div>
                 <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
-                  <Trophy className="w-5 h-5" /> Ciclo Semanal de Domingos (Bono sobre Total Generado)
+                  <Trophy className="w-5 h-5" /> Ciclo Semanal (Lun {formatearFechaDMA(lunesSemanaActualISO).slice(0, 5)} al Dom {formatearFechaDMA(domingoSemanaActualISO).slice(0, 5)})
                 </h3>
                 <p className="text-[11px] text-gray-400">
                   Profit Total generado por Revendedores esta semana:{" "}
@@ -918,7 +932,6 @@ export default function ModuloEstadisticas({
               </div>
             </div>
 
-            {/* PUESTOS DEL TOP SELECCIONADO (SIN EXPONER NOMBRES EN CUÁNTO GENERÓ INDIVIDUALMENTE) */}
             <div className="space-y-2">
               {ganadoresActivosPodio.length === 0 ? (
                 <p className="text-xs text-gray-400 bg-[#070B06] p-4 rounded-xl text-center">
@@ -956,7 +969,6 @@ export default function ModuloEstadisticas({
               )}
             </div>
 
-            {/* HISTORIAL DE PAGOS DE DOMINGOS */}
             <div className="pt-3 border-t border-[#233820] space-y-2">
               <h4 className="text-xs font-black uppercase text-gray-400">
                 📜 Historial de Bonos Pagados ({historialBonosPagados.length})

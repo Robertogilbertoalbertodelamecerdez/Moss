@@ -9,9 +9,8 @@ export const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "s
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Fecha exacta en zona horaria Bolivia (America/La_Paz UTC-4) protegida para el build de Next.js 16
 export const obtenerFechaBoliviaISO = (dateObj = null) => {
-  if (typeof window === "undefined" && !dateObj) return "2026-11-07";
+  if (typeof window === "undefined" && !dateObj) return "2026-11-10";
   const target = dateObj || new Date();
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/La_Paz",
@@ -26,6 +25,22 @@ export const sumarDiasBoliviaISO = (dias = 0, fechaBaseISO = null) => {
   const d = new Date(baseStr + "T12:00:00-04:00");
   d.setDate(d.getDate() + Number(dias));
   return obtenerFechaBoliviaISO(d);
+};
+
+// Calcula siempre el LUNES (00:00) de la semana en curso en Bolivia (Ciclo Lunes a Domingo)
+export const obtenerLunesDeSemanaBolivia = (fechaBaseISO = null) => {
+  const baseStr = fechaBaseISO || obtenerFechaBoliviaISO();
+  const d = new Date(baseStr + "T12:00:00-04:00");
+  const diaSemana = d.getDay(); // 0 = Domingo, 1 = Lunes, ..., 6 = Sábado
+  const diffALunes = diaSemana === 0 ? -6 : 1 - diaSemana;
+  d.setDate(d.getDate() + diffALunes);
+  return obtenerFechaBoliviaISO(d);
+};
+
+// Calcula siempre el DOMINGO (cierre de semana) de la semana en curso en Bolivia
+export const obtenerDomingoDeSemanaBolivia = (fechaBaseISO = null) => {
+  const lunesISO = obtenerLunesDeSemanaBolivia(fechaBaseISO);
+  return sumarDiasBoliviaISO(6, lunesISO);
 };
 
 export const extraerFechaLocalISO = (fechaRaw) => {

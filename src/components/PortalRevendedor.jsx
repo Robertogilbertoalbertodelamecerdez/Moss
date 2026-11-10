@@ -4,6 +4,8 @@ import {
   supabase,
   formatearFechaDMA,
   obtenerFechaBoliviaISO,
+  obtenerLunesDeSemanaBolivia,
+  obtenerDomingoDeSemanaBolivia,
   sumarDiasBoliviaISO,
   extraerFechaLocalISO
 } from "@/config";
@@ -19,7 +21,6 @@ import {
   FolderSearch,
   Edit3,
   Copy,
-  Share2,
   CheckCircle2,
   X,
   User,
@@ -59,11 +60,13 @@ export default function PortalRevendedor({
 }) {
   const [tabRev, setTabRev] = useState("mis_clientes");
   const [busqueda, setBusqueda] = useState("");
-  const [filtroTarjetasRev, setFiltroTarjetasRev] = useState("siempre");
+  const [filtroTarjetasRev, setFiltroTarjetasRev] = useState("semana");
 
   const hoyISO = obtenerFechaBoliviaISO();
-  const hace7DiasISO = sumarDiasBoliviaISO(-6, hoyISO);
-  const [periodoEst, setPeriodoEst] = useState("mes");
+  const lunesSemanaISO = obtenerLunesDeSemanaBolivia(hoyISO);
+  const domingoSemanaISO = obtenerDomingoDeSemanaBolivia(hoyISO);
+
+  const [periodoEst, setPeriodoEst] = useState("semana");
   const [fechaDiaEst, setFechaDiaEst] = useState(hoyISO);
   const [mesEst, setMesEst] = useState(hoyISO.slice(0, 7));
 
@@ -86,7 +89,6 @@ export default function PortalRevendedor({
   const [telCliEditRev, setTelCliEditRev] = useState("");
   const [precioCliEditRev, setPrecioCliEditRev] = useState("");
 
-  // Sacar de Stock
   const [matrizVender, setMatrizVender] = useState(null);
   const [nomVentaStock, setNomVentaStock] = useState("");
   const [telVentaStock, setTelVentaStock] = useState("");
@@ -95,7 +97,6 @@ export default function PortalRevendedor({
   const [diasStockPersonalizados, setDiasStockPersonalizados] = useState(30);
   const [guardandoStock, setGuardandoStock] = useState(false);
 
-  // Modal para que el Revendedor renueve una de sus cuentas y avise al Admin para cobrarle
   const [subRenovarRev, setSubRenovarRev] = useState(null);
   const [mesesRenovarRev, setMesesRenovarRev] = useState(1);
   const [diasRenovarRev, setDiasRenovarRev] = useState(30);
@@ -128,30 +129,30 @@ export default function PortalRevendedor({
       .sort((a, b) => String(b.creado_en || "").localeCompare(String(a.creado_en || "")));
   }, [suscripciones, revendedor]);
 
-  // =========================================================================
-  // REGLA DE BLOQUEO: MÁXIMO 3 CUENTAS SIN PAGAR AL ADMIN
-  // =========================================================================
   const cuentasSinPagarAlAdmin = misVentas.filter((s) => s.pagado_al_admin === false);
   const bloqueadoPorDeuda = cuentasSinPagarAlAdmin.length >= 3;
 
+  // Filtro de tarjetas superiores del Revendedor: Hoy | Esta Semana (Lunes a Domingo) | Este Mes | Siempre
   const misVentasTarjetasTop = useMemo(() => {
     return misVentas.filter((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
       if (filtroTarjetasRev === "hoy") return f === hoyISO;
-      if (filtroTarjetasRev === "semana") return f >= hace7DiasISO && f <= hoyISO;
+      if (filtroTarjetasRev === "semana") return f >= lunesSemanaISO && f <= domingoSemanaISO;
       if (filtroTarjetasRev === "mes") return f.startsWith(hoyISO.slice(0, 7));
       return true;
     });
-  }, [misVentas, filtroTarjetasRev, hoyISO, hace7DiasISO]);
+  }, [misVentas, filtroTarjetasRev, hoyISO, lunesSemanaISO, domingoSemanaISO]);
 
+  // Filtro en pestaña Estadísticas del Revendedor: Día | Esta Semana (Lunes a Domingo) | Mes | Histórico
   const misVentasEstadisticas = useMemo(() => {
     return misVentas.filter((s) => {
       const f = extraerFechaLocalISO(s.fecha_venta);
       if (periodoEst === "dia" && f !== fechaDiaEst) return false;
+      if (periodoEst === "semana" && (f < lunesSemanaISO || f > domingoSemanaISO)) return false;
       if (periodoEst === "mes" && !f.startsWith(mesEst)) return false;
       return true;
     });
-  }, [misVentas, periodoEst, fechaDiaEst, mesEst]);
+  }, [misVentas, periodoEst, fechaDiaEst, lunesSemanaISO, domingoSemanaISO, mesEst]);
 
   const cobradoPeriodoTop = misVentasTarjetasTop.reduce(
     (acc, s) => acc + Number(s.precio_venta_revendedor || 0),
@@ -179,7 +180,7 @@ export default function PortalRevendedor({
     filtroTarjetasRev === "hoy"
       ? "DE HOY"
       : filtroTarjetasRev === "semana"
-      ? "ESTA SEMANA"
+      ? `LUN ${formatearFechaDMA(lunesSemanaISO).slice(0, 5)} - DOM ${formatearFechaDMA(domingoSemanaISO).slice(0, 5)}`
       : filtroTarjetasRev === "mes"
       ? "ESTE MES"
       : "HISTÓRICO";
@@ -358,7 +359,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // SACAR DE STOCK (BLOQUEADO SI DEBE 3 O MÁS CUENTAS)
   const venderPerfilDeMatriz = async (e) => {
     e.preventDefault();
     if (bloqueadoPorDeuda) {
@@ -483,9 +483,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // =========================================================================
-  // RENOVAR CUENTA DESDE EL PORTAL DEL REVENDEDOR (DISPARA COBRO AL ADMIN)
-  // =========================================================================
   const confirmarRenovacionPorRevendedor = async (e) => {
     e.preventDefault();
     if (bloqueadoPorDeuda) {
@@ -520,7 +517,6 @@ export default function PortalRevendedor({
 
       if (error) throw error;
 
-      // Enviar alerta a la campana del Admin para que le cobre la renovación y marque Pagado
       await supabase.from("notificaciones_sistema").insert([
         {
           tipo: "venta_revendedor",
@@ -610,7 +606,6 @@ export default function PortalRevendedor({
 
   return (
     <div className="space-y-5">
-      {/* ALERTA DE BLOQUEO SI DEBE 3 O MÁS CUENTAS AL ADMINISTRADOR */}
       {bloqueadoPorDeuda && (
         <div className="bg-red-950/80 border-2 border-red-500 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -655,7 +650,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* BARRA DE FILTRO RÁPIDO PARA LAS TARJETAS DEL REVENDEDOR */}
+      {/* BARRA DE FILTRO RÁPIDO CON "ESTA SEMANA (LUN - DOM)" */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0E170D]/90 px-4 py-2.5 rounded-2xl border border-[#233820]">
         <span className="text-xs text-gray-400 font-bold flex items-center gap-1.5">
           <Calendar className="w-3.5 h-3.5 text-[#66FF00]" /> Mis métricas superiores mostrando:
@@ -663,7 +658,7 @@ export default function PortalRevendedor({
         <div className="flex flex-wrap gap-1.5">
           {[
             { id: "hoy", label: "Hoy" },
-            { id: "semana", label: "Esta Semana" },
+            { id: "semana", label: "Esta Semana (Lun - Dom)" },
             { id: "mes", label: "Este Mes" },
             { id: "siempre", label: "Siempre (Total)" }
           ].map((op) => (
@@ -822,12 +817,6 @@ export default function PortalRevendedor({
                               ✓ Pagado a Admin
                             </span>
                           )}
-
-                          {faltaAnotar && (
-                            <span className="px-2.5 py-0.5 text-[11px] font-extrabold rounded-full bg-amber-950 text-amber-300 border border-amber-500/50 flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" /> ¡Anota tu cliente y precio!
-                            </span>
-                          )}
                         </div>
 
                         <p className="text-sm font-bold text-white pt-1">
@@ -880,7 +869,7 @@ export default function PortalRevendedor({
                       <button
                         onClick={() => {
                           if (bloqueadoPorDeuda) {
-                            return notificar("⛔ Tienes 3 cuentas sin pagar al Admin. Paga tus pendientes para renovar.", "error");
+                            return notificar("⛔ Tienes 3 cuentas sin pagar al Admin.", "error");
                           }
                           setSubRenovarRev(s);
                           setMesesRenovarRev(1);
@@ -1080,7 +1069,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 3: RENOVACIONES DEL REVENDEDOR (CON BOTÓN DE RENOVAR Y ENVIAR A WHATSAPP) */}
+      {/* PESTAÑA 3: RENOVACIONES */}
       {tabRev === "renovaciones" && (
         <div className="space-y-3">
           {misRenovaciones.length === 0 ? (
@@ -1155,13 +1144,14 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA */}
+      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA CON FILTRO "ESTA SEMANA (LUN - DOM)" */}
       {tabRev === "estadisticas" && (
         <div className="space-y-5">
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {[
                 { id: "dia", label: "Por Día" },
+                { id: "semana", label: "Esta Semana (Lun - Dom)" },
                 { id: "mes", label: "Por Mes" },
                 { id: "todo", label: "Histórico" }
               ].map((p) => (
@@ -1283,7 +1273,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL PARA QUE EL REVENDEDOR RENUEVE UNA CUENTA Y ENVÍE ALERTA DE COBRO AL ADMIN */}
+      {/* MODAL PARA QUE EL REVENDEDOR RENUEVE UNA CUENTA */}
       {subRenovarRev && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1443,7 +1433,8 @@ export default function PortalRevendedor({
                     perfilPropioModal.matriz.correo,
                     perfilPropioModal.matriz.password,
                     perfilPropioModal.perfil.nombre_perfil,
-                    pinEditRev
+                    pinEditRev,
+                    revendedor.telefono
                   );
                   navigator.clipboard.writeText(msg);
                   notificar("Aviso corto de cambio de PIN copiado");
@@ -1462,7 +1453,8 @@ export default function PortalRevendedor({
                     perfilPropioModal.matriz.correo,
                     perfilPropioModal.matriz.password,
                     perfilPropioModal.perfil.nombre_perfil,
-                    pinEditRev
+                    pinEditRev,
+                    revendedor.telefono
                   );
                   enviarWhatsappDirecto(telCliEditRev, msg);
                 }}
@@ -1490,35 +1482,27 @@ export default function PortalRevendedor({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div>
-              <label className="text-xs text-gray-400">Nombre de tu Cliente Final *</label>
-              <input
-                type="text"
-                value={nomFinal}
-                onChange={(e) => setNomFinal(e.target.value)}
-                className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-400">Teléfono / WhatsApp de tu Cliente *</label>
-              <input
-                type="text"
-                value={telFinal}
-                onChange={(e) => setTelFinal(e.target.value)}
-                className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-[#66FF00] font-bold">
-                ¿En cuánto se lo vendiste? (Bs) * — (Tu costo fue Bs {subAnotar.precio_venta})
-              </label>
-              <input
-                type="text"
-                value={precioFinal}
-                onChange={(e) => setPrecioFinal(limpiarMontoConSigno(e.target.value))}
-                className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
-              />
-            </div>
+            <input
+              type="text"
+              placeholder="Nombre de tu Cliente Final *"
+              value={nomFinal}
+              onChange={(e) => setNomFinal(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Teléfono / WhatsApp de tu Cliente *"
+              value={telFinal}
+              onChange={(e) => setTelFinal(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Precio de Venta (Bs) *"
+              value={precioFinal}
+              onChange={(e) => setPrecioFinal(limpiarMontoConSigno(e.target.value))}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
+            />
             <div className="flex gap-2">
               <button type="button" onClick={() => setSubAnotar(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
                 Cancelar
@@ -1706,7 +1690,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL MENSAJE DE ENTREGA CON BOTÓN ENVIAR PEDIDO DIRECTO A WHATSAPP */}
+      {/* MODAL MENSAJE DE ENTREGA */}
       {mensajeModal && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">

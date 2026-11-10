@@ -6,7 +6,8 @@ import {
   PLATAFORMAS,
   formatearFechaDMA,
   obtenerFechaBoliviaISO,
-  sumarDiasBoliviaISO,
+  obtenerLunesDeSemanaBolivia,
+  obtenerDomingoDeSemanaBolivia,
   extraerFechaLocalISO
 } from "@/config";
 import ModuloVentas from "@/components/ModuloVentas";
@@ -155,7 +156,6 @@ export default function MossCRM() {
     }
   }, []);
 
-  // SINCRONIZACIÓN AUTOMÁTICA EN TIEMPO REAL (SIN RECARGAR LA PÁGINA)
   useEffect(() => {
     setMontado(true);
     const guardada = localStorage.getItem("moss_sesion_v3");
@@ -282,14 +282,18 @@ export default function MossCRM() {
     notificar(`¡${pendientes.length} cobros marcados como Pagados (+Bs ${sumaTotal.toFixed(2)})!`);
   };
 
+  // =========================================================================
+  // CICLO DE SEMANA ESTRICTO: DESDE ESTE LUNES HASTA ESTE DOMINGO
+  // =========================================================================
   const hoyBolivia = obtenerFechaBoliviaISO();
-  const hace7DiasBolivia = sumarDiasBoliviaISO(-6, hoyBolivia);
+  const lunesEstaSemana = obtenerLunesDeSemanaBolivia(hoyBolivia);
+  const domingoEstaSemana = obtenerDomingoDeSemanaBolivia(hoyBolivia);
   const mesActualBolivia = hoyBolivia.slice(0, 7);
 
   const cumpleFiltroTop = (fechaRaw) => {
     const f = extraerFechaLocalISO(fechaRaw);
     if (filtroTarjetasTop === "hoy") return f === hoyBolivia;
-    if (filtroTarjetasTop === "semana") return f >= hace7DiasBolivia && f <= hoyBolivia;
+    if (filtroTarjetasTop === "semana") return f >= lunesEstaSemana && f <= domingoEstaSemana;
     if (filtroTarjetasTop === "mes") return f.startsWith(mesActualBolivia);
     return true;
   };
@@ -339,7 +343,7 @@ export default function MossCRM() {
     filtroTarjetasTop === "hoy"
       ? `DE HOY (${formatearFechaDMA(hoyBolivia).slice(0, 5)})`
       : filtroTarjetasTop === "semana"
-      ? "DE ESTA SEMANA (7D)"
+      ? `ESTA SEMANA (LUN ${formatearFechaDMA(lunesEstaSemana).slice(0, 5)} - DOM ${formatearFechaDMA(domingoEstaSemana).slice(0, 5)})`
       : filtroTarjetasTop === "mes"
       ? "DE ESTE MES"
       : "HISTÓRICO SIEMPRE";
@@ -570,7 +574,7 @@ export default function MossCRM() {
               <div className="flex flex-wrap gap-1.5">
                 {[
                   { id: "hoy", label: "Hoy" },
-                  { id: "semana", label: "Esta Semana" },
+                  { id: "semana", label: "Esta Semana (Lun - Dom)" },
                   { id: "mes", label: "Este Mes" },
                   { id: "siempre", label: "Siempre (Total)" }
                 ].map((op) => (
