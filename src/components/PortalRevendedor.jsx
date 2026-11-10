@@ -70,7 +70,7 @@ export default function PortalRevendedor({
 
   const [nombreBanca, setNombreBanca] = useState(revendedor.nombre_billetera || "Mi Billetera");
   const [modalAjusteBanca, setModalAjusteBanca] = useState(false);
-  const [tipoMovBanca, setTipoMovBanca] = useState("gasto"); // 'gasto' (-) | 'ingreso' (+)
+  const [tipoMovBanca, setTipoMovBanca] = useState("gasto");
   const [montoBanca, setMontoBanca] = useState("");
   const [descBanca, setDescBanca] = useState("");
 
@@ -85,14 +85,30 @@ export default function PortalRevendedor({
   const [telCliEditRev, setTelCliEditRev] = useState("");
   const [precioCliEditRev, setPrecioCliEditRev] = useState("");
 
+  // Estados para Sacar de Stock con soporte de Meses y Días personalizados
   const [matrizVender, setMatrizVender] = useState(null);
   const [nomVentaStock, setNomVentaStock] = useState("");
   const [telVentaStock, setTelVentaStock] = useState("");
   const [precioVentaStock, setPrecioVentaStock] = useState("");
   const [mesesStock, setMesesStock] = useState(1);
+  const [diasStockPersonalizados, setDiasStockPersonalizados] = useState(30);
   const [guardandoStock, setGuardandoStock] = useState(false);
 
   const [mensajeModal, setMensajeModal] = useState(null);
+
+  const cambiarMesesEnStockRev = (cantMeses) => {
+    const m = Math.max(1, Number(cantMeses || 1));
+    const d = m === 12 ? 365 : m * 30;
+    setMesesStock(m);
+    setDiasStockPersonalizados(d);
+  };
+
+  const cambiarDiasEnStockRev = (cantDias) => {
+    const d = Math.max(1, Number(cantDias || 30));
+    setDiasStockPersonalizados(d);
+    const mAprox = Math.max(1, Math.round(d / 30));
+    setMesesStock(mAprox);
+  };
 
   const misVentas = useMemo(() => {
     return suscripciones
@@ -328,6 +344,7 @@ export default function PortalRevendedor({
     }
   };
 
+  // VENDER UN CUPO DE STOCK CON SOPORTE DE MÚLTIPLES MESES O DÍAS PERSONALIZADOS
   const venderPerfilDeMatriz = async (e) => {
     e.preventDefault();
     if (!matrizVender) return;
@@ -344,9 +361,10 @@ export default function PortalRevendedor({
 
     setGuardandoStock(true);
     try {
+      const diasTotales = Math.max(1, Number(diasStockPersonalizados || 30));
+      const mesesContratados = Math.max(1, Number(mesesStock || Math.round(diasTotales / 30)));
       const costoUnitarioRev = obtenerPrecioRevendedorPlat(matrizVender.plataforma);
-      const costoTotalParaRev = costoUnitarioRev * Number(mesesStock);
-      const diasTotales = Number(mesesStock) === 12 ? 365 : Number(mesesStock) * 30;
+      const costoTotalParaRev = Number((costoUnitarioRev * mesesContratados).toFixed(2));
       const fechaCorte = sumarDiasBoliviaISO(diasTotales, hoyISO);
 
       await supabase
@@ -381,7 +399,7 @@ export default function PortalRevendedor({
             pin_perfil: slot.pin,
             costo_proveedor: 0,
             precio_venta: costoTotalParaRev,
-            meses_contratados: Number(mesesStock),
+            meses_contratados: mesesContratados,
             dias_totales: diasTotales,
             fecha_venta: hoyISO,
             fecha_corte: fechaCorte,
@@ -398,8 +416,8 @@ export default function PortalRevendedor({
       await supabase.from("notificaciones_sistema").insert([
         {
           tipo: "venta_revendedor",
-          titulo: `🛒 ${revendedor.nombre} sacó ${matrizVender.plataforma} del Stock`,
-          mensaje: `Correo: ${matrizVender.correo} (${slot.nombre_perfil}) · Cliente final: ${nomVentaStock.trim()} (${telVentaStock.trim()}) · Vendido en Bs ${precioVentaStock}. Cobrar a revendedor: Bs ${costoTotalParaRev.toFixed(2)}.`,
+          titulo: `🛒 ${revendedor.nombre} sacó ${matrizVender.plataforma} (${diasTotales}d / ${mesesContratados}M)`,
+          mensaje: `Correo: ${matrizVender.correo} (${slot.nombre_perfil}) · Plan: ${diasTotales} días (${mesesContratados}M) · Cliente final: ${nomVentaStock.trim()} (${telVentaStock.trim()}) · Vendido en Bs ${precioVentaStock}. Cobrar a revendedor: Bs ${costoTotalParaRev.toFixed(2)}.`,
           revendedor_id: revendedor.id,
           nombre_revendedor: revendedor.nombre,
           suscripcion_id: nuevaSub.id,
@@ -419,7 +437,8 @@ export default function PortalRevendedor({
             passFinal: matrizVender.password,
             perfilFinal: slot.nombre_perfil,
             pinFinal: slot.pin,
-            meses: Number(mesesStock),
+            meses: mesesContratados,
+            diasTotales: diasTotales,
             fechaCorte,
             precioVenta: Number(precioVentaStock)
           }
@@ -433,9 +452,11 @@ export default function PortalRevendedor({
       setNomVentaStock("");
       setTelVentaStock("");
       setPrecioVentaStock("");
+      setMesesStock(1);
+      setDiasStockPersonalizados(30);
       setMensajeModal(msg);
       await recargarTodo();
-      notificar("¡Perfil asignado! Recuerda pagar el cupo al administrador.");
+      notificar(`¡Perfil asignado por ${diasTotales} días! Recuerda pagar el cupo al administrador.`);
     } catch (err) {
       registrarErrorSistema("Auto-venta de Matriz por Revendedor", err.message, revendedor.nombre);
       notificar("Error: " + err.message, "error");
@@ -444,7 +465,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // Guarda movimiento en Billetera respetando tanto el signo escrito (- / +) como el botón seleccionado
   const registrarMovimientoPropio = async (e) => {
     e.preventDefault();
     const numBase = parseFloat(montoBanca);
@@ -653,6 +673,7 @@ export default function PortalRevendedor({
                 const faltaAnotar = !s.nombre_cliente_final || !s.telefono_cliente_final;
                 const gananciaIndividual =
                   Number(s.precio_venta_revendedor || 0) - Number(s.precio_venta || 0);
+                const diasPlan = s.dias_totales || Number(s.meses_contratados || 1) * 30;
 
                 return (
                   <div
@@ -666,6 +687,10 @@ export default function PortalRevendedor({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                             {s.plataforma}
+                          </span>
+
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
+                            ⏳ Plan: {diasPlan} días
                           </span>
 
                           {s.pagado_al_admin === false ? (
@@ -747,6 +772,7 @@ export default function PortalRevendedor({
                                   perfilFinal: s.nombre_perfil,
                                   pinFinal: s.pin_perfil,
                                   meses: s.meses_contratados || 1,
+                                  diasTotales: diasPlan,
                                   fechaCorte: s.fecha_corte,
                                   precioVenta: s.precio_venta_revendedor || s.precio_venta
                                 }
@@ -769,13 +795,9 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PESTAÑA 2: MATRICES Y STOCK CON LOS 3 COLORES DIFERENCIADOS               */}
-      {/* 🟢 Verde = Ocupado Mío | 🟣 Morado = Libre | ⚫ Gris = Ocupado Admin      */}
-      {/* ========================================================================= */}
+      {/* PESTAÑA 2: MATRICES Y STOCK CON LOS 3 COLORES DIFERENCIADOS */}
       {tabRev === "stock_disponible" && revendedor.puede_ver_matrices && (
         <div className="space-y-4">
-          {/* LEYENDA DE COLORES CLARA ARRIBA */}
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
             <span className="text-gray-300 font-bold">Guía rápida de colores de perfiles:</span>
             <div className="flex flex-wrap items-center gap-4">
@@ -807,7 +829,7 @@ export default function PortalRevendedor({
                           {matriz.plataforma}
                         </span>
                         <span className="ml-2 text-xs text-orange-300 font-bold">
-                          Tu Costo: Bs {precioMayorista}
+                          Tu Costo: Bs {precioMayorista} / mes
                         </span>
                         <p className="text-xs text-gray-300 font-mono mt-1">{matriz.correo}</p>
                         <p className="text-[11px] text-gray-500">
@@ -820,6 +842,7 @@ export default function PortalRevendedor({
                           onClick={() => {
                             setMatrizVender(matriz);
                             setMesesStock(1);
+                            setDiasStockPersonalizados(30);
                           }}
                           className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(168,85,247,0.4)]"
                         >
@@ -854,6 +877,8 @@ export default function PortalRevendedor({
                                 setPrecioCliEditRev(subOcupante.precio_venta_revendedor || "");
                               } else if (!p.ocupado && !p.caido) {
                                 setMatrizVender(matriz);
+                                setMesesStock(1);
+                                setDiasStockPersonalizados(30);
                               }
                             }}
                             className={`p-2.5 rounded-xl border text-left text-xs flex items-center gap-2 transition ${
@@ -864,7 +889,6 @@ export default function PortalRevendedor({
                                 : "bg-purple-950/60 border-2 border-purple-500 hover:bg-purple-900/60 cursor-pointer shadow-[0_0_12px_rgba(168,85,247,0.2)]"
                             }`}
                           >
-                            {/* ÍCONO DE PERSONITA CON COLOR DIFERENCIADO */}
                             <div
                               className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
                                 esMio
@@ -1358,68 +1382,142 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL SACAR CUENTA DE STOCK */}
+      {/* ========================================================================= */}
+      {/* MODAL SACAR CUENTA DE STOCK CON SELECTOR DE MESES Y DÍAS PERSONALIZADOS    */}
+      {/* ========================================================================= */}
       {matrizVender && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
             onSubmit={venderPerfilDeMatriz}
-            className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4"
+            className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal"
           >
-            <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00] text-sm">
+            <div className="flex justify-between items-center border-b border-[#233820] pb-2">
+              <h3 className="font-black text-[#66FF00] text-base">
                 Sacar 1 Perfil de {matrizVender.plataforma}
               </h3>
-              <button type="button" onClick={() => setMatrizVender(null)} className="text-gray-400">
+              <button type="button" onClick={() => setMatrizVender(null)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-orange-300 bg-orange-950/40 border border-orange-500/40 p-2.5 rounded-xl">
-              Tu costo mayorista: <b>Bs {obtenerPrecioRevendedorPlat(matrizVender.plataforma)} / mes</b>.
-            </p>
+
+            {/* RESUMEN DINÁMICO DE COSTO Y VENCIMIENTO */}
+            <div className="text-xs text-orange-300 bg-orange-950/40 border border-orange-500/40 p-3 rounded-2xl space-y-1">
+              <p>
+                Costo base: <b>Bs {obtenerPrecioRevendedorPlat(matrizVender.plataforma)} / mes</b> · Total a pagar a Admin por{" "}
+                <b>{mesesStock}M ({diasStockPersonalizados} días)</b>:{" "}
+                <b className="text-white text-sm">
+                  Bs {(obtenerPrecioRevendedorPlat(matrizVender.plataforma) * Number(mesesStock || 1)).toFixed(2)}
+                </b>
+              </p>
+              <p className="text-[11px] text-gray-300">
+                Fecha de corte calculada:{" "}
+                <b className="text-[#66FF00]">
+                  {formatearFechaDMA(sumarDiasBoliviaISO(Number(diasStockPersonalizados || 30), hoyISO))}
+                </b>
+              </p>
+            </div>
+
+            {/* SELECTOR DE MESES O DÍAS IGUAL QUE EN EL PANEL DE ADMIN */}
+            <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3 space-y-2.5">
+              <label className="text-xs text-[#66FF00] font-extrabold block">
+                Duración del Plan: {diasStockPersonalizados} días ({mesesStock}M)
+              </label>
+
+              <div className="flex gap-1">
+                {[
+                  { valor: 1, texto: "1M (30d)" },
+                  { valor: 2, texto: "2M (60d)" },
+                  { valor: 3, texto: "3M (90d)" },
+                  { valor: 6, texto: "6M (180d)" },
+                  { valor: 12, texto: "1A (365d)" }
+                ].map((op) => (
+                  <button
+                    key={op.valor}
+                    type="button"
+                    onClick={() => cambiarMesesEnStockRev(op.valor)}
+                    className={`flex-1 py-2 rounded-xl text-[10px] font-extrabold border cursor-pointer ${
+                      Number(mesesStock) === op.valor
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    {op.texto}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] text-gray-400">O escribe Meses:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={mesesStock}
+                    onChange={(e) => cambiarMesesEnStockRev(e.target.value)}
+                    className="w-full mt-0.5 bg-[#070B06] border border-[#2A4226] rounded-xl px-2.5 py-1.5 text-xs text-white font-bold text-center"
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] text-[#66FF00] font-bold">O escribe Días (Ej: 90):</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={diasStockPersonalizados}
+                    onChange={(e) => cambiarDiasEnStockRev(e.target.value)}
+                    className="w-full mt-0.5 bg-[#070B06] border border-[#66FF00] rounded-xl px-2.5 py-1.5 text-xs text-white font-black text-center"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div>
               <label className="text-xs text-gray-400">Nombre de tu Cliente Final *</label>
               <input
                 type="text"
+                placeholder="Ej: Juan Pérez"
                 value={nomVentaStock}
                 onChange={(e) => setNomVentaStock(e.target.value)}
                 className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
               />
             </div>
+
             <div>
               <label className="text-xs text-gray-400">Teléfono de tu Cliente Final *</label>
               <input
                 type="text"
+                placeholder="Ej: 71234567"
                 value={telVentaStock}
                 onChange={(e) => setTelVentaStock(e.target.value)}
                 className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
               />
             </div>
+
             <div>
               <label className="text-xs text-[#66FF00] font-bold">
-                Precio al que se lo vendiste a tu cliente (Bs) *
+                Precio Total al que se lo vendiste a tu cliente (Bs) *
               </label>
               <input
                 type="text"
+                placeholder="Ej: 25"
                 value={precioVentaStock}
                 onChange={(e) => setPrecioVentaStock(limpiarMontoConSigno(e.target.value))}
                 className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
               />
             </div>
-            <div className="flex gap-2">
+
+            <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setMatrizVender(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
                 Cancelar
               </button>
               <button type="submit" disabled={guardandoStock} className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                {guardandoStock ? "Asignando..." : "Obtener Datos"}
+                {guardandoStock ? "Asignando..." : `Obtener Datos (${diasStockPersonalizados}d)`}
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL REGISTRAR MOVIMIENTO EN BILLETERA (TECLADO UNIVERSAL + BLOQUEO LETRAS) */}
-      {/* ========================================================================= */}
+      {/* MODAL REGISTRAR MOVIMIENTO EN BILLETERA */}
       {modalAjusteBanca && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1435,7 +1533,6 @@ export default function PortalRevendedor({
               </button>
             </div>
 
-            {/* SELECTOR VISUAL RÁPIDO (+ INGRESO / - GASTO) */}
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
