@@ -14,15 +14,12 @@ import {
   Copy,
   CheckCircle2,
   UserCheck,
-  Sparkles,
   UserPlus,
-  Truck,
   PlusCircle,
   X,
   Zap,
   Calendar,
   MessageSquare,
-  Trash2,
   Users,
   Send
 } from "lucide-react";
@@ -73,7 +70,6 @@ export default function ModuloVentas({
   const [meses, setMeses] = useState(1);
   const [diasPersonalizados, setDiasPersonalizados] = useState(30);
 
-  // Recordatorio periódico de Proveedor cuando el cliente paga más de 1 mes (> 30 días)
   const [mesesPagadosProv, setMesesPagadosProv] = useState(1);
   const [cadaCuantosMesesAvisar, setCadaCuantosMesesAvisar] = useState(1);
 
@@ -98,10 +94,19 @@ export default function ModuloVentas({
     };
 
   const perfilesEnCarritoIds = carritoCombo.map((item) => item.perfilIdUsado).filter(Boolean);
+  const matricesCompletasEnCarritoIds = carritoCombo
+    .filter((item) => item.tipoCuenta === "Cuenta Completa" && item.matrizIdUsada)
+    .map((item) => item.matrizIdUsada);
 
   const contarCuposLibresPlataforma = (nombrePlat) => {
     return matrices
-      .filter((m) => !m.en_papelera && m.estado === "Activa" && m.plataforma === nombrePlat)
+      .filter(
+        (m) =>
+          !m.en_papelera &&
+          m.estado === "Activa" &&
+          m.plataforma === nombrePlat &&
+          !matricesCompletasEnCarritoIds.includes(m.id)
+      )
       .reduce(
         (acc, m) =>
           acc +
@@ -243,15 +248,6 @@ export default function ModuloVentas({
     notificar(`Datos extraídos para ${plataforma}`);
   };
 
-  const pegarDesdePortapapeles = async () => {
-    try {
-      const texto = await navigator.clipboard.readText();
-      if (texto) procesarTextoProveedor(texto);
-    } catch {
-      notificar("Pega el mensaje directamente en el recuadro", "error");
-    }
-  };
-
   const handleTelefonoChange = (valor) => {
     setTelefono(valor);
     const limpio = valor.trim();
@@ -264,17 +260,9 @@ export default function ModuloVentas({
     }
   };
 
-  const seleccionarModoFecha = (modo) => {
-    setModoFecha(modo);
-    if (modo === "hoy") {
-      setFechaVenta(obtenerFechaBoliviaISO());
-    } else if (modo === "ayer") {
-      setFechaVenta(sumarDiasBoliviaISO(-1));
-    }
-  };
-
   const obtenerPerfilesLibresDeMatriz = (matriz) => {
     if (!matriz || !matriz.perfiles_matriz) return [];
+    if (matricesCompletasEnCarritoIds.includes(matriz.id)) return [];
     const libres = matriz.perfiles_matriz.filter(
       (p) => !p.ocupado && !p.caido && !perfilesEnCarritoIds.includes(p.id)
     );
@@ -282,10 +270,16 @@ export default function ModuloVentas({
     return libres;
   };
 
+  // Si eliges "Cuenta Completa", solo muestra matrices que tengan TODOS sus perfiles libres (ninguno ocupado)
   const matricesDisponibles = matrices.filter((m) => {
     if (m.en_papelera || m.estado !== "Activa") return false;
     if (m.plataforma !== plataforma) return false;
-    return obtenerPerfilesLibresDeMatriz(m).length > 0;
+    const libres = obtenerPerfilesLibresDeMatriz(m);
+    if (tipoCuenta === "Cuenta Completa") {
+      const totalPerfiles = (m.perfiles_matriz || []).length;
+      return totalPerfiles > 0 && libres.length === totalPerfiles;
+    }
+    return libres.length > 0;
   });
 
   const obtenerSiguientePerfilLibre = (matriz) => obtenerPerfilesLibresDeMatriz(matriz)[0] || null;
@@ -305,7 +299,12 @@ export default function ModuloVentas({
     if (origen === "stock" && !esModoInvitacion) {
       const matrizObj = matricesDisponibles.find((m) => m.id === matrizSeleccionadaId) || matricesDisponibles[0];
       if (!matrizObj) {
-        notificar("No tienes stock libre en esta plataforma", "error");
+        notificar(
+          tipoCuenta === "Cuenta Completa"
+            ? "No tienes ninguna matriz 100% libre para vender Cuenta Completa"
+            : "No tienes stock libre en esta plataforma",
+          "error"
+        );
         return null;
       }
       const slotLibre = obtenerSiguientePerfilLibre(matrizObj);
@@ -317,7 +316,7 @@ export default function ModuloVentas({
       passFinal = matrizObj.password;
       perfilFinal = tipoCuenta === "Cuenta Completa" ? "Cuenta Completa" : slotLibre.nombre_perfil;
       pinFinal = tipoCuenta === "Cuenta Completa" ? "" : slotLibre.pin;
-      perfilIdUsado = slotLibre.id;
+      perfilIdUsado = tipoCuenta === "Cuenta Completa" ? null : slotLibre.id;
       matrizIdUsada = matrizObj.id;
       provIdFinal = matrizObj.proveedor_id || null;
       provNombreFinal = matrizObj.nombre_proveedor || null;
@@ -462,11 +461,18 @@ export default function ModuloVentas({
 
         if (errSub) throw errSub;
 
+        // Si se vende Cuenta Completa desde Stock, se ocupan TODOS los perfiles de esa matriz
         if (item.origen === "stock" && item.matrizIdUsada) {
           if (item.tipoCuenta === "Cuenta Completa") {
-            await supabase.from("perfiles_matriz").update({ ocupado: true }).eq("matriz_id", item.matrizIdUsada);
+            await supabase
+              .from("perfiles_matriz")
+              .update({ ocupado: true })
+              .eq("matriz_id", item.matrizIdUsada);
           } else if (item.perfilIdUsado) {
-            await supabase.from("perfiles_matriz").update({ ocupado: true }).eq("id", item.perfilIdUsado);
+            await supabase
+              .from("perfiles_matriz")
+              .update({ ocupado: true })
+              .eq("id", item.perfilIdUsado);
           }
         }
 
@@ -516,15 +522,6 @@ export default function ModuloVentas({
 
   const hoyBolivia = obtenerFechaBoliviaISO();
   const ventasActivas = suscripciones.filter((s) => !s.en_papelera);
-  const ventasDeHoy = ventasActivas.filter((s) => s.fecha_venta === hoyBolivia);
-  const ingresoDeHoy = ventasDeHoy.reduce((acc, s) => acc + Number(s.precio_venta || 0), 0);
-  const cuposLibresTotales = matrices
-    .filter((m) => !m.en_papelera && m.estado === "Activa")
-    .reduce((acc, m) => acc + (m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length, 0);
-
-  const totalAcumuladoCombo =
-    carritoCombo.reduce((acc, item) => acc + Number(item.precioVenta || 0), 0) +
-    (precioVenta !== "" ? Number(precioVenta) : 0);
 
   const esModoInvitacionActual = tipoCuenta === "Por Invitación" || configPlatActual.pidePass === false;
 
@@ -643,7 +640,7 @@ export default function ModuloVentas({
                           precioVenta: v.precio_venta
                         }],
                         linkWhatsappMoss,
-                        null,
+                        v.fue_reemplazada ? "REEMPLAZO DE CUENTA" : null,
                         v.tipo_comprador === "revendedor"
                       )
                     )
@@ -818,21 +815,36 @@ export default function ModuloVentas({
 
             {origen === "stock" && !esModoInvitacionActual ? (
               <div className="bg-[#0B120A] border border-[#233820] rounded-xl p-3.5">
-                <label className="text-xs text-[#66FF00] font-semibold">Selecciona Matriz Disponible:</label>
-                <select
-                  value={matrizSeleccionadaId || matricesDisponibles[0]?.id || ""}
-                  onChange={(e) => setMatrizSeleccionadaId(e.target.value)}
-                  className="w-full mt-1.5 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
-                >
-                  {matricesDisponibles.map((m) => {
-                    const sig = obtenerSiguientePerfilLibre(m);
-                    return (
-                      <option key={m.id} value={m.id}>
-                        {m.correo} 👉 {sig?.nombre_perfil} (PIN: {sig?.pin})
-                      </option>
-                    );
-                  })}
-                </select>
+                <label className="text-xs text-[#66FF00] font-semibold">
+                  {tipoCuenta === "Cuenta Completa"
+                    ? "Selecciona Matriz 100% Libre (Ocupará todos los perfiles de la matriz):"
+                    : "Selecciona Matriz Disponible:"}
+                </label>
+                {matricesDisponibles.length === 0 ? (
+                  <p className="text-xs text-orange-400 mt-1">
+                    {tipoCuenta === "Cuenta Completa"
+                      ? `No tienes matrices completamente vacías para ${plataforma}. Usa modo "Proveedor".`
+                      : `Sin stock libre para ${plataforma}. Usa modo "Proveedor".`}
+                  </p>
+                ) : (
+                  <select
+                    value={matrizSeleccionadaId || matricesDisponibles[0]?.id || ""}
+                    onChange={(e) => setMatrizSeleccionadaId(e.target.value)}
+                    className="w-full mt-1.5 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
+                  >
+                    {matricesDisponibles.map((m) => {
+                      const sig = obtenerSiguientePerfilLibre(m);
+                      return (
+                        <option key={m.id} value={m.id}>
+                          {m.correo} 👉{" "}
+                          {tipoCuenta === "Cuenta Completa"
+                            ? "👑 Ocupará TODA la matriz completa"
+                            : `${sig?.nombre_perfil} (PIN: ${sig?.pin})`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                )}
               </div>
             ) : (
               <div className="bg-[#0B120A] border border-[#66FF00]/40 rounded-xl p-3.5 space-y-3">
@@ -884,20 +896,24 @@ export default function ModuloVentas({
                         onChange={(e) => setProvPassword(e.target.value)}
                         className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                       />
-                      <input
-                        type="text"
-                        placeholder="Perfil"
-                        value={provPerfil}
-                        onChange={(e) => setProvPerfil(e.target.value)}
-                        className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                      />
-                      <input
-                        type="text"
-                        placeholder="PIN"
-                        value={provPin}
-                        onChange={(e) => setProvPin(e.target.value)}
-                        className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                      />
+                      {tipoCuenta !== "Cuenta Completa" && (
+                        <>
+                          <input
+                            type="text"
+                            placeholder="Perfil"
+                            value={provPerfil}
+                            onChange={(e) => setProvPerfil(e.target.value)}
+                            className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                          />
+                          <input
+                            type="text"
+                            placeholder="PIN"
+                            value={provPin}
+                            onChange={(e) => setProvPin(e.target.value)}
+                            className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                          />
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -982,7 +998,6 @@ export default function ModuloVentas({
               </div>
             </div>
 
-            {/* RECORDATORIO MES POR MES CUANDO EL CLIENTE PAGA MÁS DE 1 MES (> 30 DÍAS) */}
             {Number(diasPersonalizados) > 30 && (
               <div className="bg-amber-950/30 border-2 border-amber-500/60 rounded-2xl p-3.5 space-y-2">
                 <p className="text-xs font-black text-amber-300">
@@ -1010,12 +1025,6 @@ export default function ModuloVentas({
                     />
                   </div>
                 </div>
-                <p className="text-[11px] text-amber-200">
-                  🔔 Primer aviso en tu pestaña Renovaciones el:{" "}
-                  <b className="text-white">
-                    {formatearFechaDMA(sumarDiasBoliviaISO(Number(mesesPagadosProv || 1) * 30, fechaVenta || obtenerFechaBoliviaISO()))}
-                  </b>
-                </p>
               </div>
             )}
 
@@ -1050,7 +1059,73 @@ export default function ModuloVentas({
         </div>
       )}
 
-      {/* MODAL MENSAJE DE ENTREGA CON BOTÓN ENVIAR PEDIDO DIRECTO A WHATSAPP */}
+      {/* MODAL NUEVO REVENDEDOR */}
+      {modalNuevoRev && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
+          <form onSubmit={guardarNuevoRevendedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4">
+            <h3 className="font-black text-[#66FF00] flex items-center gap-2">
+              <Users className="w-5 h-5" /> Registrar Nuevo Revendedor
+            </h3>
+            <input
+              type="text"
+              placeholder="Nombre del Revendedor"
+              value={nuevoRevNombre}
+              onChange={(e) => setNuevoRevNombre(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Teléfono / WhatsApp"
+              value={nuevoRevTelefono}
+              onChange={(e) => setNuevoRevTelefono(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
+            />
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setModalNuevoRev(false)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
+                Guardar Revendedor
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL NUEVO PROVEEDOR */}
+      {modalNuevoProv && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
+          <form onSubmit={guardarNuevoProveedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4">
+            <h3 className="font-black text-[#66FF00] flex items-center gap-2">
+              <UserPlus className="w-5 h-5" /> Registrar Proveedor
+            </h3>
+            <input
+              type="text"
+              placeholder="Nombre del Proveedor"
+              value={nuevoProvNombre}
+              onChange={(e) => setNuevoProvNombre(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
+            />
+            <input
+              type="text"
+              placeholder="Teléfono / WhatsApp"
+              value={nuevoProvTelefono}
+              onChange={(e) => setNuevoProvTelefono(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white"
+            />
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setModalNuevoProv(false)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
+                Guardar Proveedor
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL MENSAJE DE ENTREGA */}
       {mensajeGenerado && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">
@@ -1064,7 +1139,7 @@ export default function ModuloVentas({
             </div>
             <textarea
               readOnly
-              rows={10}
+              rows={11}
               value={mensajeGenerado.completo}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-2xl p-3 text-xs text-gray-200 font-mono"
             />

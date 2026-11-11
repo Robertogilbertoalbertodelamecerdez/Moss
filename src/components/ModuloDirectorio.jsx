@@ -68,7 +68,6 @@ export default function ModuloDirectorio({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
-  // Si la cuenta tiene fue_reemplazada === true, abre siempre con el título "REEMPLAZO DE CUENTA"
   const abrirMensajeDeSuscripcion = (s, tituloForzado = null) => {
     const tituloUsar =
       tituloForzado !== null
@@ -162,31 +161,40 @@ export default function ModuloDirectorio({
       const slot = libres[0];
       if (!slot) return notificar("Esa matriz no tiene perfiles libres", "error");
 
-      if (subReemplazo.perfil_id) {
+      if (subReemplazo.tipo_cuenta === "Cuenta Completa" && subReemplazo.matriz_id) {
+        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subReemplazo.matriz_id);
+      } else if (subReemplazo.perfil_id) {
         await supabase
           .from("perfiles_matriz")
           .update({ ocupado: false, caido: estabaCaida ? true : false })
           .eq("id", subReemplazo.perfil_id);
       }
-      await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
+
+      if (subReemplazo.tipo_cuenta === "Cuenta Completa") {
+        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("matriz_id", mat.id);
+      } else {
+        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
+      }
 
       nuevosDatos = {
         ...nuevosDatos,
         origen: "stock",
         matriz_id: mat.id,
-        perfil_id: slot.id,
+        perfil_id: subReemplazo.tipo_cuenta === "Cuenta Completa" ? null : slot.id,
         proveedor_id: mat.proveedor_id || null,
         nombre_proveedor: mat.nombre_proveedor || null,
         telefono_proveedor: mat.telefono_proveedor || null,
         correo_cuenta: mat.correo,
         password_cuenta: mat.password,
-        nombre_perfil: slot.nombre_perfil,
-        pin_perfil: slot.pin
+        nombre_perfil: subReemplazo.tipo_cuenta === "Cuenta Completa" ? "Cuenta Completa" : slot.nombre_perfil,
+        pin_perfil: subReemplazo.tipo_cuenta === "Cuenta Completa" ? "" : slot.pin
       };
     } else {
       if (!correoReemp.trim()) return notificar("Ingresa el nuevo correo de reemplazo", "error");
 
-      if (subReemplazo.perfil_id) {
+      if (subReemplazo.tipo_cuenta === "Cuenta Completa" && subReemplazo.matriz_id) {
+        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subReemplazo.matriz_id);
+      } else if (subReemplazo.perfil_id) {
         await supabase
           .from("perfiles_matriz")
           .update({ ocupado: false, caido: estabaCaida ? true : false })
@@ -245,7 +253,9 @@ export default function ModuloDirectorio({
 
   const ejecutarReembolsoConfirmado = async () => {
     if (!subReembolso) return;
-    if (subReembolso.perfil_id) {
+    if (subReembolso.tipo_cuenta === "Cuenta Completa" && subReembolso.matriz_id) {
+      await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subReembolso.matriz_id);
+    } else if (subReembolso.perfil_id) {
       await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subReembolso.perfil_id);
     }
     await supabase.from("suscripciones").update({ estado: "Reembolsada", perfil_id: null }).eq("id", subReembolso.id);
@@ -413,8 +423,16 @@ export default function ModuloDirectorio({
       precio_venta_revendedor: Number(subEditar.precio_venta_revendedor || 0),
       correo_cuenta: subEditar.correo_cuenta,
       password_cuenta: subEditar.tipo_cuenta === "Por Invitación" ? "" : subEditar.password_cuenta,
-      nombre_perfil: subEditar.nombre_perfil,
-      pin_perfil: subEditar.pin_perfil,
+      nombre_perfil:
+        subEditar.tipo_cuenta === "Cuenta Completa"
+          ? "Cuenta Completa"
+          : subEditar.tipo_cuenta === "Por Invitación"
+          ? "Por Invitación"
+          : subEditar.nombre_perfil,
+      pin_perfil:
+        subEditar.tipo_cuenta === "Cuenta Completa" || subEditar.tipo_cuenta === "Por Invitación"
+          ? ""
+          : subEditar.pin_perfil,
       precio_venta: nuevoPrecioCobrado,
       costo_proveedor: Number(subEditar.costo_proveedor || 0),
       meses_contratados: mesesFinal,
@@ -433,9 +451,9 @@ export default function ModuloDirectorio({
     if (subEditar.origen === "stock" && matrizNuevaEdicionId) {
       const mat = matrices.find((m) => m.id === matrizNuevaEdicionId);
       if (!mat) return notificar("Selecciona una matriz válida", "error");
-      const libres = (mat.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido);
-      const slot = libres[0];
-      if (!slot) return notificar("Esa matriz no tiene cupos libres", "error");
+      const libres = (mat.perfiles_matriz || [])
+        .filter((p) => !p.ocupado && !p.caido)
+        .sort((a, b) => (a.es_extra_final !== b.es_extra_final ? (a.es_extra_final ? 1 : -1) : a.numero_slot - b.numero_slot));
 
       if (subEditar.perfil_id) {
         await supabase
@@ -443,18 +461,57 @@ export default function ModuloDirectorio({
           .update({ ocupado: false, caido: estabaCaida ? true : false })
           .eq("id", subEditar.perfil_id);
       }
-      await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
 
-      payload = {
-        ...payload,
-        plataforma: mat.plataforma,
-        matriz_id: mat.id,
-        perfil_id: slot.id,
-        correo_cuenta: mat.correo,
-        password_cuenta: mat.password,
-        nombre_perfil: slot.nombre_perfil,
-        pin_perfil: slot.pin
-      };
+      if (subEditar.tipo_cuenta === "Cuenta Completa") {
+        // Ocupar todos los perfiles de la nueva matriz
+        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("matriz_id", mat.id);
+        payload = {
+          ...payload,
+          plataforma: mat.plataforma,
+          matriz_id: mat.id,
+          perfil_id: null,
+          correo_cuenta: mat.correo,
+          password_cuenta: mat.password,
+          nombre_perfil: "Cuenta Completa",
+          pin_perfil: "",
+          proveedor_id: mat.proveedor_id || payload.proveedor_id,
+          nombre_proveedor: mat.nombre_proveedor || payload.nombre_proveedor,
+          telefono_proveedor: mat.telefono_proveedor || payload.telefono_proveedor
+        };
+      } else {
+        const slot = libres[0];
+        if (!slot) return notificar("Esa matriz no tiene cupos libres", "error");
+        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
+        payload = {
+          ...payload,
+          plataforma: mat.plataforma,
+          matriz_id: mat.id,
+          perfil_id: slot.id,
+          correo_cuenta: mat.correo,
+          password_cuenta: mat.password,
+          nombre_perfil: slot.nombre_perfil,
+          pin_perfil: slot.pin,
+          proveedor_id: mat.proveedor_id || payload.proveedor_id,
+          nombre_proveedor: mat.nombre_proveedor || payload.nombre_proveedor,
+          telefono_proveedor: mat.telefono_proveedor || payload.telefono_proveedor
+        };
+      }
+    } else if (subEditar.origen === "stock" && subEditar.matriz_id && subEditar.tipo_cuenta === "Cuenta Completa") {
+      // Si se cambió a Cuenta Completa sobre su misma matriz, ocupar todos los perfiles de esa matriz
+      await supabase.from("perfiles_matriz").update({ ocupado: true }).eq("matriz_id", subEditar.matriz_id);
+      payload.perfil_id = null;
+    } else if (subEditar.origen === "proveedor") {
+      // Si pasó de Matriz Stock a Proveedor externo, liberar la matriz anterior
+      if (subEditar.matriz_id && subEditar.tipo_cuenta === "Cuenta Completa") {
+        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subEditar.matriz_id);
+      } else if (subEditar.perfil_id) {
+        await supabase
+          .from("perfiles_matriz")
+          .update({ ocupado: false, caido: estabaCaida ? true : false })
+          .eq("id", subEditar.perfil_id);
+      }
+      payload.matriz_id = null;
+      payload.perfil_id = null;
     } else if (subEditar.perfil_id) {
       await supabase
         .from("perfiles_matriz")
@@ -491,18 +548,20 @@ export default function ModuloDirectorio({
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("¡Precio, PIN y datos actualizados con éxito!");
+    notificar("¡Proveedor, matriz, precio y datos actualizados con éxito!");
     if (editada) abrirMensajeDeSuscripcion(editada);
   };
 
   const enviarAPapelera = async (s) => {
-    if (s.perfil_id) {
+    if (s.tipo_cuenta === "Cuenta Completa" && s.matriz_id) {
+      await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", s.matriz_id);
+    } else if (s.perfil_id) {
       await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", s.perfil_id);
     }
     await supabase.from("suscripciones").update({ en_papelera: true, perfil_id: null }).eq("id", s.id);
     await supabase.from("movimientos_yolo").delete().eq("referencia_id", s.id);
     await recargarTodo();
-    notificar("Enviado a papelera");
+    notificar("Enviado a papelera y cupo(s) liberado(s)");
   };
 
   return (
@@ -513,7 +572,7 @@ export default function ModuloDirectorio({
             <Search className="w-4 h-4 text-[#66FF00] absolute left-3.5 top-3" />
             <input
               type="text"
-              placeholder="Buscar por teléfono, cliente, correo, perfil, PIN o proveedor..."
+              placeholder="Buscar por teléfono, cliente, correo, perfil, PIN, matriz o proveedor..."
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-sm text-white"
@@ -567,6 +626,7 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
+      {/* LISTA DE SUSCRIPCIONES CON ETIQUETA DE MATRIZ Y PROVEEDOR SIEMPRE VISIBLE */}
       <div className="space-y-3">
         {suscripcionesFiltradas.map((s) => {
           const dias = calcularDiasRestantes(s.fecha_corte);
@@ -575,6 +635,16 @@ export default function ModuloDirectorio({
             diasPlan > 30 &&
             s.fecha_renovacion_proveedor &&
             s.fecha_renovacion_proveedor < s.fecha_corte;
+
+          // Buscar la matriz que alberga este perfil y el proveedor asociado
+          const matrizAlbergadora = s.matriz_id
+            ? matrices.find((m) => m.id === s.matriz_id)
+            : null;
+          const nombreProveedorReal =
+            s.nombre_proveedor ||
+            matrizAlbergadora?.nombre_proveedor ||
+            (s.proveedor_id ? proveedores.find((pr) => pr.id === s.proveedor_id)?.nombre : null) ||
+            "Sin asignar";
 
           return (
             <div
@@ -589,12 +659,29 @@ export default function ModuloDirectorio({
                     <span className="px-2.5 py-0.5 text-xs font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                       {s.plataforma}
                     </span>
+
                     <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
                       ⏳ Plan: {diasPlan} días
                     </span>
+
                     <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
                       💰 Te pagó: Bs {s.precio_venta}
                     </span>
+
+                    {/* ETIQUETA DE QUÉ MATRIZ LA ALBERGA Y QUÉ PROVEEDOR FUE */}
+                    {s.origen === "stock" || matrizAlbergadora ? (
+                      <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-[#152413] border border-[#66FF00]/40 text-gray-200 flex items-center gap-1">
+                        <Layers className="w-3 h-3 text-[#66FF00]" />
+                        Matriz: <b className="text-white font-mono">{matrizAlbergadora?.correo || s.correo_cuenta}</b>
+                        <span className="text-[#66FF00] ml-1">(Prov: {nombreProveedorReal})</span>
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-[#182616] border border-[#2D4729] text-gray-200 flex items-center gap-1">
+                        <Truck className="w-3 h-3 text-[#66FF00]" />
+                        Proveedor: <b className="text-[#66FF00]">{nombreProveedorReal}</b>
+                      </span>
+                    )}
+
                     {s.fue_reemplazada && (
                       <span className="px-2 py-0.5 text-[10px] font-black rounded-full bg-amber-400 text-black">
                         🔄 Reemplazada
@@ -669,7 +756,7 @@ export default function ModuloDirectorio({
                     }}
                     className="px-3 py-1.5 bg-[#1A2B18] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Precio / PIN / Plan)
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Proveedor / Matriz / Precio / PIN)
                   </button>
 
                   <button
@@ -935,7 +1022,9 @@ export default function ModuloDirectorio({
         </div>
       )}
 
-      {/* MODAL EDICIÓN TOTAL */}
+      {/* ========================================================================= */}
+      {/* MODAL EDICIÓN TOTAL: INCLUYE CAMBIAR DE PROVEEDOR O CAMBIAR DE MATRIZ     */}
+      {/* ========================================================================= */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -971,9 +1060,103 @@ export default function ModuloDirectorio({
                   className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
                 >
                   <option value="1 Dispositivo">1 Dispositivo</option>
-                  <option value="Cuenta Completa">Cuenta Completa</option>
+                  <option value="Cuenta Completa">Cuenta Completa (Ocupa toda la matriz)</option>
                   <option value="Por Invitación">Por Invitación</option>
                 </select>
+              </div>
+            </div>
+
+            {/* BLOQUE PARA VER Y CAMBIAR EL ORIGEN, LA MATRIZ O EL PROVEEDOR */}
+            <div className="bg-[#0B120A] border border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-xs font-extrabold text-[#66FF00]">
+                  Origen, Matriz y Proveedor de la Cuenta:
+                </label>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
+                    className={`px-3 py-1 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      subEditar.origen === "stock"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    📦 Matriz Stock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
+                    className={`px-3 py-1 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      subEditar.origen === "proveedor"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    🚚 Proveedor Externo
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {subEditar.origen === "stock" && (
+                  <div>
+                    <label className="text-[11px] text-gray-400">Matriz que alberga la cuenta:</label>
+                    <select
+                      value={matrizNuevaEdicionId}
+                      onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
+                      className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+                    >
+                      <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
+                      {matrices
+                        .filter((m) => !m.en_papelera && m.estado === "Activa")
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.plataforma} — {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className={subEditar.origen === "stock" ? "" : "sm:col-span-2"}>
+                  <label className="text-[11px] text-[#66FF00] font-bold">
+                    🚚 Proveedor al que le compraste la cuenta:
+                  </label>
+                  <select
+                    value={subEditar.proveedor_id || ""}
+                    onChange={(e) => {
+                      const prov = proveedores.find((p) => p.id === e.target.value);
+                      if (prov) {
+                        setSubEditar({
+                          ...subEditar,
+                          proveedor_id: prov.id,
+                          nombre_proveedor: prov.nombre,
+                          telefono_proveedor: prov.telefono
+                        });
+                      } else {
+                        setSubEditar({
+                          ...subEditar,
+                          proveedor_id: null,
+                          nombre_proveedor: null,
+                          telefono_proveedor: null
+                        });
+                      }
+                    }}
+                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+                  >
+                    <option value="">
+                      {subEditar.nombre_proveedor
+                        ? `Actual: ${subEditar.nombre_proveedor} (Cambiar...)`
+                        : "-- Seleccionar Proveedor --"}
+                    </option>
+                    {proveedores.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nombre} — 📞 {p.telefono}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 

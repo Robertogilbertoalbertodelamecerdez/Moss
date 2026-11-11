@@ -22,7 +22,30 @@ function obtenerTextoPlanDias(item) {
   return `${dias} ${dias === 1 ? "día" : "días"}`;
 }
 
-const BLOQUE_REGLAS_GARANTIA = `\n\n📋 *REGLAS Y GARANTÍA:*\n- ❌ Solo 1 dispositivo.\n- ❌ No cambiar correo o clave.\n- 🛠️ Soporte de caídas en 24 horas.\n- 💵 Te damos reembolso si la caída supera 24 h.`;
+// Adapta las Reglas y Garantía según si es 1 Dispositivo, Cuenta Completa o Por Invitación
+function construirBloqueReglasGarantia(listaItems) {
+  const hayUnDispositivo = listaItems.some(
+    (i) =>
+      i.tipoCuenta !== "Cuenta Completa" &&
+      i.tipoCuenta !== "Por Invitación" &&
+      Boolean(i.passFinal)
+  );
+  const todasSonInvitacion = listaItems.every(
+    (i) => i.tipoCuenta === "Por Invitación" || !i.passFinal
+  );
+
+  const lineas = ["📋 *REGLAS Y GARANTÍA:*"];
+  if (hayUnDispositivo) {
+    lineas.push("- ❌ Solo 1 dispositivo.");
+  }
+  if (!todasSonInvitacion) {
+    lineas.push("- ❌ No cambiar correo o clave.");
+  }
+  lineas.push("- 🛠️ Soporte de caídas en 24 horas.");
+  lineas.push("- 💵 Te damos reembolso si la caída supera 24 h.");
+
+  return "\n\n" + lineas.join("\n");
+}
 
 // 1. Mensaje de Entrega / Reemplazo / Edición
 export function generarMensajeEntrega(
@@ -38,7 +61,7 @@ export function generarMensajeEntrega(
 
   // Solo muestra REGLAS Y GARANTÍA cuando es una entrega nueva (no cuando es Reemplazo ni Renovación)
   const esReemplazoORenovacion = Boolean(tituloPersonalizado);
-  const textoReglas = esReemplazoORenovacion ? "" : BLOQUE_REGLAS_GARANTIA;
+  const textoReglas = esReemplazoORenovacion ? "" : construirBloqueReglasGarantia(listaItems);
 
   if (esRevendedor) {
     const bloquesRev = listaItems
@@ -57,7 +80,9 @@ export function generarMensajeEntrega(
             : esInv
             ? `\n📩 *Modalidad:* Activación por Invitación`
             : item.perfilFinal &&
-              !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación"].includes(item.perfilFinal)
+              !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación", "Cuenta Completa"].includes(
+                item.perfilFinal
+              )
             ? `\n👤 *Perfil:* ${item.perfilFinal}`
             : "";
         const pin =
@@ -106,7 +131,9 @@ export function generarMensajeEntrega(
           : esInv
           ? `\n📩 *Modalidad:* Activación por Invitación`
           : item.perfilFinal &&
-            !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación"].includes(item.perfilFinal)
+            !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación", "Cuenta Completa"].includes(
+              item.perfilFinal
+            )
           ? `\n👤 *Perfil:* ${item.perfilFinal}`
           : "";
       const pin =
@@ -145,12 +172,12 @@ export function generarMensajeEntrega(
   return { completo, resumido, telefono: tel, cliente: nombre };
 }
 
-// 2. Mensaje Corto Individual de Renovación (Sin Reglas y Garantía)
+// 2. Mensaje Corto Individual de Renovación
 export function generarMensajeRenovacionCorto(s, textoDias) {
   const corteDMA = formatearFechaDMA(s.fecha_corte);
   const esRev = s.tipo_comprador === "revendedor";
   const lineaPerfil =
-    s.nombre_perfil && !["Cuenta / Invitación", "Por Invitación", "1 Dispositivo"].includes(s.nombre_perfil)
+    s.nombre_perfil && !["Cuenta / Invitación", "Por Invitación", "1 Dispositivo", "Cuenta Completa"].includes(s.nombre_perfil)
       ? `\n👤 *Perfil:* ${s.nombre_perfil}${s.pin_perfil ? ` | *PIN:* ${s.pin_perfil}` : ""}`
       : "";
 
