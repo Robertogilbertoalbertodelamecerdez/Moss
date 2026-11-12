@@ -64,6 +64,7 @@ export default function MossCRM() {
   const [linkWhatsappMoss, setLinkWhatsappMoss] = useState("");
   const [plataformasList, setPlataformasList] = useState(PLATAFORMAS);
 
+  const [subAdmins, setSubAdmins] = useState([]);
   const [matrices, setMatrices] = useState([]);
   const [suscripciones, setSuscripciones] = useState([]);
   const [clientes, setClientes] = useState([]);
@@ -109,7 +110,7 @@ export default function MossCRM() {
   );
 
   const recargarTodo = useCallback(async () => {
-    const [mRes, sRes, cRes, pRes, revRes, yRes, movRevRes, platRes, ajuRes, notRes] = await Promise.all([
+    const [mRes, sRes, cRes, pRes, revRes, yRes, movRevRes, platRes, ajuRes, notRes, subAdmRes] = await Promise.all([
       supabase.from("matrices_stock").select("*, perfiles_matriz(*)").order("creado_en", { ascending: false }),
       supabase.from("suscripciones").select("*").order("creado_en", { ascending: false }),
       supabase.from("clientes").select("*").order("creado_en", { ascending: false }),
@@ -119,7 +120,8 @@ export default function MossCRM() {
       supabase.from("movimientos_revendedor").select("*").order("fecha", { ascending: false }),
       supabase.from("plataformas").select("*").order("orden", { ascending: true }).order("creado_en", { ascending: true }),
       supabase.from("ajustes_sistema").select("*"),
-      supabase.from("notificaciones_sistema").select("*").order("creado_en", { ascending: false }).limit(60)
+      supabase.from("notificaciones_sistema").select("*").order("creado_en", { ascending: false }).limit(80),
+      supabase.from("sub_admins").select("*").order("creado_en", { ascending: true })
     ]);
 
     if (mRes.data) setMatrices(mRes.data);
@@ -130,6 +132,7 @@ export default function MossCRM() {
     if (yRes.data) setMovimientosYolo(yRes.data);
     if (movRevRes.data) setMovimientosRevendedor(movRevRes.data);
     if (notRes.data) setNotificaciones(notRes.data);
+    if (subAdmRes.data) setSubAdmins(subAdmRes.data);
 
     if (platRes.data && platRes.data.length > 0) {
       setPlataformasList(
@@ -191,19 +194,56 @@ export default function MossCRM() {
 
   if (!montado) return null;
 
+  // Identificador del Admin activo: 'admin' para Mateus (Cabeza) o el ID del Sub-Admin (ej. Marcus)
+  const esSuperAdmin = sesionActual?.rol === "admin";
+  const esSubAdmin = sesionActual?.rol === "subadmin";
+  const adminKeyActual = esSubAdmin ? sesionActual.subAdminId : "admin";
+
+  const subAdminLogueadoObj = esSubAdmin
+    ? subAdmins.find((sa) => sa.id === sesionActual.subAdminId)
+    : null;
+
+  const nombreBilleteraMostrada = esSubAdmin
+    ? subAdminLogueadoObj?.nombre_billetera || `Billetera ${sesionActual.nombre}`
+    : nombreBilletera;
+
   const handleLogin = async (e) => {
     e.preventDefault();
     const u = userInput.trim().toLowerCase();
     const p = pinInput.trim();
 
+    // 1. Login Cabeza Principal (Mateus)
     if (u === AUTH_CONFIG.usuario.toLowerCase() && p === AUTH_CONFIG.pin) {
-      const nuevaSesion = { rol: "admin", nombre: "Mateus" };
+      const nuevaSesion = { rol: "admin", adminKey: "admin", nombre: "Mateus" };
       localStorage.setItem("moss_sesion_v3", JSON.stringify(nuevaSesion));
       setSesionActual(nuevaSesion);
       await recargarTodo();
-      return notificar("¡Bienvenido a tu Panel Admin, Mateus!");
+      return notificar("¡Bienvenido a tu Panel Principal, Mateus!");
     }
 
+    // 2. Login Sub-Admin / Mano Derecha (Ej: Marcus)
+    const subAdmEncontrado = subAdmins.find(
+      (sa) =>
+        sa.activo !== false &&
+        ((sa.usuario || sa.nombre || "").trim().toLowerCase() === u || sa.telefono.trim() === u) &&
+        String(sa.pin || "1234").trim() === p
+    );
+
+    if (subAdmEncontrado) {
+      const nuevaSesion = {
+        rol: "subadmin",
+        subAdminId: subAdmEncontrado.id,
+        adminKey: subAdmEncontrado.id,
+        nombre: subAdmEncontrado.nombre,
+        telefono: subAdmEncontrado.telefono
+      };
+      localStorage.setItem("moss_sesion_v3", JSON.stringify(nuevaSesion));
+      setSesionActual(nuevaSesion);
+      await recargarTodo();
+      return notificar(`¡Bienvenido a tu Panel Admin, ${subAdmEncontrado.nombre}!`);
+    }
+
+    // 3. Login Revendedor
     const revEncontrado = revendedores.find(
       (r) =>
         r.activo !== false &&
@@ -226,6 +266,13 @@ export default function MossCRM() {
     notificar("Usuario o PIN incorrecto (Verifica tus datos)", "error", false);
   };
 
+  // Filtra las notificaciones/cobros que corresponden a este Admin
+  const misNotificacionesCobro = notificaciones.filter(
+    (n) =>
+      n.tipo === "venta_revendedor" &&
+      (n.admin_destino || "admin") === adminKeyActual
+  );
+
   const marcarCobroRevendedorComoPagado = async (notif) => {
     await supabase
       .from("notificaciones_sistema")
@@ -242,21 +289,22 @@ export default function MossCRM() {
     if (Number(notif.monto_cobrar) > 0) {
       await supabase.from("movimientos_yolo").insert([
         {
+          admin_propietario: adminKeyActual,
           tipo: "Ingreso Venta",
           monto: Math.abs(Number(notif.monto_cobrar)),
           afecta_ganancia_neta: true,
-          descripcion: `Pago recibido de revendedor ${notif.nombre_revendedor || ""} (${notif.titulo})`,
+          descripcion: `Pago recibido (${notif.nombre_revendedor || "Agente"}): ${notif.titulo}`,
           referencia_id: notif.suscripcion_id
         }
       ]);
     }
 
     await recargarTodo();
-    notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilletera}!`);
+    notificar(`¡Pago de Bs ${notif.monto_cobrar} registrado en ${nombreBilleteraMostrada}!`);
   };
 
   const cobrarTodasLasPendientes = async () => {
-    const pendientes = notificaciones.filter((n) => n.tipo === "venta_revendedor" && !n.pagado);
+    const pendientes = misNotificacionesCobro.filter((n) => !n.pagado);
     if (pendientes.length === 0) return;
 
     let sumaTotal = 0;
@@ -269,10 +317,11 @@ export default function MossCRM() {
       if (Number(n.monto_cobrar) > 0) {
         await supabase.from("movimientos_yolo").insert([
           {
+            admin_propietario: adminKeyActual,
             tipo: "Ingreso Venta",
             monto: Math.abs(Number(n.monto_cobrar)),
             afecta_ganancia_neta: true,
-            descripcion: `Liquidación de cobro revendedor ${n.nombre_revendedor || ""} (${n.titulo})`,
+            descripcion: `Liquidación de cobro (${n.nombre_revendedor || "Agente"}): ${n.titulo}`,
             referencia_id: n.suscripcion_id
           }
         ]);
@@ -283,8 +332,20 @@ export default function MossCRM() {
   };
 
   // =========================================================================
-  // CICLO DE SEMANA ESTRICTO: DESDE ESTE LUNES HASTA ESTE DOMINGO
+  // AISLAMIENTO DE DATOS POR ADMIN (MATEUS VE LO SUYO ARRIBA, MARCUS LO SUYO)
   // =========================================================================
+  const misSuscripcionesPropias = suscripciones.filter(
+    (s) => (s.admin_propietario || "admin") === adminKeyActual
+  );
+
+  const misMovimientosBilleteraPropios = movimientosYolo.filter(
+    (m) => (m.admin_propietario || "admin") === adminKeyActual
+  );
+
+  const misRevendedoresPropios = revendedores.filter(
+    (r) => (r.admin_propietario || "admin") === adminKeyActual
+  );
+
   const hoyBolivia = obtenerFechaBoliviaISO();
   const lunesEstaSemana = obtenerLunesDeSemanaBolivia(hoyBolivia);
   const domingoEstaSemana = obtenerDomingoDeSemanaBolivia(hoyBolivia);
@@ -311,7 +372,7 @@ export default function MossCRM() {
     return cobrado - Number(s.costo_proveedor || 0);
   };
 
-  const ventasEnPeriodoTop = suscripciones.filter(
+  const ventasEnPeriodoTop = misSuscripcionesPropias.filter(
     (s) => !s.en_papelera && cumpleFiltroTop(s.fecha_venta)
   );
 
@@ -320,7 +381,7 @@ export default function MossCRM() {
     0
   );
 
-  const ajustesEnPeriodoTop = movimientosYolo
+  const ajustesEnPeriodoTop = misMovimientosBilleteraPropios
     .filter(
       (m) =>
         m.tipo === "Ajuste Manual" &&
@@ -331,13 +392,13 @@ export default function MossCRM() {
 
   const gananciaMostradaTop =
     filtroTarjetasTop === "siempre"
-      ? movimientosYolo
+      ? misMovimientosBilleteraPropios
           .filter((m) => m.afecta_ganancia_neta)
           .reduce((acc, m) => acc + Number(m.monto || 0), 0)
       : ventasEnPeriodoTop.reduce((acc, s) => acc + calcularGananciaUnitariaVenta(s), 0) +
         ajustesEnPeriodoTop;
 
-  const saldoActualYolo = movimientosYolo.reduce((acc, m) => acc + Number(m.monto), 0);
+  const saldoActualYolo = misMovimientosBilleteraPropios.reduce((acc, m) => acc + Number(m.monto), 0);
 
   const etiquetaPeriodoTop =
     filtroTarjetasTop === "hoy"
@@ -349,7 +410,7 @@ export default function MossCRM() {
       : "HISTÓRICO SIEMPRE";
 
   const hoy = new Date(hoyBolivia + "T00:00:00-04:00");
-  const cantidadPorRenovar = suscripciones.filter((s) => {
+  const cantidadPorRenovar = misSuscripcionesPropias.filter((s) => {
     if (s.en_papelera || s.estado !== "Activa") return false;
     const corte = new Date(s.fecha_corte + "T00:00:00-04:00");
     const dias = Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
@@ -361,12 +422,12 @@ export default function MossCRM() {
     return venceCliente || venceProveedorIntermedio;
   }).length;
 
-  const cantidadCaidos = suscripciones.filter((s) => !s.en_papelera && s.estado === "Caida").length;
+  const cantidadCaidos = misSuscripcionesPropias.filter((s) => !s.en_papelera && s.estado === "Caida").length;
 
-  const cobrosPendientesCount = notificaciones.filter(
-    (n) => n.tipo === "venta_revendedor" && !n.pagado
-  ).length;
-  const erroresCount = notificaciones.filter((n) => n.tipo === "error" && !n.leido).length;
+  const cobrosPendientesCount = misNotificacionesCobro.filter((n) => !n.pagado).length;
+  const erroresCount = esSuperAdmin
+    ? notificaciones.filter((n) => n.tipo === "error" && !n.leido).length
+    : 0;
   const alertasTotalesBadge = cobrosPendientesCount + erroresCount;
 
   const registrarAjusteYolo = async (e) => {
@@ -386,10 +447,11 @@ export default function MossCRM() {
 
     await supabase.from("movimientos_yolo").insert([
       {
+        admin_propietario: adminKeyActual,
         tipo: "Ajuste Manual",
         monto: montoFinal,
         afecta_ganancia_neta: afectaGanancia,
-        descripcion: descAjusteYolo || `Ajuste / Gasto manual en ${nombreBilletera}`
+        descripcion: descAjusteYolo || `Ajuste / Gasto manual en ${nombreBilleteraMostrada}`
       }
     ]);
 
@@ -397,7 +459,7 @@ export default function MossCRM() {
     setDescAjusteYolo("");
     setModalYolo(false);
     await recargarTodo();
-    notificar(`Saldo de ${nombreBilletera} actualizado`);
+    notificar(`Saldo de ${nombreBilleteraMostrada} actualizado`);
   };
 
   const revendedorLogueadoObj =
@@ -439,7 +501,7 @@ export default function MossCRM() {
             <div>
               <h1 className="text-3xl font-black tracking-widest text-white">MOSS</h1>
               <p className="text-xs text-[#66FF00] font-semibold tracking-wider uppercase mt-1">
-                Acceso Admin & Revendedores
+                Acceso Admins & Revendedores
               </p>
             </div>
             <div className="space-y-3 text-left">
@@ -532,10 +594,11 @@ export default function MossCRM() {
                   <div className="flex items-center gap-2">
                     <h1 className="font-black tracking-widest text-xl leading-none text-white">MOSS</h1>
                     <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase rounded-full bg-[#66FF00]/15 text-[#66FF00] border border-[#66FF00]/40 flex items-center gap-1">
-                      <Sparkles className="w-2.5 h-2.5" /> EN VIVO
+                      <Sparkles className="w-2.5 h-2.5" />{" "}
+                      {esSuperAdmin ? "CABEZA PRINCIPAL" : "ADMIN ASOCIADO"}
                     </span>
                   </div>
-                  <span className="text-xs text-gray-400">Panel de Mateus</span>
+                  <span className="text-xs text-gray-400">Panel de {sesionActual.nombre}</span>
                 </div>
               </div>
 
@@ -569,7 +632,7 @@ export default function MossCRM() {
           <main className="max-w-6xl mx-auto px-4 pt-5 space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0E170D]/90 px-4 py-2.5 rounded-2xl border border-[#233820]">
               <span className="text-xs text-gray-400 font-bold flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-[#66FF00]" /> Resumen superior mostrando:
+                <Calendar className="w-3.5 h-3.5 text-[#66FF00]" /> Resumen superior de {sesionActual.nombre}:
               </span>
               <div className="flex flex-wrap gap-1.5">
                 {[
@@ -626,7 +689,7 @@ export default function MossCRM() {
               <div className="bg-gradient-to-br from-[#1B3018] via-[#122110] to-[#0B140A] border-2 border-[#66FF00] rounded-2xl p-5 flex items-center justify-between shadow-[0_0_25px_rgba(102,255,0,0.18)]">
                 <div>
                   <p className="text-xs text-[#66FF00] font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-[#66FF00] animate-ping" /> Saldo en {nombreBilletera}
+                    <span className="w-2 h-2 rounded-full bg-[#66FF00] animate-ping" /> Saldo en {nombreBilleteraMostrada}
                   </p>
                   <p className="text-3xl font-black text-white mt-1">Bs {saldoActualYolo.toFixed(2)}</p>
                   <p className="text-[11px] text-gray-400 mt-0.5">Saldo total acumulado</p>
@@ -698,7 +761,7 @@ export default function MossCRM() {
                     : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
-                <FolderSearch className="w-4 h-4" /> Directorio ({suscripciones.filter((s) => !s.en_papelera).length})
+                <FolderSearch className="w-4 h-4" /> Directorio ({misSuscripcionesPropias.filter((s) => !s.en_papelera).length})
                 {cantidadCaidos > 0 && (
                   <span className="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-red-600 text-white">
                     {cantidadCaidos}
@@ -720,11 +783,13 @@ export default function MossCRM() {
 
             {tabActiva === "ventas" && (
               <ModuloVentas
+                sesionActual={sesionActual}
+                adminKeyActual={adminKeyActual}
                 matrices={matrices}
                 clientes={clientes}
                 proveedores={proveedores}
-                revendedores={revendedores}
-                suscripciones={suscripciones}
+                revendedores={misRevendedoresPropios}
+                suscripciones={misSuscripcionesPropias}
                 linkWhatsappMoss={linkWhatsappMoss}
                 plataformasList={plataformasList}
                 recargarTodo={recargarTodo}
@@ -734,11 +799,14 @@ export default function MossCRM() {
 
             {tabActiva === "estadisticas" && (
               <ModuloEstadisticas
+                esSuperAdmin={esSuperAdmin}
+                adminKeyActual={adminKeyActual}
+                subAdmins={subAdmins}
                 suscripciones={suscripciones}
                 matrices={matrices}
                 movimientosYolo={movimientosYolo}
                 revendedores={revendedores}
-                nombreBilletera={nombreBilletera}
+                nombreBilletera={nombreBilleteraMostrada}
                 recargarTodo={recargarTodo}
                 notificar={notificar}
               />
@@ -746,6 +814,9 @@ export default function MossCRM() {
 
             {tabActiva === "stock" && (
               <ModuloStock
+                esSuperAdmin={esSuperAdmin}
+                adminKeyActual={adminKeyActual}
+                subAdmins={subAdmins}
                 matrices={matrices}
                 suscripciones={suscripciones}
                 proveedores={proveedores}
@@ -757,10 +828,10 @@ export default function MossCRM() {
 
             {tabActiva === "renovaciones" && (
               <ModuloRenovaciones
-                suscripciones={suscripciones}
-                matrices={matrices}
+                suscripciones={misSuscripcionesPropias}
+                matrices={matrices.filter((m) => (m.admin_propietario || "admin") === adminKeyActual)}
                 proveedores={proveedores}
-                revendedores={revendedores}
+                revendedores={misRevendedoresPropios}
                 recargarTodo={recargarTodo}
                 notificar={notificar}
               />
@@ -768,11 +839,14 @@ export default function MossCRM() {
 
             {tabActiva === "directorio" && (
               <ModuloDirectorio
-                suscripciones={suscripciones}
+                esSuperAdmin={esSuperAdmin}
+                adminKeyActual={adminKeyActual}
+                subAdmins={subAdmins}
+                suscripciones={esSuperAdmin ? suscripciones : misSuscripcionesPropias}
                 matrices={matrices}
                 clientes={clientes}
                 proveedores={proveedores}
-                revendedores={revendedores}
+                revendedores={esSuperAdmin ? revendedores : misRevendedoresPropios}
                 linkWhatsappMoss={linkWhatsappMoss}
                 plataformasList={plataformasList}
                 recargarTodo={recargarTodo}
@@ -782,13 +856,17 @@ export default function MossCRM() {
 
             {tabActiva === "config" && (
               <ModuloConfig
+                esSuperAdmin={esSuperAdmin}
+                adminKeyActual={adminKeyActual}
+                sesionActual={sesionActual}
+                subAdmins={subAdmins}
                 matrices={matrices}
                 suscripciones={suscripciones}
                 clientes={clientes}
                 proveedores={proveedores}
                 revendedores={revendedores}
                 movimientosYolo={movimientosYolo}
-                nombreBilletera={nombreBilletera}
+                nombreBilletera={nombreBilleteraMostrada}
                 setNombreBilletera={setNombreBilletera}
                 linkWhatsappMoss={linkWhatsappMoss}
                 setLinkWhatsappMoss={setLinkWhatsappMoss}
@@ -804,7 +882,7 @@ export default function MossCRM() {
               <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[90vh] overflow-y-auto animate-modal">
                 <div className="flex justify-between items-center border-b border-[#233820] pb-3">
                   <h3 className="font-black text-[#66FF00] text-base flex items-center gap-2">
-                    <Bell className="w-5 h-5" /> Centro de Cobros (Stock y Renovaciones de Revendedores)
+                    <Bell className="w-5 h-5" /> Centro de Cobros de Stock ({sesionActual.nombre})
                   </h3>
                   <button onClick={() => setModalNotificaciones(false)} className="text-gray-400 hover:text-white">
                     <X className="w-5 h-5" />
@@ -814,7 +892,7 @@ export default function MossCRM() {
                 <div className="space-y-2.5">
                   <div className="flex flex-wrap justify-between items-center gap-2">
                     <h4 className="text-xs font-extrabold uppercase text-amber-300">
-                      🛒 Cuentas de Stock y Renovaciones por Cobrar ({notificaciones.filter((n) => n.tipo === "venta_revendedor").length})
+                      🛒 Cuentas sacadas de tu Stock y Renovaciones ({misNotificacionesCobro.length})
                     </h4>
                     {cobrosPendientesCount > 1 && (
                       <button
@@ -826,53 +904,51 @@ export default function MossCRM() {
                     )}
                   </div>
 
-                  {notificaciones.filter((n) => n.tipo === "venta_revendedor").length === 0 ? (
+                  {misNotificacionesCobro.length === 0 ? (
                     <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
                       No hay cuentas ni renovaciones pendientes de cobro.
                     </p>
                   ) : (
-                    notificaciones
-                      .filter((n) => n.tipo === "venta_revendedor")
-                      .map((n) => (
-                        <div
-                          key={n.id}
-                          className={`p-3.5 rounded-2xl border flex flex-wrap justify-between items-center gap-3 text-xs ${
-                            n.pagado
-                              ? "bg-[#070B06] border-[#1E331A] opacity-70"
-                              : "bg-amber-950/30 border-amber-500"
-                          }`}
-                        >
-                          <div className="space-y-1">
-                            <p className="font-black text-white text-sm">{n.titulo}</p>
-                            <p className="text-gray-300">{n.mensaje}</p>
-                            <p className="text-[10px] text-gray-500">{formatearFechaDMA(n.creado_en)}</p>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            {n.pagado ? (
-                              <span className="px-3 py-1.5 rounded-xl bg-green-900/40 text-green-300 font-bold">
-                                ✓ Pagado (Bs {n.monto_cobrar})
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => marcarCobroRevendedorComoPagado(n)}
-                                className="px-4 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(102,255,0,0.4)]"
-                              >
-                                <Check className="w-4 h-4" /> Marcar Pagado (+Bs {n.monto_cobrar})
-                              </button>
-                            )}
-                            <button
-                              onClick={async () => {
-                                await supabase.from("notificaciones_sistema").delete().eq("id", n.id);
-                                await recargarTodo();
-                              }}
-                              className="p-1.5 text-gray-500 hover:text-red-400"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
+                    misNotificacionesCobro.map((n) => (
+                      <div
+                        key={n.id}
+                        className={`p-3.5 rounded-2xl border flex flex-wrap justify-between items-center gap-3 text-xs ${
+                          n.pagado
+                            ? "bg-[#070B06] border-[#1E331A] opacity-70"
+                            : "bg-amber-950/30 border-amber-500"
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <p className="font-black text-white text-sm">{n.titulo}</p>
+                          <p className="text-gray-300">{n.mensaje}</p>
+                          <p className="text-[10px] text-gray-500">{formatearFechaDMA(n.creado_en)}</p>
                         </div>
-                      ))
+
+                        <div className="flex items-center gap-2">
+                          {n.pagado ? (
+                            <span className="px-3 py-1.5 rounded-xl bg-green-900/40 text-green-300 font-bold">
+                              ✓ Pagado (Bs {n.monto_cobrar})
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => marcarCobroRevendedorComoPagado(n)}
+                              className="px-4 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(102,255,0,0.4)]"
+                            >
+                              <Check className="w-4 h-4" /> Marcar Pagado (+Bs {n.monto_cobrar})
+                            </button>
+                          )}
+                          <button
+                            onClick={async () => {
+                              await supabase.from("notificaciones_sistema").delete().eq("id", n.id);
+                              await recargarTodo();
+                            }}
+                            className="p-1.5 text-gray-500 hover:text-red-400"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
@@ -887,7 +963,7 @@ export default function MossCRM() {
               >
                 <div className="flex justify-between items-center">
                   <h3 className="font-extrabold text-[#66FF00] flex items-center gap-2">
-                    <Wallet className="w-5 h-5" /> Ajustar Saldo en {nombreBilletera}
+                    <Wallet className="w-5 h-5" /> Ajustar Saldo en {nombreBilleteraMostrada}
                   </h3>
                   <button type="button" onClick={() => setModalYolo(false)} className="text-gray-400 hover:text-white">
                     <X className="w-5 h-5" />

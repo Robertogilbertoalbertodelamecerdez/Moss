@@ -20,10 +20,14 @@ import {
   UserX,
   Send,
   RefreshCcw,
-  CheckCircle2
+  CheckCircle2,
+  ShieldCheck
 } from "lucide-react";
 
 export default function ModuloStock({
+  esSuperAdmin = true,
+  adminKeyActual = "admin",
+  subAdmins = [],
   matrices = [],
   suscripciones = [],
   proveedores = [],
@@ -34,6 +38,9 @@ export default function ModuloStock({
   const [modalNuevaMatriz, setModalNuevaMatriz] = useState(false);
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [matrizEditar, setMatrizEditar] = useState(null);
+
+  // Pestaña para que Mateus vea sus propias matrices o las matrices creadas por Marcus/Sub-Admins en otro apartado
+  const [vistaPropietarioStock, setVistaPropietarioStock] = useState(adminKeyActual);
 
   const [busquedaStock, setBusquedaStock] = useState("");
   const [filtroPlatStock, setFiltroPlatStock] = useState("Todas");
@@ -222,7 +229,7 @@ export default function ModuloStock({
 
     setMatrizReemplazarCompleta(null);
     await recargarTodo();
-    notificar("¡Matriz reemplazada! Todos sus clientes quedaron marcados con mensaje de Reemplazo.");
+    notificar("¡Matriz reemplazada!");
   };
 
   const guardarEdicionPerfilModal = async (e) => {
@@ -279,7 +286,7 @@ export default function ModuloStock({
     setModalNuevoProv(false);
     await recargarTodo();
     if (data) setProveedorId(data.id);
-    notificar("Proveedor registrado");
+    notificar("Proveedor registrado y compartido");
   };
 
   const handleSelectPlataforma = (nombrePlat) => {
@@ -312,6 +319,7 @@ export default function ModuloStock({
       const { data: nuevaMatriz, error: errMatriz } = await supabase
         .from("matrices_stock")
         .insert([{
+          admin_propietario: adminKeyActual,
           plataforma,
           correo: correo.trim(),
           password: password.trim(),
@@ -346,6 +354,7 @@ export default function ModuloStock({
 
       if (Number(costoTotal) > 0) {
         await supabase.from("movimientos_yolo").insert([{
+          admin_propietario: adminKeyActual,
           tipo: "Costo Matriz",
           monto: -Math.abs(Number(costoTotal)),
           afecta_ganancia_neta: true,
@@ -359,7 +368,7 @@ export default function ModuloStock({
       setCostoTotal("");
       setModalNuevaMatriz(false);
       await recargarTodo();
-      notificar("Matriz creada en Stock");
+      notificar("Matriz creada en tu Stock");
     } catch (err) {
       notificar("Error: " + err.message, "error");
     } finally {
@@ -420,7 +429,17 @@ export default function ModuloStock({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
-  const matricesActivas = matrices.filter((m) => !m.en_papelera);
+  // Filtra las matrices según el apartado elegido (Mis Matrices vs Matrices de Marcus/Sub-Admins)
+  const matricesActivas = matrices.filter((m) => {
+    if (m.en_papelera) return false;
+    const owner = m.admin_propietario || "admin";
+    if (esSuperAdmin) {
+      return owner === vistaPropietarioStock;
+    }
+    // Marcus ve sus propias matrices y también las de Mateus para poder vender o gestionar
+    return vistaPropietarioStock === "todas" ? true : owner === vistaPropietarioStock;
+  });
+
   const matricesFiltradas = matricesActivas.filter((m) => {
     if (filtroPlatStock !== "Todas" && m.plataforma !== filtroPlatStock) return false;
     if (busquedaStock.trim() !== "") {
@@ -440,13 +459,48 @@ export default function ModuloStock({
 
   return (
     <div className="space-y-5">
+      {/* BARRA DE APARTADOS DE STOCK: MIS MATRICES (MATEUS) VS MATRICES DE MARCUS */}
+      <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
+          <ShieldCheck className="w-4 h-4 text-[#66FF00]" /> Apartado de Matrices:
+        </span>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setVistaPropietarioStock("admin")}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+              vistaPropietarioStock === "admin"
+                ? "bg-[#66FF00] text-black border-[#66FF00]"
+                : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+            }`}
+          >
+            📦 Matrices de Mateus ({matrices.filter((m) => !m.en_papelera && (m.admin_propietario || "admin") === "admin").length})
+          </button>
+
+          {subAdmins.map((sa) => (
+            <button
+              key={sa.id}
+              type="button"
+              onClick={() => setVistaPropietarioStock(sa.id)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                vistaPropietarioStock === sa.id
+                  ? "bg-amber-400 text-black border-amber-400"
+                  : "bg-[#070B06] text-amber-300 border-amber-500/40"
+              }`}
+            >
+              🤝 Matrices de {sa.nombre} ({matrices.filter((m) => !m.en_papelera && m.admin_propietario === sa.id).length})
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="bg-gradient-to-r from-[#162914] to-[#0E180D] border border-[#66FF00]/40 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-black text-white flex items-center gap-2">
-            <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en Stock ({matricesActivas.length})
+            <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en este Apartado ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            Puedes dar reemplazo de toda una matriz caída o tocar cualquier personita para reemplazar su perfil por otra matriz o proveedor.
+            Proveedores sincronizados. Toca cualquier personita para ver datos, cambiar PIN o dar reemplazo.
           </p>
         </div>
         <div className="flex gap-2">
@@ -521,9 +575,9 @@ export default function ModuloStock({
                   <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                     {matriz.plataforma}
                   </span>
-                  {matriz.estado === "Caida" && (
-                    <span className="ml-2 px-2 py-0.5 text-[10px] font-black rounded-full bg-red-600 text-white">
-                      ⚠️ MATRIZ CAÍDA
+                  {matriz.nombre_proveedor && (
+                    <span className="ml-2 px-2 py-0.5 text-[10px] rounded bg-gray-800 text-gray-300">
+                      Prov: {matriz.nombre_proveedor}
                     </span>
                   )}
                   <h3 className="font-bold text-base mt-1 break-all">{matriz.correo}</h3>
@@ -723,7 +777,7 @@ export default function ModuloStock({
                     onClick={() => setModoReemplazoEnPersonita(!modoReemplazoEnPersonita)}
                     className="w-full py-2 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <RefreshCcw className="w-4 h-4" /> 🔄 Dar Reemplazo a este Cliente (Matriz o Proveedor)
+                    <RefreshCcw className="w-4 h-4" /> 🔄 Dar Reemplazo a este Cliente
                   </button>
                 </>
               ) : (
@@ -951,7 +1005,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL CAMBIO DE CLAVE GENERAL DE LA MATRIZ */}
+      {/* MODAL CAMBIO DE CLAVE GENERAL */}
       {matrizCambioPass && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-5 max-w-md w-full space-y-4">
@@ -1060,7 +1114,7 @@ export default function ModuloStock({
       {modalNuevoProv && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-[60]">
           <form onSubmit={guardarNuevoProveedor} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-3">
-            <h3 className="font-black text-[#66FF00]">Registrar Proveedor</h3>
+            <h3 className="font-black text-[#66FF00]">Registrar Proveedor Compartido</h3>
             <input type="text" placeholder="Nombre" value={nuevoProvNombre} onChange={(e) => setNuevoProvNombre(e.target.value)} className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white" />
             <input type="text" placeholder="Teléfono" value={nuevoProvTelefono} onChange={(e) => setNuevoProvTelefono(e.target.value)} className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white" />
             <div className="flex gap-2">

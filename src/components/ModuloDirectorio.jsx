@@ -23,10 +23,14 @@ import {
   Copy,
   CheckCircle2,
   Send,
-  Sparkles
+  Sparkles,
+  ShieldCheck
 } from "lucide-react";
 
 export default function ModuloDirectorio({
+  esSuperAdmin = true,
+  adminKeyActual = "admin",
+  subAdmins = [],
   suscripciones = [],
   matrices = [],
   clientes = [],
@@ -37,6 +41,7 @@ export default function ModuloDirectorio({
   recargarTodo,
   notificar
 }) {
+  const [vistaAdminDir, setVistaAdminDir] = useState(adminKeyActual);
   const [busqueda, setBusqueda] = useState("");
   const [filtroPlataforma, setFiltroPlataforma] = useState("Todas");
   const [filtroEstado, setFiltroEstado] = useState("todos");
@@ -161,40 +166,31 @@ export default function ModuloDirectorio({
       const slot = libres[0];
       if (!slot) return notificar("Esa matriz no tiene perfiles libres", "error");
 
-      if (subReemplazo.tipo_cuenta === "Cuenta Completa" && subReemplazo.matriz_id) {
-        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subReemplazo.matriz_id);
-      } else if (subReemplazo.perfil_id) {
+      if (subReemplazo.perfil_id) {
         await supabase
           .from("perfiles_matriz")
           .update({ ocupado: false, caido: estabaCaida ? true : false })
           .eq("id", subReemplazo.perfil_id);
       }
-
-      if (subReemplazo.tipo_cuenta === "Cuenta Completa") {
-        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("matriz_id", mat.id);
-      } else {
-        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
-      }
+      await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
 
       nuevosDatos = {
         ...nuevosDatos,
         origen: "stock",
         matriz_id: mat.id,
-        perfil_id: subReemplazo.tipo_cuenta === "Cuenta Completa" ? null : slot.id,
+        perfil_id: slot.id,
         proveedor_id: mat.proveedor_id || null,
         nombre_proveedor: mat.nombre_proveedor || null,
         telefono_proveedor: mat.telefono_proveedor || null,
         correo_cuenta: mat.correo,
         password_cuenta: mat.password,
-        nombre_perfil: subReemplazo.tipo_cuenta === "Cuenta Completa" ? "Cuenta Completa" : slot.nombre_perfil,
-        pin_perfil: subReemplazo.tipo_cuenta === "Cuenta Completa" ? "" : slot.pin
+        nombre_perfil: slot.nombre_perfil,
+        pin_perfil: slot.pin
       };
     } else {
       if (!correoReemp.trim()) return notificar("Ingresa el nuevo correo de reemplazo", "error");
 
-      if (subReemplazo.tipo_cuenta === "Cuenta Completa" && subReemplazo.matriz_id) {
-        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subReemplazo.matriz_id);
-      } else if (subReemplazo.perfil_id) {
+      if (subReemplazo.perfil_id) {
         await supabase
           .from("perfiles_matriz")
           .update({ ocupado: false, caido: estabaCaida ? true : false })
@@ -226,21 +222,9 @@ export default function ModuloDirectorio({
 
     if (error) return notificar("Error al reemplazar: " + error.message, "error");
 
-    if (Number(costoReemp) > 0) {
-      await supabase.from("movimientos_yolo").insert([
-        {
-          tipo: "Costo Proveedor",
-          monto: -Math.abs(Number(costoReemp)),
-          afecta_ganancia_neta: true,
-          descripcion: `Costo reemplazo ${subReemplazo.plataforma} a ${subReemplazo.nombre_cliente}`,
-          referencia_id: subReemplazo.id
-        }
-      ]);
-    }
-
     setSubReemplazo(null);
     await recargarTodo();
-    notificar("¡Reemplazo guardado! Siempre que consultes esta cuenta saldrá como Reemplazo.");
+    notificar("¡Reemplazo guardado!");
     if (actualizada) abrirMensajeDeSuscripcion(actualizada, "REEMPLAZO DE CUENTA");
   };
 
@@ -253,14 +237,13 @@ export default function ModuloDirectorio({
 
   const ejecutarReembolsoConfirmado = async () => {
     if (!subReembolso) return;
-    if (subReembolso.tipo_cuenta === "Cuenta Completa" && subReembolso.matriz_id) {
-      await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subReembolso.matriz_id);
-    } else if (subReembolso.perfil_id) {
+    if (subReembolso.perfil_id) {
       await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subReembolso.perfil_id);
     }
     await supabase.from("suscripciones").update({ estado: "Reembolsada", perfil_id: null }).eq("id", subReembolso.id);
     await supabase.from("movimientos_yolo").insert([
       {
+        admin_propietario: subReembolso.admin_propietario || adminKeyActual,
         tipo: "Reembolso",
         monto: -Math.abs(Number(montoReembolsoCalc)),
         afecta_ganancia_neta: true,
@@ -278,34 +261,6 @@ export default function ModuloDirectorio({
     await supabase.from("suscripciones").update({ estado: "Activa" }).eq("id", s.id);
     await recargarTodo();
     notificar("Reembolso cancelado");
-  };
-
-  const handleCambiarPlataformaEnEdicion = (nuevaPlatNombre) => {
-    const cfg = plataformasList.find((p) => p.nombre === nuevaPlatNombre);
-    const esInvitacion =
-      (cfg && cfg.pidePass === false) ||
-      nuevaPlatNombre.toLowerCase().includes("invitaci");
-
-    if (esInvitacion) {
-      setSubEditar({
-        ...subEditar,
-        plataforma: nuevaPlatNombre,
-        tipo_cuenta: "Por Invitación",
-        origen: "proveedor",
-        password_cuenta: "",
-        nombre_perfil: "Por Invitación",
-        pin_perfil: ""
-      });
-    } else {
-      setSubEditar({
-        ...subEditar,
-        plataforma: nuevaPlatNombre,
-        tipo_cuenta:
-          subEditar.tipo_cuenta === "Por Invitación"
-            ? "1 Dispositivo"
-            : subEditar.tipo_cuenta || "1 Dispositivo"
-      });
-    }
   };
 
   const actualizarMesesEnEdicion = (cantMeses) => {
@@ -342,6 +297,10 @@ export default function ModuloDirectorio({
 
   const suscripcionesFiltradas = suscripciones
     .filter((s) => {
+      const owner = s.admin_propietario || "admin";
+      if (esSuperAdmin && owner !== vistaAdminDir) return false;
+      if (!esSuperAdmin && owner !== adminKeyActual) return false;
+
       if (filtroEstado === "papelera") {
         if (!s.en_papelera) return false;
       } else {
@@ -352,7 +311,6 @@ export default function ModuloDirectorio({
 
       const dias = calcularDiasRestantes(s.fecha_corte);
       if (filtroEstado === "vence_3" && (dias > 3 || s.estado !== "Activa")) return false;
-      if (filtroEstado === "vence_1" && (dias > 1 || s.estado !== "Activa")) return false;
       if (filtroEstado === "caidos" && s.estado !== "Caida") return false;
       if (filtroEstado === "revendedores" && s.tipo_comprador !== "revendedor") return false;
       if (filtroEstado === "reembolsados" && s.estado !== "Reembolsada") return false;
@@ -388,17 +346,11 @@ export default function ModuloDirectorio({
       await supabase.from("perfiles_matriz").update({ caido: nuevo === "Caida" }).eq("id", s.perfil_id);
     }
     await recargarTodo();
-    notificar(
-      nuevo === "Caida"
-        ? "Cuenta marcada como Caída. Usa el botón amarillo 'Dar Reemplazo' para reemplazarla."
-        : "Cuenta reactivada"
-    );
+    notificar(nuevo === "Caida" ? "Cuenta marcada como Caída" : "Cuenta reactivada");
   };
 
   const guardarEdicionManual = async (e) => {
     e.preventDefault();
-
-    const estabaCaida = subEditar.estado === "Caida";
     const diasFinal = Number(subEditar.dias_totales || 30);
     const mesesFinal = Number(subEditar.meses_contratados || Math.max(1, Math.round(diasFinal / 30)));
     const mesesPagProv = diasFinal > 30 ? Number(subEditar.meses_pagados_proveedor || 1) : mesesFinal;
@@ -413,26 +365,13 @@ export default function ModuloDirectorio({
 
     let payload = {
       plataforma: subEditar.plataforma,
-      tipo_comprador: subEditar.tipo_comprador || "cliente",
-      revendedor_id: subEditar.tipo_comprador === "revendedor" ? subEditar.revendedor_id : null,
       tipo_cuenta: subEditar.tipo_cuenta || "1 Dispositivo",
       nombre_cliente: subEditar.nombre_cliente,
       telefono_cliente: subEditar.telefono_cliente,
-      nombre_cliente_final: subEditar.nombre_cliente_final || null,
-      telefono_cliente_final: subEditar.telefono_cliente_final || null,
-      precio_venta_revendedor: Number(subEditar.precio_venta_revendedor || 0),
       correo_cuenta: subEditar.correo_cuenta,
-      password_cuenta: subEditar.tipo_cuenta === "Por Invitación" ? "" : subEditar.password_cuenta,
-      nombre_perfil:
-        subEditar.tipo_cuenta === "Cuenta Completa"
-          ? "Cuenta Completa"
-          : subEditar.tipo_cuenta === "Por Invitación"
-          ? "Por Invitación"
-          : subEditar.nombre_perfil,
-      pin_perfil:
-        subEditar.tipo_cuenta === "Cuenta Completa" || subEditar.tipo_cuenta === "Por Invitación"
-          ? ""
-          : subEditar.pin_perfil,
+      password_cuenta: subEditar.password_cuenta,
+      nombre_perfil: subEditar.nombre_perfil,
+      pin_perfil: subEditar.pin_perfil,
       precio_venta: nuevoPrecioCobrado,
       costo_proveedor: Number(subEditar.costo_proveedor || 0),
       meses_contratados: mesesFinal,
@@ -448,71 +387,7 @@ export default function ModuloDirectorio({
       telefono_proveedor: subEditar.telefono_proveedor || null
     };
 
-    if (subEditar.origen === "stock" && matrizNuevaEdicionId) {
-      const mat = matrices.find((m) => m.id === matrizNuevaEdicionId);
-      if (!mat) return notificar("Selecciona una matriz válida", "error");
-      const libres = (mat.perfiles_matriz || [])
-        .filter((p) => !p.ocupado && !p.caido)
-        .sort((a, b) => (a.es_extra_final !== b.es_extra_final ? (a.es_extra_final ? 1 : -1) : a.numero_slot - b.numero_slot));
-
-      if (subEditar.perfil_id) {
-        await supabase
-          .from("perfiles_matriz")
-          .update({ ocupado: false, caido: estabaCaida ? true : false })
-          .eq("id", subEditar.perfil_id);
-      }
-
-      if (subEditar.tipo_cuenta === "Cuenta Completa") {
-        // Ocupar todos los perfiles de la nueva matriz
-        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("matriz_id", mat.id);
-        payload = {
-          ...payload,
-          plataforma: mat.plataforma,
-          matriz_id: mat.id,
-          perfil_id: null,
-          correo_cuenta: mat.correo,
-          password_cuenta: mat.password,
-          nombre_perfil: "Cuenta Completa",
-          pin_perfil: "",
-          proveedor_id: mat.proveedor_id || payload.proveedor_id,
-          nombre_proveedor: mat.nombre_proveedor || payload.nombre_proveedor,
-          telefono_proveedor: mat.telefono_proveedor || payload.telefono_proveedor
-        };
-      } else {
-        const slot = libres[0];
-        if (!slot) return notificar("Esa matriz no tiene cupos libres", "error");
-        await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
-        payload = {
-          ...payload,
-          plataforma: mat.plataforma,
-          matriz_id: mat.id,
-          perfil_id: slot.id,
-          correo_cuenta: mat.correo,
-          password_cuenta: mat.password,
-          nombre_perfil: slot.nombre_perfil,
-          pin_perfil: slot.pin,
-          proveedor_id: mat.proveedor_id || payload.proveedor_id,
-          nombre_proveedor: mat.nombre_proveedor || payload.nombre_proveedor,
-          telefono_proveedor: mat.telefono_proveedor || payload.telefono_proveedor
-        };
-      }
-    } else if (subEditar.origen === "stock" && subEditar.matriz_id && subEditar.tipo_cuenta === "Cuenta Completa") {
-      // Si se cambió a Cuenta Completa sobre su misma matriz, ocupar todos los perfiles de esa matriz
-      await supabase.from("perfiles_matriz").update({ ocupado: true }).eq("matriz_id", subEditar.matriz_id);
-      payload.perfil_id = null;
-    } else if (subEditar.origen === "proveedor") {
-      // Si pasó de Matriz Stock a Proveedor externo, liberar la matriz anterior
-      if (subEditar.matriz_id && subEditar.tipo_cuenta === "Cuenta Completa") {
-        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("matriz_id", subEditar.matriz_id);
-      } else if (subEditar.perfil_id) {
-        await supabase
-          .from("perfiles_matriz")
-          .update({ ocupado: false, caido: estabaCaida ? true : false })
-          .eq("id", subEditar.perfil_id);
-      }
-      payload.matriz_id = null;
-      payload.perfil_id = null;
-    } else if (subEditar.perfil_id) {
+    if (subEditar.perfil_id) {
       await supabase
         .from("perfiles_matriz")
         .update({
@@ -532,23 +407,20 @@ export default function ModuloDirectorio({
     await supabase
       .from("movimientos_yolo")
       .update({
-        monto: Math.abs(nuevoPrecioCobrado),
-        descripcion: `Venta ${payload.plataforma} (${diasFinal}d) a ${payload.nombre_cliente}`
+        monto: Math.abs(nuevoPrecioCobrado)
       })
       .eq("referencia_id", subEditar.id)
       .eq("tipo", "Ingreso Venta");
 
     await supabase
       .from("notificaciones_sistema")
-      .update({
-        monto_cobrar: nuevoPrecioCobrado
-      })
+      .update({ monto_cobrar: nuevoPrecioCobrado })
       .eq("suscripcion_id", subEditar.id);
 
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("¡Proveedor, matriz, precio y datos actualizados con éxito!");
+    notificar("¡Datos actualizados!");
     if (editada) abrirMensajeDeSuscripcion(editada);
   };
 
@@ -561,11 +433,46 @@ export default function ModuloDirectorio({
     await supabase.from("suscripciones").update({ en_papelera: true, perfil_id: null }).eq("id", s.id);
     await supabase.from("movimientos_yolo").delete().eq("referencia_id", s.id);
     await recargarTodo();
-    notificar("Enviado a papelera y cupo(s) liberado(s)");
+    notificar("Enviado a papelera");
   };
 
   return (
     <div className="space-y-5">
+      {esSuperAdmin && subAdmins.length > 0 && (
+        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-[#66FF00]" /> Apartado de Directorio:
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setVistaAdminDir("admin")}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                vistaAdminDir === "admin"
+                  ? "bg-[#66FF00] text-black border-[#66FF00]"
+                  : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+              }`}
+            >
+              📦 Mi Directorio (Mateus)
+            </button>
+            {subAdmins.map((sa) => (
+              <button
+                key={sa.id}
+                type="button"
+                onClick={() => setVistaAdminDir(sa.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  vistaAdminDir === sa.id
+                    ? "bg-amber-400 text-black border-amber-400"
+                    : "bg-[#070B06] text-amber-300 border-amber-500/40"
+                }`}
+              >
+                🤝 Directorio de {sa.nombre}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 space-y-3">
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
@@ -589,24 +496,11 @@ export default function ModuloDirectorio({
               <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
             ))}
           </select>
-
-          <select
-            value={filtroRevendedorId}
-            onChange={(e) => setFiltroRevendedorId(e.target.value)}
-            className="bg-[#070B06] border border-purple-500/50 rounded-xl px-3 py-2 text-xs text-purple-200 font-bold"
-          >
-            <option value="todos">-- Filtrar por Revendedor (Todos) --</option>
-            {revendedores.map((r) => (
-              <option key={r.id} value={r.id}>
-                🤝 {r.nombre} ({r.telefono})
-              </option>
-            ))}
-          </select>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {[
-            { id: "todos", label: `Todos por Hora (${suscripciones.filter((s) => !s.en_papelera).length})` },
+            { id: "todos", label: `Todos por Hora (${suscripcionesFiltradas.length})` },
             { id: "revendedores", label: "🤝 Solo Revendedores" },
             { id: "vence_3", label: "Por Vencer (≤ 3 días)" },
             { id: "caidos", label: "⚠️ Caídos" },
@@ -626,20 +520,11 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
-      {/* LISTA DE SUSCRIPCIONES CON ETIQUETA DE MATRIZ Y PROVEEDOR SIEMPRE VISIBLE */}
       <div className="space-y-3">
         {suscripcionesFiltradas.map((s) => {
           const dias = calcularDiasRestantes(s.fecha_corte);
           const diasPlan = s.dias_totales || Number(s.meses_contratados || 1) * 30;
-          const tieneRenovIntermediaProv =
-            diasPlan > 30 &&
-            s.fecha_renovacion_proveedor &&
-            s.fecha_renovacion_proveedor < s.fecha_corte;
-
-          // Buscar la matriz que alberga este perfil y el proveedor asociado
-          const matrizAlbergadora = s.matriz_id
-            ? matrices.find((m) => m.id === s.matriz_id)
-            : null;
+          const matrizAlbergadora = s.matriz_id ? matrices.find((m) => m.id === s.matriz_id) : null;
           const nombreProveedorReal =
             s.nombre_proveedor ||
             matrizAlbergadora?.nombre_proveedor ||
@@ -659,16 +544,13 @@ export default function ModuloDirectorio({
                     <span className="px-2.5 py-0.5 text-xs font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                       {s.plataforma}
                     </span>
-
                     <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
                       ⏳ Plan: {diasPlan} días
                     </span>
-
                     <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
                       💰 Te pagó: Bs {s.precio_venta}
                     </span>
 
-                    {/* ETIQUETA DE QUÉ MATRIZ LA ALBERGA Y QUÉ PROVEEDOR FUE */}
                     {s.origen === "stock" || matrizAlbergadora ? (
                       <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-[#152413] border border-[#66FF00]/40 text-gray-200 flex items-center gap-1">
                         <Layers className="w-3 h-3 text-[#66FF00]" />
@@ -688,14 +570,8 @@ export default function ModuloDirectorio({
                       </span>
                     )}
                     {s.estado === "Caida" && (
-                      <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-red-600 text-white animate-pulse">
-                        ⚠️ CUENTA CAÍDA
-                      </span>
-                    )}
-                    {tieneRenovIntermediaProv && (
-                      <span className="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-amber-500 text-black">
-                        📦 Pagado a Prov: {s.meses_pagados_proveedor || 1}M · Avisar el:{" "}
-                        {formatearFechaDMA(s.fecha_renovacion_proveedor)}
+                      <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-red-600 text-white">
+                        ⚠️ CAÍDA
                       </span>
                     )}
                   </div>
@@ -748,15 +624,13 @@ export default function ModuloDirectorio({
                       setSubEditar({
                         ...s,
                         meses_contratados: s.meses_contratados || 1,
-                        dias_totales: s.dias_totales || Number(s.meses_contratados || 1) * 30,
-                        meses_pagados_proveedor: s.meses_pagados_proveedor || 1,
-                        cada_cuantos_meses_avisar_prov: s.cada_cuantos_meses_avisar_prov || 1
+                        dias_totales: s.dias_totales || Number(s.meses_contratados || 1) * 30
                       });
                       setMatrizNuevaEdicionId("");
                     }}
                     className="px-3 py-1.5 bg-[#1A2B18] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Proveedor / Matriz / Precio / PIN)
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo
                   </button>
 
                   <button
@@ -769,11 +643,7 @@ export default function ModuloDirectorio({
 
                   <button
                     onClick={() => abrirModalReemplazo(s)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer ${
-                      s.estado === "Caida"
-                        ? "bg-amber-400 text-black shadow-[0_0_20px_rgba(251,191,36,0.5)] ring-2 ring-amber-300"
-                        : "bg-amber-500 hover:bg-amber-400 text-black"
-                    }`}
+                    className="px-3 py-1.5 bg-amber-400 text-black rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer"
                   >
                     <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo
                   </button>
@@ -815,216 +685,110 @@ export default function ModuloDirectorio({
             className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-lg w-full space-y-4 animate-modal"
           >
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
-              <div>
-                <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
-                  <RefreshCcw className="w-5 h-5" /> Dar Reemplazo de {subReemplazo.plataforma}
-                </h3>
-                <p className="text-[11px] text-gray-300 mt-0.5">
-                  Comprador: <b className="text-white">{subReemplazo.nombre_cliente}</b> ({subReemplazo.telefono_cliente})
-                </p>
-              </div>
-              <button type="button" onClick={() => setSubReemplazo(null)} className="text-gray-400 hover:text-white">
+              <h3 className="font-black text-amber-400 text-base">
+                🔄 Dar Reemplazo de {subReemplazo.plataforma}
+              </h3>
+              <button type="button" onClick={() => setSubReemplazo(null)} className="text-gray-400">
                 <X className="w-5 h-5" />
               </button>
-            </div>
-
-            <div className="bg-[#070B06] border border-[#66FF00]/50 rounded-2xl p-3 text-xs space-y-1">
-              <p className="text-[#66FF00] font-extrabold">
-                ✓ Se mantienen intactos su fecha de corte y todos sus datos:
-              </p>
-              <p className="text-gray-300">
-                📅 Fecha de Corte que se conserva: <b className="text-white">{formatearFechaDMA(subReemplazo.fecha_corte)}</b> · Plan:{" "}
-                <b>{subReemplazo.dias_totales || 30} días</b> · Pagó: <b>Bs {subReemplazo.precio_venta}</b>
-              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setOrigenReemp("stock")}
-                className={`py-2.5 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer ${
-                  origenReemp === "stock"
-                    ? "bg-[#66FF00] text-black border-[#66FF00]"
-                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  origenReemp === "stock" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                 }`}
               >
-                <Layers className="w-4 h-4" /> Seleccionar Matriz (Stock)
+                Seleccionar Matriz (Stock)
               </button>
               <button
                 type="button"
                 onClick={() => setOrigenReemp("proveedor")}
-                className={`py-2.5 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 cursor-pointer ${
-                  origenReemp === "proveedor"
-                    ? "bg-amber-400 text-black border-amber-400"
-                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  origenReemp === "proveedor" ? "bg-amber-400 text-black border-amber-400" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                 }`}
               >
-                <Truck className="w-4 h-4" /> De Proveedor (A Mano)
+                De Proveedor (A Mano)
               </button>
             </div>
 
             {origenReemp === "stock" ? (
-              <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3.5 space-y-2">
-                <label className="text-xs font-bold text-[#66FF00]">
-                  Elige la Matriz de donde saldrá el perfil de reemplazo:
-                </label>
-                <select
-                  value={matrizReempId}
-                  onChange={(e) => setMatrizReempId(e.target.value)}
-                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
-                >
-                  <option value="">-- Selecciona Matriz con cupos libres --</option>
-                  {matrices
-                    .filter(
-                      (m) =>
-                        !m.en_papelera &&
-                        m.estado === "Activa" &&
-                        (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
-                    )
-                    .map((m) => {
-                      const libres = (m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido);
-                      return (
-                        <option key={m.id} value={m.id}>
-                          {m.plataforma} — {m.correo} ({libres.length} libres 👉 asignará {libres[0]?.nombre_perfil})
-                        </option>
-                      );
-                    })}
-                </select>
-              </div>
+              <select
+                value={matrizReempId}
+                onChange={(e) => setMatrizReempId(e.target.value)}
+                className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-xs text-white font-bold"
+              >
+                <option value="">-- Selecciona Matriz con cupos libres --</option>
+                {matrices
+                  .filter(
+                    (m) =>
+                      !m.en_papelera &&
+                      m.estado === "Activa" &&
+                      (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
+                  )
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.plataforma} — {m.correo}
+                    </option>
+                  ))}
+              </select>
             ) : (
-              <div className="bg-[#0B120A] border border-amber-400/50 rounded-2xl p-3.5 space-y-3">
-                <div>
-                  <label className="text-[11px] text-gray-400">Proveedor que dio el reemplazo</label>
-                  <select
-                    value={provReempId}
-                    onChange={(e) => setProvReempId(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-                  >
-                    {proveedores.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.nombre} ({p.telefono})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-[#66FF00] font-bold flex items-center gap-1">
-                    <Sparkles className="w-3.5 h-3.5" /> Pegar mensaje del proveedor (o llena a mano abajo):
-                  </label>
-                  <textarea
-                    rows={2}
-                    placeholder="Pega aquí correo y clave del reemplazo para extraer automático..."
-                    value={textoCrudoReemp}
-                    onChange={(e) => procesarTextoProveedorReemplazo(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#233820] rounded-xl p-2 text-xs text-white"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-[11px] text-amber-300 font-bold">Nuevo Correo *</label>
-                    <input
-                      type="text"
-                      placeholder="correo@gmail.com"
-                      value={correoReemp}
-                      onChange={(e) => setCorreoReemp(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-amber-300 font-bold">Nueva Contraseña</label>
-                    <input
-                      type="text"
-                      placeholder="Contraseña"
-                      value={passReemp}
-                      onChange={(e) => setPassReemp(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-gray-400">Perfil / Modalidad</label>
-                    <input
-                      type="text"
-                      placeholder="Ej: 1 Dispositivo o Perfil 1"
-                      value={perfilReemp}
-                      onChange={(e) => setPerfilReemp(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-gray-400">PIN (Opcional)</label>
-                    <input
-                      type="text"
-                      placeholder="Ej: 1234"
-                      value={pinReemp}
-                      onChange={(e) => setPinReemp(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-gray-400">
-                    Costo extra pagado al proveedor por este reemplazo (Bs)
-                  </label>
+              <div className="space-y-2.5">
+                <textarea
+                  rows={2}
+                  placeholder="Pega aquí correo y clave del reemplazo..."
+                  value={textoCrudoReemp}
+                  onChange={(e) => procesarTextoProveedorReemplazo(e.target.value)}
+                  className="w-full bg-[#070B06] border border-[#233820] rounded-xl p-2 text-xs text-white"
+                />
+                <div className="grid grid-cols-2 gap-2">
                   <input
-                    type="number"
-                    step="0.01"
-                    value={costoReemp}
-                    onChange={(e) => setCostoReemp(e.target.value)}
-                    className="w-36 mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white block"
+                    type="text"
+                    placeholder="Nuevo Correo *"
+                    value={correoReemp}
+                    onChange={(e) => setCorreoReemp(e.target.value)}
+                    className="bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Nueva Contraseña"
+                    value={passReemp}
+                    onChange={(e) => setPassReemp(e.target.value)}
+                    className="bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Perfil"
+                    value={perfilReemp}
+                    onChange={(e) => setPerfilReemp(e.target.value)}
+                    className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="PIN"
+                    value={pinReemp}
+                    onChange={(e) => setPinReemp(e.target.value)}
+                    className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                   />
                 </div>
               </div>
             )}
 
-            <div className="flex gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setSubReemplazo(null)}
-                className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold"
-              >
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setSubReemplazo(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
                 Cancelar
               </button>
-              <button
-                type="submit"
-                className="flex-1 py-2.5 bg-amber-400 hover:bg-amber-300 text-black rounded-xl text-xs font-black cursor-pointer"
-              >
-                Confirmar Reemplazo y Generar Mensaje
+              <button type="submit" className="flex-1 py-2.5 bg-amber-400 text-black rounded-xl text-xs font-black cursor-pointer">
+                Confirmar Reemplazo
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL REEMBOLSO */}
-      {subReembolso && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-          <div className="bg-[#111A10] border-2 border-purple-500 rounded-3xl p-6 max-w-sm w-full space-y-4">
-            <h3 className="font-bold text-purple-300">Calcular Reembolso ({subReembolso.nombre_cliente})</h3>
-            <input
-              type="number"
-              step="0.01"
-              value={montoReembolsoCalc}
-              onChange={(e) => setMontoReembolsoCalc(e.target.value)}
-              className="w-full bg-[#070B06] border border-purple-500 rounded-xl p-2.5 text-white font-bold"
-            />
-            <div className="flex gap-2">
-              <button onClick={() => setSubReembolso(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">
-                Cancelar
-              </button>
-              <button onClick={ejecutarReembolsoConfirmado} className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold cursor-pointer">
-                Confirmar Reembolso
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL EDICIÓN TOTAL: INCLUYE CAMBIAR DE PROVEEDOR O CAMBIAR DE MATRIZ     */}
-      {/* ========================================================================= */}
+      {/* MODAL EDICIÓN TOTAL */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -1040,210 +804,31 @@ export default function ModuloDirectorio({
 
             <div className="grid grid-cols-2 gap-2.5">
               <div>
-                <label className="text-[11px] text-gray-400">Plataforma</label>
+                <label className="text-[11px] text-gray-400">Proveedor</label>
                 <select
-                  value={subEditar.plataforma}
-                  onChange={(e) => handleCambiarPlataformaEnEdicion(e.target.value)}
+                  value={subEditar.proveedor_id || ""}
+                  onChange={(e) => {
+                    const prov = proveedores.find((p) => p.id === e.target.value);
+                    if (prov) {
+                      setSubEditar({
+                        ...subEditar,
+                        proveedor_id: prov.id,
+                        nombre_proveedor: prov.nombre,
+                        telefono_proveedor: prov.telefono
+                      });
+                    }
+                  }}
                   className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
                 >
-                  {plataformasList.map((p) => (
-                    <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+                  <option value="">{subEditar.nombre_proveedor || "-- Seleccionar Proveedor --"}</option>
+                  {proveedores.map((p) => (
+                    <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="text-[11px] text-gray-400">Modalidad</label>
-                <select
-                  value={subEditar.tipo_cuenta || "1 Dispositivo"}
-                  onChange={(e) => setSubEditar({ ...subEditar, tipo_cuenta: e.target.value })}
-                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
-                >
-                  <option value="1 Dispositivo">1 Dispositivo</option>
-                  <option value="Cuenta Completa">Cuenta Completa (Ocupa toda la matriz)</option>
-                  <option value="Por Invitación">Por Invitación</option>
-                </select>
-              </div>
-            </div>
-
-            {/* BLOQUE PARA VER Y CAMBIAR EL ORIGEN, LA MATRIZ O EL PROVEEDOR */}
-            <div className="bg-[#0B120A] border border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="text-xs font-extrabold text-[#66FF00]">
-                  Origen, Matriz y Proveedor de la Cuenta:
-                </label>
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
-                    className={`px-3 py-1 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                      subEditar.origen === "stock"
-                        ? "bg-[#66FF00] text-black border-[#66FF00]"
-                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    📦 Matriz Stock
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
-                    className={`px-3 py-1 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                      subEditar.origen === "proveedor"
-                        ? "bg-[#66FF00] text-black border-[#66FF00]"
-                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    🚚 Proveedor Externo
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {subEditar.origen === "stock" && (
-                  <div>
-                    <label className="text-[11px] text-gray-400">Matriz que alberga la cuenta:</label>
-                    <select
-                      value={matrizNuevaEdicionId}
-                      onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
-                      className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
-                    >
-                      <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
-                      {matrices
-                        .filter((m) => !m.en_papelera && m.estado === "Activa")
-                        .map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.plataforma} — {m.correo} ({(m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido).length} libres)
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                )}
-
-                <div className={subEditar.origen === "stock" ? "" : "sm:col-span-2"}>
-                  <label className="text-[11px] text-[#66FF00] font-bold">
-                    🚚 Proveedor al que le compraste la cuenta:
-                  </label>
-                  <select
-                    value={subEditar.proveedor_id || ""}
-                    onChange={(e) => {
-                      const prov = proveedores.find((p) => p.id === e.target.value);
-                      if (prov) {
-                        setSubEditar({
-                          ...subEditar,
-                          proveedor_id: prov.id,
-                          nombre_proveedor: prov.nombre,
-                          telefono_proveedor: prov.telefono
-                        });
-                      } else {
-                        setSubEditar({
-                          ...subEditar,
-                          proveedor_id: null,
-                          nombre_proveedor: null,
-                          telefono_proveedor: null
-                        });
-                      }
-                    }}
-                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
-                  >
-                    <option value="">
-                      {subEditar.nombre_proveedor
-                        ? `Actual: ${subEditar.nombre_proveedor} (Cambiar...)`
-                        : "-- Seleccionar Proveedor --"}
-                    </option>
-                    {proveedores.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.nombre} — 📞 {p.telefono}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-[#0B120A] border border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
-              <label className="text-xs font-extrabold text-[#66FF00]">
-                Plan Contratado ({subEditar.dias_totales || 30} días):
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {[1, 2, 3, 4, 6, 12].map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => actualizarMesesEnEdicion(m)}
-                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-extrabold border cursor-pointer ${
-                      Number(subEditar.meses_contratados) === m
-                        ? "bg-[#66FF00] text-black border-[#66FF00]"
-                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    {m}M ({m === 12 ? 365 : m * 30}d)
-                  </button>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-gray-400">Cantidad de Meses:</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={subEditar.meses_contratados || 1}
-                    onChange={(e) => actualizarMesesEnEdicion(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#66FF00] font-bold">Cantidad de Días:</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={subEditar.dias_totales || 30}
-                    onChange={(e) => actualizarDiasEnEdicion(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-black"
-                  />
-                </div>
-              </div>
-
-              {Number(subEditar.dias_totales) > 30 && (
-                <div className="bg-amber-950/40 border border-amber-500/60 rounded-xl p-3 grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <span className="text-[11px] text-amber-300 block">Meses pagados hoy al Prov:</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={subEditar.meses_pagados_proveedor || 1}
-                      onChange={(e) => {
-                        const mp = Number(e.target.value || 1);
-                        setSubEditar({
-                          ...subEditar,
-                          meses_pagados_proveedor: mp,
-                          fecha_renovacion_proveedor: sumarDiasBoliviaISO(mp * 30, subEditar.fecha_venta)
-                        });
-                      }}
-                      className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-1.5 text-center text-white font-black"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-amber-300 block">Avisar cada (meses):</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={subEditar.cada_cuantos_meses_avisar_prov || 1}
-                      onChange={(e) =>
-                        setSubEditar({ ...subEditar, cada_cuantos_meses_avisar_prov: e.target.value })
-                      }
-                      className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-1.5 text-center text-white font-black"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="text-[11px] text-[#66FF00] font-black">
-                  💰 Precio Cobrado por Ti (Bs):
-                </label>
+                <label className="text-[11px] text-[#66FF00] font-black">💰 Precio Cobrado (Bs):</label>
                 <input
                   type="number"
                   step="0.01"
@@ -1254,40 +839,29 @@ export default function ModuloDirectorio({
               </div>
 
               <div>
-                <label className="text-[11px] text-orange-300 font-bold">
-                  Costo Pagado al Proveedor (Bs):
-                </label>
+                <label className="text-[11px] text-gray-400">Cantidad de Meses</label>
                 <input
                   type="number"
-                  step="0.01"
-                  value={subEditar.costo_proveedor ?? 0}
-                  onChange={(e) => setSubEditar({ ...subEditar, costo_proveedor: e.target.value })}
-                  className="w-full mt-1 bg-[#070B06] border border-orange-500/50 rounded-lg p-2 text-xs text-white font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-gray-400">Nombre Comprador</label>
-                <input
-                  type="text"
-                  value={subEditar.nombre_cliente}
-                  onChange={(e) => setSubEditar({ ...subEditar, nombre_cliente: e.target.value })}
+                  min="1"
+                  value={subEditar.meses_contratados || 1}
+                  onChange={(e) => actualizarMesesEnEdicion(e.target.value)}
                   className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
                 />
               </div>
 
               <div>
-                <label className="text-[11px] text-gray-400">Teléfono Comprador</label>
+                <label className="text-[11px] text-[#66FF00] font-bold">Cantidad de Días</label>
                 <input
-                  type="text"
-                  value={subEditar.telefono_cliente}
-                  onChange={(e) => setSubEditar({ ...subEditar, telefono_cliente: e.target.value })}
-                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                  type="number"
+                  min="1"
+                  value={subEditar.dias_totales || 30}
+                  onChange={(e) => actualizarDiasEnEdicion(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-bold"
                 />
               </div>
 
               <div>
-                <label className="text-[11px] text-gray-400">Correo de la Cuenta</label>
+                <label className="text-[11px] text-gray-400">Correo</label>
                 <input
                   type="text"
                   value={subEditar.correo_cuenta}
@@ -1307,7 +881,7 @@ export default function ModuloDirectorio({
               </div>
 
               <div>
-                <label className="text-[11px] text-gray-400">👤 Nombre del Perfil</label>
+                <label className="text-[11px] text-gray-400">Perfil</label>
                 <input
                   type="text"
                   value={subEditar.nombre_perfil || ""}
@@ -1317,40 +891,12 @@ export default function ModuloDirectorio({
               </div>
 
               <div>
-                <label className="text-[11px] text-[#66FF00] font-bold">📌 PIN del Perfil</label>
+                <label className="text-[11px] text-[#66FF00] font-bold">PIN</label>
                 <input
                   type="text"
                   value={subEditar.pin_perfil || ""}
                   onChange={(e) => setSubEditar({ ...subEditar, pin_perfil: e.target.value })}
-                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-gray-400">Fecha Venta</label>
-                <input
-                  type="date"
-                  value={subEditar.fecha_venta || ""}
-                  onChange={(e) => {
-                    const nv = e.target.value;
-                    const d = Number(subEditar.dias_totales || 30);
-                    setSubEditar({
-                      ...subEditar,
-                      fecha_venta: nv,
-                      fecha_corte: sumarDiasBoliviaISO(d, nv)
-                    });
-                  }}
-                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-gray-400">Fecha Corte</label>
-                <input
-                  type="date"
-                  value={subEditar.fecha_corte || ""}
-                  onChange={(e) => setSubEditar({ ...subEditar, fecha_corte: e.target.value })}
-                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-mono"
                 />
               </div>
             </div>
@@ -1360,7 +906,7 @@ export default function ModuloDirectorio({
                 Cancelar
               </button>
               <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                Guardar Cambios (Bs {subEditar.precio_venta})
+                Guardar Cambios
               </button>
             </div>
           </form>
