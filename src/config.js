@@ -27,17 +27,15 @@ export const sumarDiasBoliviaISO = (dias = 0, fechaBaseISO = null) => {
   return obtenerFechaBoliviaISO(d);
 };
 
-// Calcula siempre el LUNES (00:00) de la semana en curso en Bolivia (Ciclo Lunes a Domingo)
 export const obtenerLunesDeSemanaBolivia = (fechaBaseISO = null) => {
   const baseStr = fechaBaseISO || obtenerFechaBoliviaISO();
   const d = new Date(baseStr + "T12:00:00-04:00");
-  const diaSemana = d.getDay(); // 0 = Domingo, 1 = Lunes, ..., 6 = Sábado
+  const diaSemana = d.getDay();
   const diffALunes = diaSemana === 0 ? -6 : 1 - diaSemana;
   d.setDate(d.getDate() + diffALunes);
   return obtenerFechaBoliviaISO(d);
 };
 
-// Calcula siempre el DOMINGO (cierre de semana) de la semana en curso en Bolivia
 export const obtenerDomingoDeSemanaBolivia = (fechaBaseISO = null) => {
   const lunesISO = obtenerLunesDeSemanaBolivia(fechaBaseISO);
   return sumarDiasBoliviaISO(6, lunesISO);
@@ -69,20 +67,20 @@ export const AUTH_CONFIG = {
 };
 
 export const PLATAFORMAS = [
-  { nombre: "Netflix", perfilesDefault: 6, tieneExtra2020: true, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 30, precioRevendedor: 28 },
-  { nombre: "Disney+ / ESPN", perfilesDefault: 7, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 20, precioRevendedor: 20 },
-  { nombre: "Max (HBO)", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 9, precioRevendedor: 4 },
-  { nombre: "Prime Video", perfilesDefault: 6, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 9, precioRevendedor: 4 },
-  { nombre: "Crunchyroll", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: false, precioCliente: 12, precioRevendedor: 8 },
-  { nombre: "Flujo TV", perfilesDefault: 3, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 15, precioRevendedor: 10 },
-  { nombre: "IPTV", perfilesDefault: 3, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 14, precioRevendedor: 10 },
-  { nombre: "Spotify (Asignada)", perfilesDefault: 1, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 25, precioRevendedor: 20 },
-  { nombre: "Spotify (Invitación)", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 30, precioRevendedor: 35 },
-  { nombre: "YouTube Premium (Invitación)", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 30, precioRevendedor: 28 },
-  { nombre: "YouTube Premium (Asignada)", perfilesDefault: 1, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 22, precioRevendedor: 20 },
-  { nombre: "ChatGPT Plus", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 28, precioRevendedor: 20 },
-  { nombre: "Claude Pro", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: false, precioCliente: 45, precioRevendedor: 40 },
-  { nombre: "Gemini Pro", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 23, precioRevendedor: 10 },
-  { nombre: "Canva Pro", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 12, precioRevendedor: 10 },
-  { nombre: "CapCut Pro", perfilesDefault: 3, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 27, precioRevendedor: 20 }
+  { nombre: "Netflix", perfilesDefault: 6, tieneExtra2020: true, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 30, precioRevendedor: 28, precioSubAdmin: 28 },
+  { nombre: "Disney+ / ESPN", perfilesDefault: 7, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 20, precioRevendedor: 20, precioSubAdmin: 20 },
+  { nombre: "Max (HBO)", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 9, precioRevendedor: 4, precioSubAdmin: 4 },
+  { nombre: "Prime Video", perfilesDefault: 6, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: true, precioCliente: 9, precioRevendedor: 4, precioSubAdmin: 4 },
+  { nombre: "Crunchyroll", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: false, precioCliente: 12, precioRevendedor: 8, precioSubAdmin: 8 },
+  { nombre: "Flujo TV", perfilesDefault: 3, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 15, precioRevendedor: 10, precioSubAdmin: 10 },
+  { nombre: "IPTV", perfilesDefault: 3, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 14, precioRevendedor: 10, precioSubAdmin: 10 },
+  { nombre: "Spotify (Asignada)", perfilesDefault: 1, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 25, precioRevendedor: 20, precioSubAdmin: 20 },
+  { nombre: "Spotify (Invitación)", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: true, pidePin: false, precioCliente: 30, precioRevendedor: 35, precioSubAdmin: 35 },
+  { nombre: "YouTube Premium (Invitación)", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 30, precioRevendedor: 28, precioSubAdmin: 28 },
+  { nombre: "YouTube Premium (Asignada)", perfilesDefault: 1, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 22, precioRevendedor: 20, precioSubAdmin: 20 },
+  { nombre: "ChatGPT Plus", perfilesDefault: 15, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 28, precioRevendedor: 20, precioSubAdmin: 20 },
+  { nombre: "Claude Pro", perfilesDefault: 5, tieneExtra2020: false, pidePass: true, pidePerfil: true, pidePin: false, precioCliente: 45, precioRevendedor: 40, precioSubAdmin: 40 },
+  { nombre: "Gemini Pro", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 23, precioRevendedor: 10, precioSubAdmin: 10 },
+  { nombre: "Canva Pro", perfilesDefault: 1, tieneExtra2020: false, pidePass: false, pidePerfil: false, pidePin: false, precioCliente: 12, precioRevendedor: 10, precioSubAdmin: 10 },
+  { nombre: "CapCut Pro", perfilesDefault: 3, tieneExtra2020: false, pidePass: true, pidePerfil: false, pidePin: false, precioCliente: 27, precioRevendedor: 20, precioSubAdmin: 20 }
 ];

@@ -22,29 +22,98 @@ function obtenerTextoPlanDias(item) {
   return `${dias} ${dias === 1 ? "día" : "días"}`;
 }
 
-// Adapta las Reglas y Garantía según si es 1 Dispositivo, Cuenta Completa o Por Invitación
+// Construye las Reglas y Garantía adaptadas según la plataforma y modalidad (Spotify Invitación, ChatGPT Plus, Cuenta Completa o 1 Dispositivo)
 function construirBloqueReglasGarantia(listaItems) {
   const hayUnDispositivo = listaItems.some(
     (i) =>
       i.tipoCuenta !== "Cuenta Completa" &&
       i.tipoCuenta !== "Por Invitación" &&
-      Boolean(i.passFinal)
+      !String(i.plataforma || "").toLowerCase().includes("invitaci")
   );
+
   const todasSonInvitacion = listaItems.every(
-    (i) => i.tipoCuenta === "Por Invitación" || !i.passFinal
+    (i) =>
+      i.tipoCuenta === "Por Invitación" ||
+      String(i.plataforma || "").toLowerCase().includes("invitaci")
+  );
+
+  const hayChatGPT = listaItems.some((i) =>
+    String(i.plataforma || "").toLowerCase().includes("chat")
   );
 
   const lineas = ["📋 *REGLAS Y GARANTÍA:*"];
+
   if (hayUnDispositivo) {
     lineas.push("- ❌ Solo 1 dispositivo.");
   }
   if (!todasSonInvitacion) {
     lineas.push("- ❌ No cambiar correo o clave.");
   }
+  if (todasSonInvitacion) {
+    lineas.push("- ✅ Renovar 1 día antes del corte.");
+  }
+  if (hayChatGPT) {
+    lineas.push("- ✅ Guardar tus proyectos en una carpeta y cuidar tu almacenamiento.");
+  }
+
   lineas.push("- 🛠️ Soporte de caídas en 24 horas.");
   lineas.push("- 💵 Te damos reembolso si la caída supera 24 h.");
 
   return "\n\n" + lineas.join("\n");
+}
+
+// Formatea las líneas de cada cuenta (detectando si es Spotify Invitación con Link + Calle + Correo + Nombre de Perfil)
+function armarDetalleCuentaTexto(item, esCombo, idx, paraRevendedor = false) {
+  const textoPlan = obtenerTextoPlanDias(item);
+  const vence = formatearFechaDMA(item.fechaCorte);
+  const platLower = String(item.plataforma || "").toLowerCase();
+  const esInv =
+    item.tipoCuenta === "Por Invitación" || platLower.includes("invitaci");
+  const esSpotifyInv = platLower.includes("spotify") && esInv;
+
+  const head = esCombo
+    ? `🔹 *${paraRevendedor ? `CUENTA #${idx + 1}: ` : `#${idx + 1} `}${item.plataforma.toUpperCase()}*`
+    : `📺 *Plataforma:* ${item.plataforma}`;
+
+  // Caso especial: Spotify por Invitación (Correo cliente, Nombre del perfil de Spotify, Link de invitación y Calle/Dirección)
+  if (esSpotifyInv) {
+    const correoCli = item.correoFinal ? `\n📧 *Correo:* ${item.correoFinal}` : "";
+    const nomSpotify =
+      item.perfilFinal &&
+      !["Por Invitación", "1 Dispositivo", "Cuenta / Invitación"].includes(item.perfilFinal)
+        ? `\n👤 *Nombre en Spotify:* ${item.perfilFinal}`
+        : "";
+    const linkInv = item.linkInvitacion || (String(item.passFinal || "").startsWith("http") ? item.passFinal : "");
+    const calleDir =
+      item.direccion ||
+      (item.pinFinal ? item.pinFinal : !String(item.passFinal || "").startsWith("http") ? item.passFinal : "");
+
+    const lineaLink = linkInv ? `\n🔗 *Link de Invitación:* ${linkInv}` : "";
+    const lineaCalle = calleDir ? `\n📍 *Dirección / Calle:* ${calleDir}` : "";
+
+    return `${head}${correoCli}${nomSpotify}${lineaLink}${lineaCalle}\n⏳ *Plan:* ${textoPlan} | 📅 *Vence:* ${vence}`;
+  }
+
+  const pass = item.passFinal && !esInv ? `\n🔑 *${paraRevendedor ? "Contraseña" : "Clave"}:* ${item.passFinal}` : "";
+  const perfil =
+    item.tipoCuenta === "Cuenta Completa"
+      ? `\n👑 *Modalidad:* Cuenta Completa`
+      : esInv
+      ? `\n📩 *Modalidad:* Activación por Invitación`
+      : item.perfilFinal &&
+        !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación", "Cuenta Completa"].includes(
+          item.perfilFinal
+        )
+      ? `\n👤 *Perfil:* ${item.perfilFinal}`
+      : "";
+  const pin =
+    item.pinFinal && item.tipoCuenta === "1 Dispositivo" && !esInv
+      ? paraRevendedor
+        ? `\n📌 *PIN:* ${item.pinFinal}`
+        : ` | 📌 *PIN:* ${item.pinFinal}`
+      : "";
+
+  return `${head}\n📧 *Correo:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan} | 📅 *Vence:* ${vence}`;
 }
 
 // 1. Mensaje de Entrega / Reemplazo / Edición
@@ -59,39 +128,12 @@ export function generarMensajeEntrega(
   const esCombo = listaItems.length > 1;
   const totalCobrado = listaItems.reduce((acc, i) => acc + Number(i.precioVenta || 0), 0);
 
-  // Solo muestra REGLAS Y GARANTÍA cuando es una entrega nueva (no cuando es Reemplazo ni Renovación)
   const esReemplazoORenovacion = Boolean(tituloPersonalizado);
   const textoReglas = esReemplazoORenovacion ? "" : construirBloqueReglasGarantia(listaItems);
 
   if (esRevendedor) {
     const bloquesRev = listaItems
-      .map((item, idx) => {
-        const textoPlan = obtenerTextoPlanDias(item);
-        const vence = formatearFechaDMA(item.fechaCorte);
-        const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
-
-        const head = esCombo
-          ? `🔹 *CUENTA #${idx + 1}: ${item.plataforma.toUpperCase()}*`
-          : `📺 *Plataforma:* ${item.plataforma}`;
-        const pass = item.passFinal && !esInv ? `\n🔑 *Contraseña:* ${item.passFinal}` : "";
-        const perfil =
-          item.tipoCuenta === "Cuenta Completa"
-            ? `\n👑 *Modalidad:* Cuenta Completa`
-            : esInv
-            ? `\n📩 *Modalidad:* Activación por Invitación`
-            : item.perfilFinal &&
-              !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación", "Cuenta Completa"].includes(
-                item.perfilFinal
-              )
-            ? `\n👤 *Perfil:* ${item.perfilFinal}`
-            : "";
-        const pin =
-          item.pinFinal && item.tipoCuenta === "1 Dispositivo" && !esInv
-            ? `\n📌 *PIN:* ${item.pinFinal}`
-            : "";
-
-        return `${head}\n📧 *Correo / Usuario:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan}\n📅 *Vence:* ${vence}`;
-      })
+      .map((item, idx) => armarDetalleCuentaTexto(item, esCombo, idx, true))
       .join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
 
     const encabezadoRev = tituloPersonalizado
@@ -116,33 +158,7 @@ export function generarMensajeEntrega(
       : "";
 
   const bloques = listaItems
-    .map((item, idx) => {
-      const textoPlan = obtenerTextoPlanDias(item);
-      const vence = formatearFechaDMA(item.fechaCorte);
-      const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
-
-      const head = esCombo
-        ? `🔹 *#${idx + 1} ${item.plataforma.toUpperCase()}*`
-        : `📺 *Plataforma:* ${item.plataforma}`;
-      const pass = item.passFinal && !esInv ? `\n🔑 *Clave:* ${item.passFinal}` : "";
-      const perfil =
-        item.tipoCuenta === "Cuenta Completa"
-          ? `\n👑 *Modalidad:* Cuenta Completa`
-          : esInv
-          ? `\n📩 *Modalidad:* Activación por Invitación`
-          : item.perfilFinal &&
-            !["1 Dispositivo", "Por Invitación", "Cuenta / Invitación", "Cuenta Completa"].includes(
-              item.perfilFinal
-            )
-          ? `\n👤 *Perfil:* ${item.perfilFinal}`
-          : "";
-      const pin =
-        item.pinFinal && item.tipoCuenta === "1 Dispositivo" && !esInv
-          ? ` | 📌 *PIN:* ${item.pinFinal}`
-          : "";
-
-      return `${head}\n📧 *Correo:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan} | 📅 *Vence:* ${vence}`;
-    })
+    .map((item, idx) => armarDetalleCuentaTexto(item, esCombo, idx, false))
     .join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
 
   const encabezado = tituloPersonalizado
@@ -154,22 +170,7 @@ export function generarMensajeEntrega(
   const lineaTotal = esCombo ? `\n\n💰 *Total Combo:* Bs ${totalCobrado.toFixed(2)}` : "";
   const completo = `${encabezado}\n\n¡Hola *${nombre}*!\n\n${bloques}${lineaTotal}${textoReglas}\n\n🛠️ *Soporte:* 78953018${bloqueOfertas}`;
 
-  const resumido = listaItems
-    .map((item) => {
-      const textoPlan = obtenerTextoPlanDias(item);
-      const vence = formatearFechaDMA(item.fechaCorte);
-      const esInv = item.tipoCuenta === "Por Invitación" || !item.passFinal;
-      const pass = item.passFinal && !esInv ? `\n🔑 Clave: ${item.passFinal}` : "";
-      const perfil =
-        item.perfilFinal && !esInv
-          ? `\n👤 Perfil: ${item.perfilFinal}${item.pinFinal ? ` | PIN: ${item.pinFinal}` : ""}`
-          : "";
-      const tituloCorto = tituloPersonalizado ? ` - ${tituloPersonalizado.toUpperCase()}` : "";
-      return `*${item.plataforma} (MOSS${tituloCorto})*\n📧 Correo: ${item.correoFinal}${pass}${perfil}\n⏳ Plan: ${textoPlan} | 📅 Vence: ${vence}${textoReglas}\n🛠️ Soporte: 78953018`;
-    })
-    .join("\n\n");
-
-  return { completo, resumido, telefono: tel, cliente: nombre };
+  return { completo, resumido: completo, telefono: tel, cliente: nombre };
 }
 
 // 2. Mensaje Corto Individual de Renovación

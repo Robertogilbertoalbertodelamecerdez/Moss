@@ -13,7 +13,6 @@ import {
 } from "@/utils/mensajesMoss";
 import {
   Copy,
-  Share2,
   Check,
   RefreshCw,
   XCircle,
@@ -60,13 +59,9 @@ export default function ModuloRenovaciones({
     return calcularDias(s.fecha_corte) <= 3;
   });
 
-  // =========================================================================
-  // ALERTAS DE PAGO A PROVEEDOR (PLANES LARGOS DONDE PAGASTE MENOS MESES)
-  // =========================================================================
   const subsProveedorPorRenovar = suscripciones.filter((s) => {
     if (s.en_papelera || s.estado !== "Activa") return false;
     if (!s.fecha_renovacion_proveedor) return false;
-    // Solo si el plan del cliente sigue vigente más allá del pago actual al proveedor
     if (s.fecha_renovacion_proveedor >= s.fecha_corte) return false;
     return calcularDias(s.fecha_renovacion_proveedor) <= 3;
   });
@@ -88,7 +83,6 @@ export default function ModuloRenovaciones({
     })
     .filter((grupo) => grupo.cuentas.length > 0);
 
-  // Cuando ya le pagaste el siguiente mes (o X meses) al proveedor para que el cliente siga con su plan largo
   const avanzarCicloProveedor = async (sub, mesesAgregar = null) => {
     const intervalo = Number(mesesAgregar || sub.cada_cuantos_meses_avisar_prov || 1);
     const baseFecha =
@@ -114,7 +108,7 @@ export default function ModuloRenovaciones({
   const marcarComoAvisado = async (sub, estadoBool) => {
     await supabase.from("suscripciones").update({ avisado_renovacion: estadoBool }).eq("id", sub.id);
     await recargarTodo();
-    notificar(estadoBool ? "Movido a Ya Avisados" : "Devuelto a Por Avisar");
+    notificar(estadoBool ? "✓ Marcado como Ya Avisado" : "⏳ Devuelto a Por Avisar");
   };
 
   const ejecutarNoVaARenovar = async (sub) => {
@@ -136,6 +130,7 @@ export default function ModuloRenovaciones({
     if (Number(m.costo_total) > 0) {
       await supabase.from("movimientos_yolo").insert([
         {
+          admin_propietario: m.admin_propietario || "admin",
           tipo: "Costo Matriz",
           monto: -Math.abs(Number(m.costo_total)),
           afecta_ganancia_neta: true,
@@ -160,6 +155,7 @@ export default function ModuloRenovaciones({
     setCostoProv("0");
   };
 
+  // Al confirmar la renovación, actualiza creado_en y fecha_venta para que salga de PRIMERO arriba en el Directorio
   const confirmarRenovacion = async (e) => {
     e.preventDefault();
     const diasSumar = Number(mesesRenovacion) === 12 ? 365 : Number(mesesRenovacion) * 30;
@@ -171,7 +167,9 @@ export default function ModuloRenovaciones({
       precio_venta: Number(precioRenovacion),
       meses_contratados: Number(mesesRenovacion),
       dias_totales: diasSumar,
+      fecha_venta: hoyISO,
       fecha_corte: nuevaFechaCorte,
+      creado_en: new Date().toISOString(),
       avisado_renovacion: false,
       estado: "Activa"
     };
@@ -211,6 +209,7 @@ export default function ModuloRenovaciones({
     await supabase.from("suscripciones").update(datosUpdate).eq("id", subRenovar.id);
     await supabase.from("movimientos_yolo").insert([
       {
+        admin_propietario: subRenovar.admin_propietario || "admin",
         tipo: "Renovacion",
         monto: Math.abs(Number(precioRenovacion)),
         afecta_ganancia_neta: true,
@@ -221,7 +220,7 @@ export default function ModuloRenovaciones({
 
     setSubRenovar(null);
     await recargarTodo();
-    notificar(`Renovado hasta ${formatearFechaDMA(nuevaFechaCorte)}`);
+    notificar(`¡Renovado hasta ${formatearFechaDMA(nuevaFechaCorte)}! Ya aparece de primero en tu Directorio.`);
   };
 
   const listaMostrar = subTab === "por_avisar" ? listaPorAvisar : listaAvisados;
@@ -235,7 +234,16 @@ export default function ModuloRenovaciones({
             subTab === "por_avisar" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#233820]"
           }`}
         >
-          Por Avisar ({listaPorAvisar.length})
+          ⏳ No Avisados ({listaPorAvisar.length})
+        </button>
+
+        <button
+          onClick={() => setSubTab("avisados")}
+          className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+            subTab === "avisados" ? "bg-emerald-500 text-black border-emerald-400" : "bg-[#111A10] text-emerald-300 border-emerald-600/40"
+          }`}
+        >
+          ✓ Ya Avisados ({listaAvisados.length})
         </button>
 
         <button
@@ -261,15 +269,6 @@ export default function ModuloRenovaciones({
         </button>
 
         <button
-          onClick={() => setSubTab("avisados")}
-          className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-            subTab === "avisados" ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#233820]"
-          }`}
-        >
-          Ya Avisados ({listaAvisados.length})
-        </button>
-
-        <button
           onClick={() => setSubTab("matrices")}
           className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
             subTab === "matrices" ? "bg-yellow-400 text-black border-yellow-400" : "bg-[#111A10] text-yellow-400 border-yellow-600/40"
@@ -279,7 +278,6 @@ export default function ModuloRenovaciones({
         </button>
       </div>
 
-      {/* PESTAÑA DE ALERTAS DE PROVEEDOR (PLANES DE 3M / 6M / 1 AÑO PAGADOS MES A MES) */}
       {subTab === "proveedores_largos" ? (
         <div className="space-y-3">
           {subsProveedorPorRenovar.length === 0 ? (
@@ -378,17 +376,6 @@ export default function ModuloRenovaciones({
                       </button>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-[#1E331A]">
-                    {cuentas.map((c, i) => (
-                      <div key={c.id} className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2.5 text-xs">
-                        <p className="font-bold text-[#66FF00]">
-                          #{i + 1} {c.plataforma} — Cliente: {c.nombre_cliente_final || "Sin anotar"} (📞 {c.telefono_cliente_final || "S/N"})
-                        </p>
-                        <p className="text-gray-300 font-mono text-[11px]">{c.correo_cuenta} ({c.nombre_perfil})</p>
-                      </div>
-                    ))}
-                  </div>
                 </div>
               );
             })
@@ -434,6 +421,15 @@ export default function ModuloRenovaciones({
                     <div>
                       <span className="px-2 py-0.5 text-xs font-bold rounded bg-[#66FF00]/20 text-[#66FF00]">{s.plataforma}</span>
                       <span className="ml-2 text-xs font-bold text-orange-400">{textoDias}</span>
+                      <span
+                        className={`ml-2 px-2 py-0.5 text-[10px] font-black rounded-full ${
+                          s.avisado_renovacion
+                            ? "bg-emerald-500 text-black"
+                            : "bg-orange-950 text-orange-300 border border-orange-500"
+                        }`}
+                      >
+                        {s.avisado_renovacion ? "✓ Ya Avisado" : "⏳ No Avisado"}
+                      </span>
                       <h3 className="font-bold text-base mt-1">
                         {s.nombre_cliente} — <span className="text-[#66FF00] font-mono">{s.telefono_cliente}</span>
                       </h3>
@@ -465,16 +461,21 @@ export default function ModuloRenovaciones({
                   <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#1E331A]">
                     <button
                       onClick={() => marcarComoAvisado(s, !s.avisado_renovacion)}
-                      className="px-3 py-1.5 bg-[#162614] border border-[#66FF00]/40 text-[#66FF00] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer ${
+                        s.avisado_renovacion
+                          ? "bg-orange-950 text-orange-300 border border-orange-500"
+                          : "bg-emerald-500 text-black"
+                      }`}
                     >
-                      <Check className="w-3.5 h-3.5" /> {s.avisado_renovacion ? "Mover a Por Avisar" : "Ya le avisé"}
+                      <Check className="w-3.5 h-3.5" />{" "}
+                      {s.avisado_renovacion ? "Pasar a No Avisado" : "Marcar como Ya Avisado"}
                     </button>
 
                     <button
                       onClick={() => abrirModalRenovar(s)}
                       className="px-3 py-1.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer"
                     >
-                      <RefreshCw className="w-3.5 h-3.5" /> Renovar
+                      <RefreshCw className="w-3.5 h-3.5" /> Renovar (Sube de 1ro al Directorio)
                     </button>
 
                     {confirmandoNoRenuevaId === s.id ? (

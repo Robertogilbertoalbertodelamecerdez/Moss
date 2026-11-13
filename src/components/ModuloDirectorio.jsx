@@ -4,6 +4,7 @@ import {
   supabase,
   PLATAFORMAS,
   formatearFechaDMA,
+  obtenerFechaBoliviaISO,
   sumarDiasBoliviaISO
 } from "@/config";
 import { extraerDatosProveedor } from "@/utils/extractorProveedor";
@@ -23,7 +24,10 @@ import {
   Copy,
   CheckCircle2,
   Send,
-  ShieldCheck
+  ShieldCheck,
+  FileText,
+  ExternalLink,
+  Bell
 } from "lucide-react";
 
 export default function ModuloDirectorio({
@@ -43,13 +47,16 @@ export default function ModuloDirectorio({
   const [vistaAdminDir, setVistaAdminDir] = useState(adminKeyActual);
   const [busqueda, setBusqueda] = useState("");
   const [filtroPlataforma, setFiltroPlataforma] = useState("Todas");
-  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [filtroProveedorId, setFiltroProveedorId] = useState("todos");
   const [filtroRevendedorId, setFiltroRevendedorId] = useState("todos");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
 
   const [mensajeActivo, setMensajeActivo] = useState(null);
-
-  // Confirmación antes de eliminar para siempre una cuenta de la Papelera
   const [confirmarEliminarDefinitivoId, setConfirmarEliminarDefinitivoId] = useState(null);
+
+  // Modal rápido de Notas / Código 2FA en Directorio
+  const [subNotasModal, setSubNotasModal] = useState(null);
+  const [textoNotasDirEdit, setTextoNotasDirEdit] = useState("");
 
   const [subReemplazo, setSubReemplazo] = useState(null);
   const [origenReemp, setOrigenReemp] = useState("proveedor");
@@ -68,10 +75,12 @@ export default function ModuloDirectorio({
   const [subEditar, setSubEditar] = useState(null);
   const [matrizNuevaEdicionId, setMatrizNuevaEdicionId] = useState("");
 
+  const hoyISO = obtenerFechaBoliviaISO();
+
   const calcularDiasRestantes = (fechaCorte) => {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const corte = new Date(fechaCorte + "T00:00:00");
+    if (!fechaCorte) return 999;
+    const hoy = new Date(hoyISO + "T00:00:00-04:00");
+    const corte = new Date(fechaCorte + "T00:00:00-04:00");
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
@@ -85,6 +94,38 @@ export default function ModuloDirectorio({
     return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
   };
 
+  // Alternar entre "✓ Ya Avisado" y "⏳ No Avisado" directamente desde el Directorio
+  const toggleAvisadoRenovacionEnDirectorio = async (s) => {
+    const nuevo = !s.avisado_renovacion;
+    await supabase
+      .from("suscripciones")
+      .update({ avisado_renovacion: nuevo })
+      .eq("id", s.id);
+    await recargarTodo();
+    notificar(nuevo ? "✓ Marcado como Ya Avisado" : "⏳ Marcado como No Avisado");
+  };
+
+  // Guardar Notas / 2FA desde el botón rápido de Notas del Directorio
+  const guardarNotasRapidasSuscripcion = async () => {
+    if (!subNotasModal) return;
+    await supabase
+      .from("suscripciones")
+      .update({ notas: textoNotasDirEdit })
+      .eq("id", subNotasModal.id);
+
+    // Si pertenece a una matriz y la matriz no tenía nota, sincronizarla también en la matriz
+    if (subNotasModal.matriz_id) {
+      await supabase
+        .from("matrices_stock")
+        .update({ notas: textoNotasDirEdit })
+        .eq("id", subNotasModal.matriz_id);
+    }
+
+    setSubNotasModal({ ...subNotasModal, notas: textoNotasDirEdit });
+    await recargarTodo();
+    notificar("📝 Notas / Código 2FA guardados");
+  };
+
   const abrirMensajeDeSuscripcion = (s, tituloForzado = null) => {
     const tituloUsar =
       tituloForzado !== null
@@ -92,6 +133,10 @@ export default function ModuloDirectorio({
         : s.fue_reemplazada
         ? "REEMPLAZO DE CUENTA"
         : null;
+
+    const esSpotifyInv =
+      String(s.plataforma || "").toLowerCase().includes("spotify") &&
+      (s.tipo_cuenta === "Por Invitación" || String(s.plataforma || "").toLowerCase().includes("invitaci"));
 
     const msg = generarMensajeEntrega(
       s.nombre_cliente,
@@ -104,6 +149,8 @@ export default function ModuloDirectorio({
           passFinal: s.password_cuenta,
           perfilFinal: s.nombre_perfil,
           pinFinal: s.pin_perfil,
+          linkInvitacion: esSpotifyInv ? s.password_cuenta : "",
+          direccion: esSpotifyInv ? s.pin_perfil : "",
           meses: s.meses_contratados || 1,
           diasTotales: s.dias_totales || Number(s.meses_contratados || 1) * 30,
           fechaCorte: s.fecha_corte,
@@ -141,7 +188,7 @@ export default function ModuloDirectorio({
 
   const procesarTextoProveedorReemplazo = (texto) => {
     setTextoCrudoReemp(texto);
-    const ext = extraerDatosProveedor(texto, plataformasList);
+    const ext = extraerDatosProveedor(texto);
     if (ext.correo) setCorreoReemp(ext.correo);
     if (ext.password) setPassReemp(ext.password);
     if (ext.perfil) setPerfilReemp(ext.perfil);
@@ -307,6 +354,7 @@ export default function ModuloDirectorio({
     });
   };
 
+  // Filtrado completo: incluye Filtro por Proveedor, Vence Hoy (dias === 0) y Por Vencer (dias <= 3)
   const suscripcionesFiltradas = suscripciones
     .filter((s) => {
       const owner = s.admin_propietario || "admin";
@@ -330,7 +378,20 @@ export default function ModuloDirectorio({
 
       if (filtroPlataforma !== "Todas" && s.plataforma !== filtroPlataforma) return false;
 
+      // Filtro por Proveedor (verifica el proveedor directo o el proveedor de la matriz que la alberga)
+      if (filtroProveedorId !== "todos") {
+        const provObj = proveedores.find((pr) => pr.id === filtroProveedorId);
+        const matAsociada = s.matriz_id ? matrices.find((m) => m.id === s.matriz_id) : null;
+        const provIdReal = s.proveedor_id || matAsociada?.proveedor_id || "";
+        const provNombreReal = (s.nombre_proveedor || matAsociada?.nombre_proveedor || "").toLowerCase();
+        const coincideProv =
+          provIdReal === filtroProveedorId ||
+          (provObj && provNombreReal === provObj.nombre.toLowerCase());
+        if (!coincideProv) return false;
+      }
+
       const dias = calcularDiasRestantes(s.fecha_corte);
+      if (filtroEstado === "vence_hoy" && (dias > 0 || s.estado !== "Activa")) return false;
       if (filtroEstado === "vence_3" && (dias > 3 || s.estado !== "Activa")) return false;
       if (filtroEstado === "caidos" && s.estado !== "Caida") return false;
       if (filtroEstado === "revendedores" && s.tipo_comprador !== "revendedor" && !vinculadaAMateus) return false;
@@ -345,6 +406,7 @@ export default function ModuloDirectorio({
 
       if (busqueda.trim() !== "") {
         const q = busqueda.toLowerCase();
+        const matAsociada = s.matriz_id ? matrices.find((m) => m.id === s.matriz_id) : null;
         const coincide =
           (s.nombre_cliente || "").toLowerCase().includes(q) ||
           (s.telefono_cliente || "").toLowerCase().includes(q) ||
@@ -353,6 +415,8 @@ export default function ModuloDirectorio({
           (s.correo_cuenta || "").toLowerCase().includes(q) ||
           (s.nombre_perfil || "").toLowerCase().includes(q) ||
           (s.pin_perfil || "").toLowerCase().includes(q) ||
+          (s.notas || "").toLowerCase().includes(q) ||
+          (matAsociada?.notas || "").toLowerCase().includes(q) ||
           (s.nombre_proveedor || "").toLowerCase().includes(q);
         if (!coincide) return false;
       }
@@ -399,6 +463,7 @@ export default function ModuloDirectorio({
       password_cuenta: subEditar.password_cuenta,
       nombre_perfil: subEditar.nombre_perfil,
       pin_perfil: subEditar.pin_perfil,
+      notas: subEditar.notas || "",
       precio_venta: nuevoPrecioCobrado,
       costo_proveedor: nuevoCostoProvOFie,
       meses_contratados: mesesFinal,
@@ -467,7 +532,7 @@ export default function ModuloDirectorio({
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("¡Precios, costo al fíe y datos actualizados! Su ganancia neta ya se recalculó.");
+    notificar("¡Precios, proveedor, notas y datos actualizados!");
     if (editada) abrirMensajeDeSuscripcion(editada);
   };
 
@@ -483,13 +548,14 @@ export default function ModuloDirectorio({
     notificar("Cuenta enviada a la papelera");
   };
 
-  // =========================================================================
-  // RECUPERAR DE LA PAPELERA O ELIMINAR PARA SIEMPRE CON CONFIRMACIÓN
-  // =========================================================================
   const recuperarCuentaDePapelera = async (s) => {
     await supabase
       .from("suscripciones")
-      .update({ en_papelera: false, estado: "Activa" })
+      .update({
+        en_papelera: false,
+        estado: "Activa",
+        creado_en: new Date().toISOString()
+      })
       .eq("id", s.id);
 
     if (Number(s.precio_venta) > 0) {
@@ -555,27 +621,42 @@ export default function ModuloDirectorio({
         </div>
       )}
 
+      {/* BARRA DE BÚSQUEDA + FILTRO DE PLATAFORMA + FILTRO DE PROVEEDOR + FILTRO DE REVENDEDOR */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 space-y-3">
-        <div className="flex flex-col md:flex-row gap-3">
-          <div className="relative flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+          <div className="relative md:col-span-2">
             <Search className="w-4 h-4 text-[#66FF00] absolute left-3.5 top-3" />
             <input
               type="text"
-              placeholder="Buscar por teléfono, cliente, correo, perfil, PIN, matriz o proveedor..."
+              placeholder="Buscar por teléfono, cliente, correo, PIN, código 2FA o proveedor..."
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-sm text-white"
+              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-xs sm:text-sm text-white"
             />
           </div>
 
           <select
             value={filtroPlataforma}
             onChange={(e) => setFiltroPlataforma(e.target.value)}
-            className="bg-[#070B06] border border-[#2A4226] rounded-xl px-3 py-2 text-xs text-white"
+            className="bg-[#070B06] border border-[#2A4226] rounded-xl px-3 py-2 text-xs text-white font-bold"
           >
-            <option value="Todas">Todas las Plataformas</option>
+            <option value="Todas">📺 Todas las Plataformas</option>
             {plataformasList.map((p) => (
               <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+            ))}
+          </select>
+
+          {/* FILTRO POR PROVEEDOR EN DIRECTORIO */}
+          <select
+            value={filtroProveedorId}
+            onChange={(e) => setFiltroProveedorId(e.target.value)}
+            className="bg-[#070B06] border border-[#66FF00]/60 rounded-xl px-3 py-2 text-xs text-[#66FF00] font-bold"
+          >
+            <option value="todos">🚚 Todos los Proveedores</option>
+            {proveedores.map((pr) => (
+              <option key={pr.id} value={pr.id}>
+                🚚 {pr.nombre} ({pr.telefono})
+              </option>
             ))}
           </select>
         </div>
@@ -583,8 +664,9 @@ export default function ModuloDirectorio({
         <div className="flex flex-wrap items-center gap-2">
           {[
             { id: "todos", label: `Todos por Hora (${suscripcionesFiltradas.length})` },
+            { id: "vence_hoy", label: "🚨 Vence Hoy / Vencidos" },
+            { id: "vence_3", label: "⏳ Por Vencer (≤ 3 días)" },
             { id: "revendedores", label: "🤝 Revendedores y Fíe Admin" },
-            { id: "vence_3", label: "Por Vencer (≤ 3 días)" },
             { id: "caidos", label: "⚠️ Caídos" },
             { id: "reembolsados", label: "Reembolsados" },
             { id: "papelera", label: "🗑️ Papelera" }
@@ -593,7 +675,9 @@ export default function ModuloDirectorio({
               key={b.id}
               onClick={() => setFiltroEstado(b.id)}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
-                filtroEstado === b.id ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                filtroEstado === b.id
+                  ? "bg-[#66FF00] text-black border-[#66FF00]"
+                  : "bg-[#070B06] text-gray-300 border-[#2A4226]"
               }`}
             >
               {b.label}
@@ -602,6 +686,7 @@ export default function ModuloDirectorio({
         </div>
       </div>
 
+      {/* LISTA DE SUSCRIPCIONES */}
       <div className="space-y-3">
         {suscripcionesFiltradas.map((s) => {
           const dias = calcularDiasRestantes(s.fecha_corte);
@@ -613,6 +698,7 @@ export default function ModuloDirectorio({
             (s.proveedor_id ? proveedores.find((pr) => pr.id === s.proveedor_id)?.nombre : null) ||
             "Sin asignar";
 
+          const notasEfectivas = s.notas || matrizAlbergadora?.notas || "";
           const esFieDeSubAdmin = esVentaFieDeSubAdminParaMateus(s);
           const subAdminObj = esFieDeSubAdmin
             ? subAdmins.find((sa) => sa.id === s.admin_propietario)
@@ -620,6 +706,8 @@ export default function ModuloDirectorio({
 
           const gananciaNetaDeMarcusEnEsta =
             Number(s.precio_venta || 0) - Number(s.costo_proveedor || 0);
+
+          const estaPorVencerOVencida = dias <= 3 && s.estado === "Activa";
 
           return (
             <div
@@ -641,6 +729,23 @@ export default function ModuloDirectorio({
                     <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
                       ⏳ Plan: {diasPlan} días
                     </span>
+
+                    {/* ETIQUETA / BOTÓN EN DISTINTO COLOR: ✓ YA AVISADO (VERDE) VS ⏳ NO AVISADO (NARANJA) */}
+                    {(estaPorVencerOVencida || s.avisado_renovacion) && (
+                      <button
+                        type="button"
+                        onClick={() => toggleAvisadoRenovacionEnDirectorio(s)}
+                        className={`px-2.5 py-0.5 text-[11px] font-black rounded-full flex items-center gap-1 cursor-pointer border transition ${
+                          s.avisado_renovacion
+                            ? "bg-emerald-500 text-black border-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.35)]"
+                            : "bg-orange-950 text-orange-300 border-orange-500 hover:bg-orange-900"
+                        }`}
+                        title="Toca para cambiar entre Ya Avisado y No Avisado"
+                      >
+                        <Bell className="w-3 h-3" />
+                        {s.avisado_renovacion ? "✓ Ya Avisado" : "⏳ No Avisado"}
+                      </button>
+                    )}
 
                     {esFieDeSubAdmin ? (
                       <span className="px-2.5 py-0.5 text-[11px] font-black rounded-full bg-amber-400 text-black">
@@ -701,8 +806,8 @@ export default function ModuloDirectorio({
                 </div>
 
                 <div className="text-right space-y-0.5">
-                  <p className="text-xs font-bold text-gray-300">
-                    {dias < 0 ? `Venció hace ${Math.abs(dias)}d` : `Quedan ${dias} día(s)`}
+                  <p className={`text-xs font-black ${dias <= 0 ? "text-red-400" : dias <= 3 ? "text-orange-400" : "text-gray-300"}`}>
+                    {dias < 0 ? `Venció hace ${Math.abs(dias)}d` : dias === 0 ? "🚨 ¡Vence HOY!" : `Quedan ${dias} día(s)`}
                   </p>
                   <p className="text-[11px] text-gray-400">
                     Corte: <b className="text-gray-200">{formatearFechaDMA(s.fecha_corte)}</b>
@@ -710,7 +815,6 @@ export default function ModuloDirectorio({
                 </div>
               </div>
 
-              {/* SI ESTÁ EN LA PAPELERA: BOTONES DE RECUPERAR O ELIMINAR PARA SIEMPRE CON CONFIRMACIÓN */}
               {s.en_papelera ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E331A]">
                   <button
@@ -761,10 +865,27 @@ export default function ModuloDirectorio({
                     {s.fue_reemplazada ? "Ver Reemplazo / WhatsApp" : "Entregar / WhatsApp"}
                   </button>
 
+                  {/* BOTÓN DE NOTAS / CÓDIGO 2FA EN CADA TARJETA DEL DIRECTORIO */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubNotasModal(s);
+                      setTextoNotasDirEdit(notasEfectivas);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer border ${
+                      notasEfectivas
+                        ? "bg-cyan-500 text-black border-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.3)]"
+                        : "bg-[#0B1418] text-cyan-300 border-cyan-500/40"
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" /> 📝 Notas / 2FA
+                  </button>
+
                   <button
                     onClick={() => {
                       setSubEditar({
                         ...s,
+                        notas: notasEfectivas,
                         meses_contratados: s.meses_contratados || 1,
                         dias_totales: s.dias_totales || Number(s.meses_contratados || 1) * 30
                       });
@@ -772,7 +893,7 @@ export default function ModuloDirectorio({
                     }}
                     className="px-3 py-1.5 bg-[#1A2B18] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Precios / Costo Fíe / Datos
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Precios / Notas / Datos
                   </button>
 
                   <button
@@ -821,6 +942,62 @@ export default function ModuloDirectorio({
           );
         })}
       </div>
+
+      {/* MODAL RÁPIDO DE NOTAS / CÓDIGO 2FA EN DIRECTORIO */}
+      {subNotasModal && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111A10] border-2 border-cyan-400 rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal">
+            <div className="flex justify-between items-center border-b border-[#233820] pb-2">
+              <div>
+                <h3 className="font-black text-cyan-300 text-base flex items-center gap-2">
+                  <FileText className="w-5 h-5" /> Notas & Código 2FA ({subNotasModal.plataforma})
+                </h3>
+                <p className="text-[11px] text-gray-400 font-mono">{subNotasModal.correo_cuenta}</p>
+              </div>
+              <button onClick={() => setSubNotasModal(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <textarea
+              rows={5}
+              placeholder="Escribe o pega aquí el Código 2FA, link https://2fa.live o cualquier nota..."
+              value={textoNotasDirEdit}
+              onChange={(e) => setTextoNotasDirEdit(e.target.value)}
+              className="w-full bg-[#070B06] border border-cyan-500/60 rounded-2xl p-3 text-xs text-white font-mono"
+            />
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(textoNotasDirEdit || "");
+                  notificar("¡Notas / Código 2FA copiado!");
+                }}
+                className="py-2.5 bg-cyan-400 hover:bg-cyan-300 text-black font-black rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Copy className="w-4 h-4" /> Copiar Nota / 2FA
+              </button>
+
+              <button
+                type="button"
+                onClick={() => window.open("https://2fa.live", "_blank", "noopener,noreferrer")}
+                className="py-2.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/60 font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ExternalLink className="w-4 h-4" /> Abrir 2fa.live
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={guardarNotasRapidasSuscripcion}
+              className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer"
+            >
+              Guardar Nota
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* MODAL DAR REEMPLAZO */}
       {subReemplazo && (
@@ -1073,7 +1250,7 @@ export default function ModuloDirectorio({
               </div>
 
               <div>
-                <label className="text-[11px] text-gray-400">Contraseña</label>
+                <label className="text-[11px] text-gray-400">Contraseña / Link</label>
                 <input
                   type="text"
                   value={subEditar.password_cuenta || ""}
@@ -1093,7 +1270,7 @@ export default function ModuloDirectorio({
               </div>
 
               <div>
-                <label className="text-[11px] text-[#66FF00] font-bold">PIN</label>
+                <label className="text-[11px] text-[#66FF00] font-bold">PIN / Calle</label>
                 <input
                   type="text"
                   value={subEditar.pin_perfil || ""}
@@ -1101,6 +1278,17 @@ export default function ModuloDirectorio({
                   className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white font-mono"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-cyan-300 font-bold">📝 Notas / Código 2FA de la Cuenta</label>
+              <textarea
+                rows={2}
+                placeholder="Ej: Código 2FA: OCYUC3VR... | https://2fa.live"
+                value={subEditar.notas || ""}
+                onChange={(e) => setSubEditar({ ...subEditar, notas: e.target.value })}
+                className="w-full mt-1 bg-[#070B06] border border-cyan-500/60 rounded-xl p-2 text-xs text-white font-mono"
+              />
             </div>
 
             <div className="flex gap-2">

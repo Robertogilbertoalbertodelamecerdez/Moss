@@ -21,7 +21,9 @@ import {
   Send,
   RefreshCcw,
   CheckCircle2,
-  ShieldCheck
+  ShieldCheck,
+  FileText,
+  ExternalLink
 } from "lucide-react";
 
 export default function ModuloStock({
@@ -39,6 +41,10 @@ export default function ModuloStock({
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [matrizEditar, setMatrizEditar] = useState(null);
 
+  // Modal rápido de Notas / Código 2FA de cualquier Matriz
+  const [matrizNotasModal, setMatrizNotasModal] = useState(null);
+  const [textoNotasEditModal, setTextoNotasEditModal] = useState("");
+
   const [vistaPropietarioStock, setVistaPropietarioStock] = useState(adminKeyActual);
 
   const [busquedaStock, setBusquedaStock] = useState("");
@@ -51,6 +57,7 @@ export default function ModuloStock({
   const [capacidad, setCapacidad] = useState(6);
   const [diasDuracion, setDiasDuracion] = useState(30);
   const [fechaCompra, setFechaCompra] = useState("");
+  const [notasNuevaMatriz, setNotasNuevaMatriz] = useState("");
   const [textoProveedorMatriz, setTextoProveedorMatriz] = useState("");
   const [cargando, setCargando] = useState(false);
 
@@ -95,6 +102,17 @@ export default function ModuloStock({
     setPassProvReempPersonita("");
     setPerfilProvReempPersonita(perfil.nombre_perfil || "1 Dispositivo");
     setPinProvReempPersonita("");
+  };
+
+  const guardarNotasRapidasMatriz = async () => {
+    if (!matrizNotasModal) return;
+    await supabase
+      .from("matrices_stock")
+      .update({ notas: textoNotasEditModal })
+      .eq("id", matrizNotasModal.id);
+    setMatrizNotasModal({ ...matrizNotasModal, notas: textoNotasEditModal });
+    await recargarTodo();
+    notificar("📝 Notas / Código 2FA guardados en la matriz");
   };
 
   const ejecutarReemplazoDesdePersonita = async () => {
@@ -291,15 +309,21 @@ export default function ModuloStock({
   const handleSelectPlataforma = (nombrePlat) => {
     setPlataforma(nombrePlat);
     const found = plataformasList.find((p) => p.nombre === nombrePlat);
-    if (found) setCapacidad(found.perfilesDefault || 5);
+    if (nombrePlat.toLowerCase().includes("chatgpt")) {
+      setCapacidad(15);
+    } else if (found) {
+      setCapacidad(found.perfilesDefault || 5);
+    }
   };
 
+  // Extrae correo, contraseña y Código 2FA para las Notas de la matriz
   const procesarTextoMatriz = (texto) => {
     setTextoProveedorMatriz(texto);
-    const extraido = extraerDatosProveedor(texto, plataformasList);
+    const extraido = extraerDatosProveedor(texto);
     if (extraido.correo) setCorreo(extraido.correo);
     if (extraido.password) setPassword(extraido.password);
-    notificar("Correo y clave extraídos");
+    if (extraido.notas) setNotasNuevaMatriz(extraido.notas);
+    notificar("Correo, contraseña y Notas/2FA extraídos limpiamente");
   };
 
   const generarPinAleatorio = () => Math.floor(1000 + Math.random() * 9000).toString();
@@ -322,6 +346,7 @@ export default function ModuloStock({
           plataforma,
           correo: correo.trim(),
           password: password.trim(),
+          notas: notasNuevaMatriz.trim(),
           costo_total: Number(costoTotal),
           capacidad_total: Number(capacidad),
           fecha_compra: fechaBaseStr,
@@ -365,6 +390,8 @@ export default function ModuloStock({
       setCorreo("");
       setPassword("");
       setCostoTotal("");
+      setNotasNuevaMatriz("");
+      setTextoProveedorMatriz("");
       setModalNuevaMatriz(false);
       await recargarTodo();
       notificar("Matriz creada en tu Stock");
@@ -375,6 +402,7 @@ export default function ModuloStock({
     }
   };
 
+  // Guarda la edición de la matriz incluyendo cambio de Proveedor y edición de Notas / 2FA
   const guardarEdicionMatriz = async (e) => {
     e.preventDefault();
     const provObj = proveedores.find((p) => p.id === matrizEditar.proveedor_id);
@@ -384,6 +412,7 @@ export default function ModuloStock({
         plataforma: matrizEditar.plataforma,
         correo: matrizEditar.correo,
         password: matrizEditar.password,
+        notas: matrizEditar.notas || "",
         costo_total: Number(matrizEditar.costo_total),
         fecha_corte_matriz: matrizEditar.fecha_corte_matriz,
         proveedor_id: provObj ? provObj.id : null,
@@ -394,7 +423,7 @@ export default function ModuloStock({
 
     setMatrizEditar(null);
     await recargarTodo();
-    notificar("Matriz actualizada");
+    notificar("Matriz, proveedor y notas actualizados");
   };
 
   const guardarNuevaPassMatriz = async () => {
@@ -445,6 +474,7 @@ export default function ModuloStock({
       const coincideM =
         (m.correo || "").toLowerCase().includes(q) ||
         (m.plataforma || "").toLowerCase().includes(q) ||
+        (m.notas || "").toLowerCase().includes(q) ||
         (m.nombre_proveedor || "").toLowerCase().includes(q);
       const clientesDentro = suscripciones.filter((s) => s.matriz_id === m.id && !s.en_papelera);
       const coincideC = clientesDentro.some(
@@ -497,7 +527,7 @@ export default function ModuloStock({
             <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en este Apartado ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            El botón de Reemplazo aparece automáticamente cuando marcas como caída una matriz o un perfil.
+            Usa el botón "📝 Notas / 2FA" en cualquier matriz para copiar el código de 2fa.live o editar sus notas.
           </p>
         </div>
         <div className="flex gap-2">
@@ -521,7 +551,7 @@ export default function ModuloStock({
           <Search className="w-4 h-4 text-[#66FF00] absolute left-3.5 top-3" />
           <input
             type="text"
-            placeholder="Buscar matriz por teléfono, cliente, correo o proveedor..."
+            placeholder="Buscar matriz por teléfono, cliente, correo, código 2FA o proveedor..."
             value={busquedaStock}
             onChange={(e) => setBusquedaStock(e.target.value)}
             className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl pl-10 pr-4 py-2 text-sm text-white"
@@ -572,11 +602,9 @@ export default function ModuloStock({
                   <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                     {matriz.plataforma}
                   </span>
-                  {matriz.nombre_proveedor && (
-                    <span className="ml-2 px-2 py-0.5 text-[10px] rounded bg-gray-800 text-gray-300">
-                      Prov: {matriz.nombre_proveedor}
-                    </span>
-                  )}
+                  <span className="ml-2 px-2 py-0.5 text-[10px] rounded bg-gray-800 text-gray-300 font-bold">
+                    🚚 Prov: {matriz.nombre_proveedor || "Sin asignar"}
+                  </span>
                   <h3 className="font-bold text-base mt-1 break-all">{matriz.correo}</h3>
                   <p className="text-xs text-gray-400">
                     Clave: <span className="text-white font-mono">{matriz.password || "N/A"}</span> · Costo: Bs {matriz.costo_total}
@@ -649,6 +677,22 @@ export default function ModuloStock({
               </div>
 
               <div className="flex flex-wrap gap-2 pt-2 border-t border-[#1E331A]">
+                {/* BOTÓN NOTAS / 2FA SIEMPRE PRESENTE EN CADA MATRIZ */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMatrizNotasModal(matriz);
+                    setTextoNotasEditModal(matriz.notas || "");
+                  }}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer border ${
+                    matriz.notas
+                      ? "bg-cyan-500 text-black border-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.35)]"
+                      : "bg-[#0B1418] text-cyan-300 border-cyan-500/40"
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" /> 📝 Notas / 2FA
+                </button>
+
                 <button
                   onClick={() => {
                     setMatrizCambioPass(matriz);
@@ -659,7 +703,6 @@ export default function ModuloStock({
                   <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave / Aviso
                 </button>
 
-                {/* EL BOTÓN DAR REEMPLAZO MATRIZ SOLO APARECE CUANDO LA MATRIZ ESTÁ CAÍDA */}
                 {matriz.estado === "Caida" && (
                   <button
                     onClick={() => {
@@ -678,7 +721,7 @@ export default function ModuloStock({
                   onClick={() => setMatrizEditar(matriz)}
                   className="px-2.5 py-1.5 rounded-lg bg-[#1A2B18] text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
                 >
-                  <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar
+                  <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar (Proveedor / Notas)
                 </button>
 
                 <button
@@ -693,6 +736,64 @@ export default function ModuloStock({
           );
         })}
       </div>
+
+      {/* ========================================================================= */}
+      {/* MODAL DE NOTAS / CÓDIGO 2FA PARA COPIAR Y ABRIR 2FA.LIVE EN 1 CLIC        */}
+      {/* ========================================================================= */}
+      {matrizNotasModal && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <div className="bg-[#111A10] border-2 border-cyan-400 rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal">
+            <div className="flex justify-between items-center border-b border-[#233820] pb-2">
+              <div>
+                <h3 className="font-black text-cyan-300 text-base flex items-center gap-2">
+                  <FileText className="w-5 h-5" /> Notas & Código 2FA ({matrizNotasModal.plataforma})
+                </h3>
+                <p className="text-[11px] text-gray-400 font-mono">{matrizNotasModal.correo}</p>
+              </div>
+              <button onClick={() => setMatrizNotasModal(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <textarea
+              rows={5}
+              placeholder="Escribe o pega aquí el Código 2FA, link https://2fa.live o cualquier nota de la matriz..."
+              value={textoNotasEditModal}
+              onChange={(e) => setTextoNotasEditModal(e.target.value)}
+              className="w-full bg-[#070B06] border border-cyan-500/60 rounded-2xl p-3 text-xs text-white font-mono"
+            />
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(textoNotasEditModal || "");
+                  notificar("¡Notas / Código 2FA copiado al portapapeles!");
+                }}
+                className="py-2.5 bg-cyan-400 hover:bg-cyan-300 text-black font-black rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Copy className="w-4 h-4" /> Copiar Nota / 2FA
+              </button>
+
+              <button
+                type="button"
+                onClick={() => window.open("https://2fa.live", "_blank", "noopener,noreferrer")}
+                className="py-2.5 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/60 font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ExternalLink className="w-4 h-4" /> Abrir 2fa.live
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={guardarNotasRapidasMatriz}
+              className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer"
+            >
+              Guardar Cambios en la Nota
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* MODAL REEMPLAZAR MATRIZ COMPLETA */}
       {matrizReemplazarCompleta && (
@@ -715,7 +816,7 @@ export default function ModuloStock({
               value={textoCrudoMatrizReemp}
               onChange={(e) => {
                 setTextoCrudoMatrizReemp(e.target.value);
-                const ext = extraerDatosProveedor(e.target.value, plataformasList);
+                const ext = extraerDatosProveedor(e.target.value);
                 if (ext.correo) setNuevoCorreoMatrizReemp(ext.correo);
                 if (ext.password) setNuevaPassMatrizReemp(ext.password);
               }}
@@ -747,7 +848,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL DE PERSONITA (EL BOTÓN DE REEMPLAZO SOLO SALE SI ESTÁ CAÍDA) */}
+      {/* MODAL DE PERSONITA */}
       {perfilModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
@@ -772,7 +873,6 @@ export default function ModuloStock({
                   <p className="text-xs text-[#66FF00] font-mono">
                     📞 {perfilModal.subOcupante.telefono_cliente} · Vence: {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}
                   </p>
-                  {/* SOLO SALE DAR REEMPLAZO SI EL PERFIL O LA SUSCRIPCIÓN ESTÁ MARCADA CAÍDA */}
                   {(perfilModal.perfil.caido ||
                     perfilModal.matriz.estado === "Caida" ||
                     perfilModal.subOcupante.estado === "Caida") && (
@@ -1038,54 +1138,112 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL EDITAR MATRIZ */}
+      {/* ========================================================================= */}
+      {/* MODAL EDITAR MATRIZ (AHORA CON SELECTOR DE PROVEEDOR Y NOTAS / 2FA)       */}
+      {/* ========================================================================= */}
       {matrizEditar && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
-          <form onSubmit={guardarEdicionMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-3">
-            <h3 className="font-black text-[#66FF00]">Editar Matriz</h3>
-            <select
-              value={matrizEditar.plataforma}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, plataforma: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            >
-              {plataformasList.map((p) => (
-                <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={matrizEditar.correo}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, correo: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <input
-              type="text"
-              value={matrizEditar.password || ""}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, password: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <input
-              type="number"
-              step="0.01"
-              value={matrizEditar.costo_total}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, costo_total: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
-            <input
-              type="date"
-              value={matrizEditar.fecha_corte_matriz}
-              onChange={(e) => setMatrizEditar({ ...matrizEditar, fecha_corte_matriz: e.target.value })}
-              className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
-            />
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <form onSubmit={guardarEdicionMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-3 animate-modal">
+            <div className="flex justify-between items-center">
+              <h3 className="font-black text-[#66FF00]">Editar Matriz, Proveedor y Notas</h3>
+              <button type="button" onClick={() => setMatrizEditar(null)} className="text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-[#66FF00] font-bold">🚚 Proveedor de la Matriz</label>
+              <select
+                value={matrizEditar.proveedor_id || ""}
+                onChange={(e) => setMatrizEditar({ ...matrizEditar, proveedor_id: e.target.value })}
+                className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+              >
+                <option value="">-- Seleccionar / Cambiar Proveedor --</option>
+                {proveedores.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nombre} — 📞 {p.telefono}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400">Plataforma</label>
+              <select
+                value={matrizEditar.plataforma}
+                onChange={(e) => setMatrizEditar({ ...matrizEditar, plataforma: e.target.value })}
+                className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+              >
+                {plataformasList.map((p) => (
+                  <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-gray-400">Correo</label>
+                <input
+                  type="text"
+                  value={matrizEditar.correo}
+                  onChange={(e) => setMatrizEditar({ ...matrizEditar, correo: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-400">Contraseña</label>
+                <input
+                  type="text"
+                  value={matrizEditar.password || ""}
+                  onChange={(e) => setMatrizEditar({ ...matrizEditar, password: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-400">Costo Total (Bs)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={matrizEditar.costo_total}
+                  onChange={(e) => setMatrizEditar({ ...matrizEditar, costo_total: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-400">Fecha Corte</label>
+                <input
+                  type="date"
+                  value={matrizEditar.fecha_corte_matriz}
+                  onChange={(e) => setMatrizEditar({ ...matrizEditar, fecha_corte_matriz: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-cyan-300 font-bold">📝 Notas / Código 2FA de la Matriz</label>
+              <textarea
+                rows={3}
+                placeholder="Ej: Código 2FA: OCYUC3VR... | https://2fa.live"
+                value={matrizEditar.notas || ""}
+                onChange={(e) => setMatrizEditar({ ...matrizEditar, notas: e.target.value })}
+                className="w-full mt-1 bg-[#070B06] border border-cyan-500/60 rounded-xl p-2 text-xs text-white font-mono"
+              />
+            </div>
+
             <div className="flex gap-2 pt-2">
-              <button type="button" onClick={() => setMatrizEditar(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">Guardar</button>
+              <button type="button" onClick={() => setMatrizEditar(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
+                Guardar Cambios
+              </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL NUEVA MATRIZ */}
+      {/* MODAL NUEVA MATRIZ (CON EXTRACTOR DE CÓDIGO 2FA Y CAMPO DE NOTAS) */}
       {modalNuevaMatriz && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form onSubmit={crearMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-xl w-full space-y-3">
@@ -1096,7 +1254,13 @@ export default function ModuloStock({
             <select value={proveedorId || proveedores[0]?.id || ""} onChange={(e) => setProveedorId(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
               {proveedores.map((p) => (<option key={p.id} value={p.id}>{p.nombre} — 📞 {p.telefono}</option>))}
             </select>
-            <textarea rows={2} placeholder="Pega aquí mensaje del proveedor..." value={textoProveedorMatriz} onChange={(e) => procesarTextoMatriz(e.target.value)} className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white" />
+            <textarea
+              rows={2}
+              placeholder="Pega aquí mensaje del proveedor (Extrae correo, clave y Codigo2FA sin asteriscos *)..."
+              value={textoProveedorMatriz}
+              onChange={(e) => procesarTextoMatriz(e.target.value)}
+              className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white"
+            />
             <div className="grid grid-cols-2 gap-2">
               <select value={plataforma} onChange={(e) => handleSelectPlataforma(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
                 {plataformasList.map((p) => (<option key={p.nombre} value={p.nombre}>{p.nombre}</option>))}
@@ -1104,9 +1268,23 @@ export default function ModuloStock({
               <input type="number" step="0.01" placeholder="Costo Total (Bs)" value={costoTotal} onChange={(e) => setCostoTotal(e.target.value)} className="bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-white text-xs font-bold" />
               <input type="text" placeholder="Correo *" value={correo} onChange={(e) => setCorreo(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
               <input type="text" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
-              <input type="number" placeholder="Cupos" value={capacidad} onChange={(e) => setCapacidad(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
+              <input type="number" placeholder="Cupos (Ej: 15 en ChatGPT)" value={capacidad} onChange={(e) => setCapacidad(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
               <input type="date" value={fechaCompra} onChange={(e) => setFechaCompra(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
             </div>
+
+            <div>
+              <label className="text-[11px] text-cyan-300 font-bold">
+                📝 Notas / Código 2FA (Se llena automático si el mensaje incluye Codigo2FA):
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Ej: Código 2FA: OCYUC3VR... | Link: https://2fa.live"
+                value={notasNuevaMatriz}
+                onChange={(e) => setNotasNuevaMatriz(e.target.value)}
+                className="w-full mt-1 bg-[#070B06] border border-cyan-500/50 rounded-xl p-2 text-xs text-white font-mono"
+              />
+            </div>
+
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setModalNuevaMatriz(false)} className="px-4 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
               <button type="submit" disabled={cargando} className="flex-1 py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">Guardar Matriz</button>

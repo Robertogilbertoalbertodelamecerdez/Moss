@@ -22,7 +22,8 @@ import {
   MessageSquare,
   Users,
   Send,
-  ShieldCheck
+  ShieldCheck,
+  FileText
 } from "lucide-react";
 
 export default function ModuloVentas({
@@ -44,7 +45,6 @@ export default function ModuloVentas({
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [modalNuevoRev, setModalNuevoRev] = useState(false);
 
-  // 'cliente' | 'revendedor' | 'subadmin' (Amarillo para venderle a Marcus)
   const [tipoComprador, setTipoComprador] = useState("cliente");
   const [revendedorId, setRevendedorId] = useState("");
   const [subAdminCompradorId, setSubAdminCompradorId] = useState("");
@@ -53,7 +53,6 @@ export default function ModuloVentas({
 
   const [telefono, setTelefono] = useState("");
   const [nombreCliente, setNombreCliente] = useState("");
-  const [clienteExistente, setClienteExistente] = useState(false);
 
   const [carritoCombo, setCarritoCombo] = useState([]);
 
@@ -71,10 +70,13 @@ export default function ModuloVentas({
   const [provPassword, setProvPassword] = useState("");
   const [provPerfil, setProvPerfil] = useState("");
   const [provPin, setProvPin] = useState("");
-  const [costoProveedor, setCostoProveedor] = useState("");
+  // Campos especiales para Spotify por Invitación (Link + Calle/Dirección) y Notas / 2FA
+  const [spotifyLinkInvitacion, setSpotifyLinkInvitacion] = useState("");
+  const [spotifyCalleDireccion, setSpotifyCalleDireccion] = useState("");
+  const [notasCuenta, setNotasCuenta] = useState("");
 
+  const [costoProveedor, setCostoProveedor] = useState("");
   const [precioVenta, setPrecioVenta] = useState("");
-  // Cuando tú (Mateus) le vendes a Marcus con el botón amarillo, puedes definir tanto tu precio a Marcus como a cuánto la vendió él
   const [precioQueTePagaMarcus, setPrecioQueTePagaMarcus] = useState("");
 
   const [meses, setMeses] = useState(1);
@@ -142,7 +144,6 @@ export default function ModuloVentas({
     const pSub = Number(cfg.precioSubAdmin ?? cfg.precioRevendedor ?? 10) * m;
 
     if (rolComprador === "subadmin") {
-      // Si tú le vendes a Marcus: precio que te debe Marcus = pSub (editable), y precio de catálogo sugerido para la venta de él = pCli
       setPrecioQueTePagaMarcus(String(pSub));
       setPrecioVenta(String(pCli));
     } else if (rolComprador === "revendedor") {
@@ -151,7 +152,6 @@ export default function ModuloVentas({
       setPrecioVenta(String(pCli));
     }
 
-    // Si es Marcus quien está logueado registrando una venta, pre-llenar su Costo Fíe con su precio fijo configurado
     if (!esSuperAdmin) {
       setCostoProveedor(String(pSub));
     }
@@ -299,15 +299,19 @@ export default function ModuloVentas({
     }
   };
 
+  // Extractor mejorado: limpia asteriscos *, detecta saltos de línea, Código 2FA y Link + Calle de Spotify
   const procesarTextoProveedor = (texto) => {
     setTextoProveedorCrudo(texto);
-    const extraido = extraerDatosProveedor(texto, plataformasList);
+    const extraido = extraerDatosProveedor(texto);
     if (extraido.correo) setProvCorreo(extraido.correo);
     if (extraido.password) setProvPassword(extraido.password);
     if (extraido.perfil) setProvPerfil(extraido.perfil);
     if (extraido.pin) setProvPin(extraido.pin);
+    if (extraido.linkInvitacion) setSpotifyLinkInvitacion(extraido.linkInvitacion);
+    if (extraido.direccion) setSpotifyCalleDireccion(extraido.direccion);
+    if (extraido.notas) setNotasCuenta(extraido.notas);
     if (texto.toUpperCase().includes("COMPLETA")) setTipoCuenta("Cuenta Completa");
-    notificar(`Datos extraídos para ${plataforma}`);
+    notificar(`Datos extraídos limpiamente para ${plataforma}`);
   };
 
   const handleTelefonoChange = (valor) => {
@@ -316,9 +320,6 @@ export default function ModuloVentas({
     const encontrado = clientes.find((c) => c.telefono === limpio);
     if (encontrado) {
       setNombreCliente(encontrado.nombre);
-      setClienteExistente(true);
-    } else {
-      setClienteExistente(false);
     }
   };
 
@@ -345,6 +346,11 @@ export default function ModuloVentas({
 
   const obtenerSiguientePerfilLibre = (matriz) => obtenerPerfilesLibresDeMatriz(matriz)[0] || null;
 
+  const esModoInvitacionActual =
+    tipoCuenta === "Por Invitación" || configPlatActual.pidePass === false;
+  const esSpotifyInvitacionActual =
+    plataforma.toLowerCase().includes("spotify") && esModoInvitacionActual;
+
   const armarItemActualFormulario = () => {
     if (precioVenta === "" || Number(precioVenta) < 0) {
       notificar("Ingresa el precio de venta", "error");
@@ -355,10 +361,9 @@ export default function ModuloVentas({
     let perfilIdUsado = null, matrizIdUsada = null, costoFinal = Number(costoProveedor || 0);
     let provIdFinal = null, provNombreFinal = null, provTelFinal = null;
     let propietarioMatrizUsada = adminKeyActual;
+    let notasFinales = notasCuenta.trim();
 
-    const esModoInvitacion = tipoCuenta === "Por Invitación" || configPlatActual.pidePass === false;
-
-    if (origen === "stock" && !esModoInvitacion) {
+    if (origen === "stock" && !esModoInvitacionActual) {
       const matrizObj = matricesDisponibles.find((m) => m.id === matrizSeleccionadaId) || matricesDisponibles[0];
       if (!matrizObj) {
         notificar("No tienes stock libre en esta plataforma", "error");
@@ -379,21 +384,34 @@ export default function ModuloVentas({
       provIdFinal = matrizObj.proveedor_id || null;
       provNombreFinal = matrizObj.nombre_proveedor || null;
       provTelFinal = matrizObj.telefono_proveedor || null;
+      if (!notasFinales && matrizObj.notas) notasFinales = matrizObj.notas;
     } else {
-      if (!provCorreo.trim()) {
-        notificar("Ingresa el Correo o Usuario", "error");
+      if (!provCorreo.trim() && !spotifyLinkInvitacion.trim()) {
+        notificar("Ingresa el Correo del cliente o el Link de invitación", "error");
         return null;
       }
       const provObj = proveedores.find((p) => p.id === proveedorSeleccionadoId) || proveedores[0] || null;
-      correoFinal = provCorreo.trim();
-      passFinal = esModoInvitacion ? "" : provPassword.trim();
-      perfilFinal =
-        tipoCuenta === "Cuenta Completa"
-          ? "Cuenta Completa"
-          : esModoInvitacion
-          ? "Por Invitación"
-          : provPerfil.trim() || "1 Dispositivo";
-      pinFinal = tipoCuenta === "Cuenta Completa" || esModoInvitacion ? "" : provPin.trim();
+
+      if (esSpotifyInvitacionActual) {
+        correoFinal = provCorreo.trim() || spotifyLinkInvitacion.trim();
+        passFinal = spotifyLinkInvitacion.trim();
+        perfilFinal = provPerfil.trim() || "Por Invitación";
+        pinFinal = spotifyCalleDireccion.trim();
+        if (!notasFinales && (spotifyLinkInvitacion || spotifyCalleDireccion)) {
+          notasFinales = `🔗 Link Spotify: ${spotifyLinkInvitacion.trim()}\n📍 Calle: ${spotifyCalleDireccion.trim()}`;
+        }
+      } else {
+        correoFinal = provCorreo.trim();
+        passFinal = esModoInvitacionActual ? "" : provPassword.trim();
+        perfilFinal =
+          tipoCuenta === "Cuenta Completa"
+            ? "Cuenta Completa"
+            : esModoInvitacionActual
+            ? "Por Invitación"
+            : provPerfil.trim() || "1 Dispositivo";
+        pinFinal = tipoCuenta === "Cuenta Completa" || esModoInvitacionActual ? "" : provPin.trim();
+      }
+
       provIdFinal = provObj ? provObj.id : null;
       provNombreFinal = provObj ? provObj.nombre : "Proveedor Externo";
       provTelFinal = provObj ? provObj.telefono : "";
@@ -415,8 +433,8 @@ export default function ModuloVentas({
     return {
       tempId: Date.now() + Math.random(),
       plataforma,
-      tipoCuenta: esModoInvitacion ? "Por Invitación" : tipoCuenta,
-      origen: esModoInvitacion ? "proveedor" : origen,
+      tipoCuenta: esModoInvitacionActual ? "Por Invitación" : tipoCuenta,
+      origen: esModoInvitacionActual ? "proveedor" : origen,
       matrizIdUsada,
       propietarioMatrizUsada,
       perfilIdUsado,
@@ -427,6 +445,9 @@ export default function ModuloVentas({
       passFinal,
       perfilFinal,
       pinFinal,
+      linkInvitacion: spotifyLinkInvitacion.trim(),
+      direccion: spotifyCalleDireccion.trim(),
+      notas: notasFinales,
       costoFinal,
       precioFijoMarcus:
         precioQueTePagaMarcus !== "" ? Number(precioQueTePagaMarcus) : precioFijoMarcusDef,
@@ -447,6 +468,9 @@ export default function ModuloVentas({
     setProvPassword("");
     setProvPerfil("");
     setProvPin("");
+    setSpotifyLinkInvitacion("");
+    setSpotifyCalleDireccion("");
+    setNotasCuenta("");
     setCostoProveedor("");
     setMatrizSeleccionadaId("");
   };
@@ -466,7 +490,9 @@ export default function ModuloVentas({
     }
 
     let itemsParaGuardar = [...carritoCombo];
-    const hayDatosEnFormularioActual = precioVenta !== "" && (origen === "stock" || provCorreo.trim() !== "");
+    const hayDatosEnFormularioActual =
+      precioVenta !== "" &&
+      (origen === "stock" || provCorreo.trim() !== "" || spotifyLinkInvitacion.trim() !== "");
 
     if (itemsParaGuardar.length === 0 || hayDatosEnFormularioActual) {
       const itemActual = armarItemActualFormulario();
@@ -502,7 +528,6 @@ export default function ModuloVentas({
         const esFieDeMarcusAMateus = sacoDeStockDeMateus || eligioProveedorMossMateus;
         const esVentaMiaAMarcus = esSuperAdmin && tipoComprador === "subadmin";
 
-        // Costo que se le descuenta a Marcus (editable por ti o por él, con el precio fijo a Marcus por defecto)
         const costoDescontarAMarcus = esVentaMiaAMarcus
           ? Number(item.precioFijoMarcus ?? precioFijoMarcusDefault)
           : Number(item.costoFinal) > 0
@@ -535,6 +560,7 @@ export default function ModuloVentas({
             password_cuenta: item.passFinal || "",
             nombre_perfil: item.perfilFinal || item.tipoCuenta,
             pin_perfil: item.pinFinal || "",
+            notas: item.notas || "",
             costo_proveedor:
               esFieDeMarcusAMateus || esVentaMiaAMarcus
                 ? costoDescontarAMarcus
@@ -569,7 +595,6 @@ export default function ModuloVentas({
           }
         }
 
-        // Registrar el ingreso de la venta en la billetera del dueño de esa venta
         await supabase.from("movimientos_yolo").insert([{
           admin_propietario: targetAdminPropietario,
           tipo: "Ingreso Venta",
@@ -579,7 +604,6 @@ export default function ModuloVentas({
           referencia_id: nuevaSub.id
         }]);
 
-        // Si tú (Mateus) pagaste un costo a tu proveedor externo al conseguirle esa cuenta a Marcus, descontarlo de TU banco
         if (esVentaMiaAMarcus && Number(item.costoFinal) > 0) {
           await supabase.from("movimientos_yolo").insert([{
             admin_propietario: "admin",
@@ -627,8 +651,6 @@ export default function ModuloVentas({
 
   const hoyBolivia = obtenerFechaBoliviaISO();
   const ventasActivas = suscripciones.filter((s) => !s.en_papelera);
-
-  const esModoInvitacionActual = tipoCuenta === "Por Invitación" || configPlatActual.pidePass === false;
 
   return (
     <div className="space-y-6">
@@ -847,7 +869,7 @@ export default function ModuloVentas({
                 <div className="bg-amber-950/30 border-2 border-amber-400 rounded-xl p-3 space-y-2.5">
                   <div className="flex flex-wrap justify-between items-center gap-2">
                     <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                      <ShieldCheck className="w-4 h-4" /> Venta para Admin Asociado (Se descuenta de su ganancia neta):
+                      <ShieldCheck className="w-4 h-4" /> Venta para Admin Asociado:
                     </label>
                     <select
                       value={subAdminCompradorId || subAdmins[0]?.id || ""}
@@ -862,7 +884,6 @@ export default function ModuloVentas({
                     </select>
                   </div>
 
-                  {/* CASILLA EDITABLE DEL PRECIO FIJO AL QUE SE LA DAS A MARCUS */}
                   <div className="bg-[#070B06] border border-amber-400/60 rounded-xl p-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="text-amber-200 font-bold">
                       👑 Precio al que tú se la das a Marcus (Su Costo Fíe editable):
@@ -1031,56 +1052,114 @@ export default function ModuloVentas({
                   ))}
                 </select>
 
-                {!esModoInvitacionActual && (
-                  <textarea
-                    rows={2}
-                    placeholder="Pega aquí el mensaje del proveedor..."
-                    value={textoProveedorCrudo}
-                    onChange={(e) => procesarTextoProveedor(e.target.value)}
-                    className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white"
-                  />
-                )}
+                <textarea
+                  rows={2}
+                  placeholder="Pega aquí el mensaje del proveedor (Extrae correo, clave, Código 2FA o Link y Calle de Spotify sin *)..."
+                  value={textoProveedorCrudo}
+                  onChange={(e) => procesarTextoProveedor(e.target.value)}
+                  className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white"
+                />
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <input
-                    type="text"
-                    placeholder="Correo *"
-                    value={provCorreo}
-                    onChange={(e) => setProvCorreo(e.target.value)}
-                    className="bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
-                  />
-                  {!esModoInvitacionActual && (
-                    <>
+                {/* SI ES SPOTIFY POR INVITACIÓN: PIDE CORREO DEL CLIENTE, NOMBRE DE PERFIL DE SPOTIFY, LINK Y CALLE */}
+                {esSpotifyInvitacionActual ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="text-[11px] text-[#66FF00] font-bold">📧 Correo del Cliente *</label>
                       <input
                         type="text"
-                        placeholder="Contraseña"
-                        value={provPassword}
-                        onChange={(e) => setProvPassword(e.target.value)}
-                        className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                        placeholder="cliente@gmail.com"
+                        value={provCorreo}
+                        onChange={(e) => setProvCorreo(e.target.value)}
+                        className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
                       />
-                      {tipoCuenta !== "Cuenta Completa" && (
-                        <>
-                          <input
-                            type="text"
-                            placeholder="Perfil"
-                            value={provPerfil}
-                            onChange={(e) => setProvPerfil(e.target.value)}
-                            className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                          />
-                          <input
-                            type="text"
-                            placeholder="PIN"
-                            value={provPin}
-                            onChange={(e) => setProvPin(e.target.value)}
-                            className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
-                          />
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-[#66FF00] font-bold">👤 Nombre del Perfil en Spotify *</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Mateus Spotify"
+                        value={provPerfil}
+                        onChange={(e) => setProvPerfil(e.target.value)}
+                        className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-amber-300 font-bold">🔗 Link de Invitación de Spotify</label>
+                      <input
+                        type="text"
+                        placeholder="https://www.spotify.com/bo/family/join/invite/..."
+                        value={spotifyLinkInvitacion}
+                        onChange={(e) => setSpotifyLinkInvitacion(e.target.value)}
+                        className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-amber-300 font-bold">📍 Calle / Dirección de Invitación</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Av. Noel Kempff Mercado, Santa Cruz..."
+                        value={spotifyCalleDireccion}
+                        onChange={(e) => setSpotifyCalleDireccion(e.target.value)}
+                        className="w-full mt-1 bg-[#070B06] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Correo *"
+                      value={provCorreo}
+                      onChange={(e) => setProvCorreo(e.target.value)}
+                      className="bg-[#070B06] border border-[#66FF00] rounded-lg p-2 text-xs text-white"
+                    />
+                    {!esModoInvitacionActual && (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Contraseña"
+                          value={provPassword}
+                          onChange={(e) => setProvPassword(e.target.value)}
+                          className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                        />
+                        {tipoCuenta !== "Cuenta Completa" && (
+                          <>
+                            <input
+                              type="text"
+                              placeholder="Perfil"
+                              value={provPerfil}
+                              onChange={(e) => setProvPerfil(e.target.value)}
+                              className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                            />
+                            <input
+                              type="text"
+                              placeholder="PIN"
+                              value={provPin}
+                              onChange={(e) => setProvPin(e.target.value)}
+                              className="bg-[#070B06] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                            />
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+
+            {/* APARTADO SIEMPRE VISIBLE DE NOTAS / CÓDIGO 2FA */}
+            <div className="bg-[#0B120A] border border-cyan-500/40 rounded-xl p-3 space-y-1.5">
+              <label className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                <FileText className="w-4 h-4" /> 📝 Notas / Código 2FA (Opcional — Se llena solo si el mensaje trae Codigo2FA):
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Ej: Código 2FA: OCYUC3VR... | Link: https://2fa.live o cualquier nota de la cuenta"
+                value={notasCuenta}
+                onChange={(e) => setNotasCuenta(e.target.value)}
+                className="w-full bg-[#070B06] border border-cyan-500/40 rounded-lg p-2 text-xs text-white font-mono"
+              />
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
@@ -1259,7 +1338,7 @@ export default function ModuloVentas({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(mensajeActivo?.completo || mensajeGenerado.completo);
+                  navigator.clipboard.writeText(mensajeGenerado.completo);
                   notificar("¡Mensaje copiado!");
                 }}
                 className="py-3 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"
