@@ -34,10 +34,10 @@ import {
   AlertTriangle,
   BarChart3,
   Bell,
-  Copy,
   Trash2,
   Check,
-  Calendar
+  Calendar,
+  Truck
 } from "lucide-react";
 
 const limpiarMontoConSigno = (val) => {
@@ -194,7 +194,6 @@ export default function MossCRM() {
 
   if (!montado) return null;
 
-  // Identificador del Admin activo: 'admin' para Mateus (Cabeza) o el ID del Sub-Admin (ej. Marcus)
   const esSuperAdmin = sesionActual?.rol === "admin";
   const esSubAdmin = sesionActual?.rol === "subadmin";
   const adminKeyActual = esSubAdmin ? sesionActual.subAdminId : "admin";
@@ -212,7 +211,6 @@ export default function MossCRM() {
     const u = userInput.trim().toLowerCase();
     const p = pinInput.trim();
 
-    // 1. Login Cabeza Principal (Mateus)
     if (u === AUTH_CONFIG.usuario.toLowerCase() && p === AUTH_CONFIG.pin) {
       const nuevaSesion = { rol: "admin", adminKey: "admin", nombre: "Mateus" };
       localStorage.setItem("moss_sesion_v3", JSON.stringify(nuevaSesion));
@@ -221,7 +219,6 @@ export default function MossCRM() {
       return notificar("¡Bienvenido a tu Panel Principal, Mateus!");
     }
 
-    // 2. Login Sub-Admin / Mano Derecha (Ej: Marcus)
     const subAdmEncontrado = subAdmins.find(
       (sa) =>
         sa.activo !== false &&
@@ -243,7 +240,6 @@ export default function MossCRM() {
       return notificar(`¡Bienvenido a tu Panel Admin, ${subAdmEncontrado.nombre}!`);
     }
 
-    // 3. Login Revendedor
     const revEncontrado = revendedores.find(
       (r) =>
         r.activo !== false &&
@@ -266,7 +262,7 @@ export default function MossCRM() {
     notificar("Usuario o PIN incorrecto (Verifica tus datos)", "error", false);
   };
 
-  // Filtra las notificaciones/cobros que corresponden a este Admin
+  // Las notificaciones de la campana son SOLO para revendedores normales (lo que saca Marcus al fíe va directo a Usuarios Admin)
   const misNotificacionesCobro = notificaciones.filter(
     (n) =>
       n.tipo === "venta_revendedor" &&
@@ -331,11 +327,22 @@ export default function MossCRM() {
     notificar(`¡${pendientes.length} cobros marcados como Pagados (+Bs ${sumaTotal.toFixed(2)})!`);
   };
 
-  // =========================================================================
-  // AISLAMIENTO DE DATOS POR ADMIN (MATEUS VE LO SUYO ARRIBA, MARCUS LO SUYO)
-  // =========================================================================
+  // Detecta si una suscripción de Marcus fue sacada del Stock de Mateus o comprada a "Moss Mateus"
+  const esCuentaDeMarcusVinculadaAMateus = (s) => {
+    if ((s.admin_propietario || "admin") === "admin") return false;
+    const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
+    const matDeMateus =
+      s.matriz_id &&
+      (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
+    return provMoss || Boolean(matDeMateus);
+  };
+
   const misSuscripcionesPropias = suscripciones.filter(
     (s) => (s.admin_propietario || "admin") === adminKeyActual
+  );
+
+  const misMatricesPropias = matrices.filter(
+    (m) => !m.en_papelera && (m.admin_propietario || "admin") === adminKeyActual
   );
 
   const misMovimientosBilleteraPropios = movimientosYolo.filter(
@@ -363,11 +370,15 @@ export default function MossCRM() {
     const cobrado = Number(s.precio_venta || 0);
     if (s.origen === "stock" && s.matriz_id) {
       const mat = matrices.find((m) => m.id === s.matriz_id);
+      // Si Marcus sacó del stock de Mateus, su costo es lo que le debe a Mateus (costo_proveedor)
+      if ((s.admin_propietario || "admin") !== "admin" && (mat?.admin_propietario || "admin") === "admin") {
+        return cobrado - Number(s.costo_proveedor || 0);
+      }
       if (mat && Number(mat.costo_total) > 0) {
         const costoCupo = Number(mat.costo_total) / Math.max(1, Number(mat.capacidad_total || 5));
         return cobrado - costoCupo;
       }
-      return cobrado;
+      return cobrado - Number(s.costo_proveedor || 0);
     }
     return cobrado - Number(s.costo_proveedor || 0);
   };
@@ -391,12 +402,33 @@ export default function MossCRM() {
     .reduce((acc, m) => acc + Number(m.monto || 0), 0);
 
   const gananciaMostradaTop =
-    filtroTarjetasTop === "siempre"
-      ? misMovimientosBilleteraPropios
-          .filter((m) => m.afecta_ganancia_neta)
-          .reduce((acc, m) => acc + Number(m.monto || 0), 0)
-      : ventasEnPeriodoTop.reduce((acc, s) => acc + calcularGananciaUnitariaVenta(s), 0) +
-        ajustesEnPeriodoTop;
+    ventasEnPeriodoTop.reduce((acc, s) => acc + calcularGananciaUnitariaVenta(s), 0) +
+    ajustesEnPeriodoTop;
+
+  // =========================================================================
+  // MÉTRICAS DE PROVEEDORES, MATRICES Y FÍE EN EL PERIODO SUPERIOR
+  // =========================================================================
+  const gastoMatricesPeriodoTop = misMatricesPropias
+    .filter((m) => cumpleFiltroTop(m.fecha_compra))
+    .reduce((acc, m) => acc + Number(m.costo_total || 0), 0);
+
+  // Cuánto se fió Marcus de Mateus en este período (Stock de Mateus o Proveedor Moss Mateus)
+  const fiadoDeMateusPeriodoTop = esSubAdmin
+    ? ventasEnPeriodoTop
+        .filter((s) => esCuentaDeMarcusVinculadaAMateus(s))
+        .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0)
+    : 0;
+
+  const deudaPendienteFieMarcus = esSubAdmin
+    ? misSuscripcionesPropias
+        .filter((s) => !s.en_papelera && esCuentaDeMarcusVinculadaAMateus(s) && s.pagado_al_admin === false)
+        .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0)
+    : 0;
+
+  // Cuánto pagó a otros proveedores externos en este período
+  const pagadoProveedoresExternosTop = ventasEnPeriodoTop
+    .filter((s) => !esCuentaDeMarcusVinculadaAMateus(s))
+    .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
 
   const saldoActualYolo = misMovimientosBilleteraPropios.reduce((acc, m) => acc + Number(m.monto), 0);
 
@@ -404,10 +436,10 @@ export default function MossCRM() {
     filtroTarjetasTop === "hoy"
       ? `DE HOY (${formatearFechaDMA(hoyBolivia).slice(0, 5)})`
       : filtroTarjetasTop === "semana"
-      ? `ESTA SEMANA (LUN ${formatearFechaDMA(lunesEstaSemana).slice(0, 5)} - DOM ${formatearFechaDMA(domingoEstaSemana).slice(0, 5)})`
+      ? `ESTA SEMANA (${formatearFechaDMA(lunesEstaSemana).slice(0, 5)} - ${formatearFechaDMA(domingoEstaSemana).slice(0, 5)})`
       : filtroTarjetasTop === "mes"
       ? "DE ESTE MES"
-      : "HISTÓRICO SIEMPRE";
+      : "HISTÓRICO";
 
   const hoy = new Date(hoyBolivia + "T00:00:00-04:00");
   const cantidadPorRenovar = misSuscripcionesPropias.filter((s) => {
@@ -657,48 +689,88 @@ export default function MossCRM() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
+            {/* 4 TARJETAS SUPERIORES: INGRESO | GANANCIA NETA | COSTOS PROVEEDOR / FÍE / MATRICES | SALDO */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-4 flex items-center justify-between shadow-lg">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                     Ingreso {etiquetaPeriodoTop}
                   </p>
-                  <p className="text-3xl font-black text-white mt-1">Bs {ingresoMostradoTop.toFixed(2)}</p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">{ventasEnPeriodoTop.length} venta(s) en este periodo</p>
+                  <p className="text-2xl font-black text-white mt-1">Bs {ingresoMostradoTop.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">{ventasEnPeriodoTop.length} venta(s)</p>
                 </div>
-                <div className="w-12 h-12 rounded-2xl bg-[#66FF00]/10 border border-[#66FF00]/30 flex items-center justify-center">
-                  <DollarSign className="w-6 h-6 text-[#66FF00]" />
+                <div className="w-10 h-10 rounded-2xl bg-[#66FF00]/10 border border-[#66FF00]/30 flex items-center justify-center">
+                  <DollarSign className="w-5 h-5 text-[#66FF00]" />
                 </div>
               </div>
 
-              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-5 flex items-center justify-between shadow-lg">
+              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-4 flex items-center justify-between shadow-lg">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                    Ganancia Neta {etiquetaPeriodoTop}
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                    Ganancia Neta (Profit)
                   </p>
-                  <p className={`text-3xl font-black mt-1 ${gananciaMostradaTop >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
+                  <p className={`text-2xl font-black mt-1 ${gananciaMostradaTop >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
                     Bs {gananciaMostradaTop.toFixed(2)}
                   </p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">Ganancia libre del periodo</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Libre del periodo</p>
                 </div>
-                <div className="w-12 h-12 rounded-2xl bg-[#66FF00]/10 border border-[#66FF00]/30 flex items-center justify-center">
-                  <TrendingUp className="w-6 h-6 text-[#66FF00]" />
+                <div className="w-10 h-10 rounded-2xl bg-[#66FF00]/10 border border-[#66FF00]/30 flex items-center justify-center">
+                  <TrendingUp className="w-5 h-5 text-[#66FF00]" />
                 </div>
               </div>
 
-              <div className="bg-gradient-to-br from-[#1B3018] via-[#122110] to-[#0B140A] border-2 border-[#66FF00] rounded-2xl p-5 flex items-center justify-between shadow-[0_0_25px_rgba(102,255,0,0.18)]">
+              {/* TARJETA AL LADO DE GANANCIA NETA: FÍE + PROVEEDORES + GASTO EN MATRICES */}
+              <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-amber-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+                {esSubAdmin ? (
+                  <>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black uppercase text-amber-300">
+                        👑 Fiado de Mateus ({etiquetaPeriodoTop.slice(0, 10)})
+                      </span>
+                      <span className="text-xs font-black text-amber-400">
+                        Deuda Fíe: Bs {deudaPendienteFieMarcus.toFixed(2)}
+                      </span>
+                    </div>
+                    <p className="text-xl font-black text-white mt-0.5">
+                      Bs {fiadoDeMateusPeriodoTop.toFixed(2)}
+                    </p>
+                    <div className="text-[10px] text-gray-300 flex justify-between pt-1 border-t border-[#1E331A]">
+                      <span>Otros Prov: <b className="text-orange-300">Bs {pagadoProveedoresExternosTop.toFixed(1)}</b></span>
+                      <span>Mis Matrices: <b className="text-purple-300">Bs {gastoMatricesPeriodoTop.toFixed(1)}</b></span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black uppercase text-orange-300">
+                        🚚 Pagos Prov. & Matrices
+                      </span>
+                      <Truck className="w-4 h-4 text-orange-400" />
+                    </div>
+                    <p className="text-xl font-black text-white mt-0.5">
+                      Bs {(pagadoProveedoresExternosTop + gastoMatricesPeriodoTop).toFixed(2)}
+                    </p>
+                    <div className="text-[10px] text-gray-300 flex justify-between pt-1 border-t border-[#1E331A]">
+                      <span>A Proveedores: <b className="text-orange-300">Bs {pagadoProveedoresExternosTop.toFixed(1)}</b></span>
+                      <span>Mis Matrices: <b className="text-purple-300">Bs {gastoMatricesPeriodoTop.toFixed(1)}</b></span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="bg-gradient-to-br from-[#1B3018] via-[#122110] to-[#0B140A] border-2 border-[#66FF00] rounded-2xl p-4 flex items-center justify-between shadow-[0_0_25px_rgba(102,255,0,0.18)]">
                 <div>
-                  <p className="text-xs text-[#66FF00] font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                  <p className="text-[11px] text-[#66FF00] font-extrabold uppercase tracking-wider flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-[#66FF00] animate-ping" /> Saldo en {nombreBilleteraMostrada}
                   </p>
-                  <p className="text-3xl font-black text-white mt-1">Bs {saldoActualYolo.toFixed(2)}</p>
-                  <p className="text-[11px] text-gray-400 mt-0.5">Saldo total acumulado</p>
+                  <p className="text-2xl font-black text-white mt-1">Bs {saldoActualYolo.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Saldo total acumulado</p>
                 </div>
                 <button
                   onClick={() => setModalYolo(true)}
-                  className="px-3.5 py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+                  className="px-3 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer"
                 >
-                  <Edit className="w-3.5 h-3.5" /> Gasto / Editar
+                  <Edit className="w-3.5 h-3.5" /> Editar
                 </button>
               </div>
             </div>
@@ -761,7 +833,7 @@ export default function MossCRM() {
                     : "text-gray-300 hover:bg-[#162414]"
                 }`}
               >
-                <FolderSearch className="w-4 h-4" /> Directorio ({misSuscripcionesPropias.filter((s) => !s.en_papelera).length})
+                <FolderSearch className="w-4 h-4" /> Directorio
                 {cantidadCaidos > 0 && (
                   <span className="px-1.5 py-0.5 text-[10px] font-black rounded-full bg-red-600 text-white">
                     {cantidadCaidos}
@@ -783,8 +855,10 @@ export default function MossCRM() {
 
             {tabActiva === "ventas" && (
               <ModuloVentas
+                esSuperAdmin={esSuperAdmin}
                 sesionActual={sesionActual}
                 adminKeyActual={adminKeyActual}
+                subAdmins={subAdmins}
                 matrices={matrices}
                 clientes={clientes}
                 proveedores={proveedores}
@@ -842,7 +916,7 @@ export default function MossCRM() {
                 esSuperAdmin={esSuperAdmin}
                 adminKeyActual={adminKeyActual}
                 subAdmins={subAdmins}
-                suscripciones={esSuperAdmin ? suscripciones : misSuscripcionesPropias}
+                suscripciones={suscripciones}
                 matrices={matrices}
                 clientes={clientes}
                 proveedores={proveedores}
@@ -882,7 +956,7 @@ export default function MossCRM() {
               <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[90vh] overflow-y-auto animate-modal">
                 <div className="flex justify-between items-center border-b border-[#233820] pb-3">
                   <h3 className="font-black text-[#66FF00] text-base flex items-center gap-2">
-                    <Bell className="w-5 h-5" /> Centro de Cobros de Stock ({sesionActual.nombre})
+                    <Bell className="w-5 h-5" /> Cobros de Revendedores ({sesionActual.nombre})
                   </h3>
                   <button onClick={() => setModalNotificaciones(false)} className="text-gray-400 hover:text-white">
                     <X className="w-5 h-5" />
@@ -892,7 +966,7 @@ export default function MossCRM() {
                 <div className="space-y-2.5">
                   <div className="flex flex-wrap justify-between items-center gap-2">
                     <h4 className="text-xs font-extrabold uppercase text-amber-300">
-                      🛒 Cuentas sacadas de tu Stock y Renovaciones ({misNotificacionesCobro.length})
+                      🛒 Cuentas de Revendedores ({misNotificacionesCobro.length})
                     </h4>
                     {cobrosPendientesCount > 1 && (
                       <button
@@ -906,7 +980,7 @@ export default function MossCRM() {
 
                   {misNotificacionesCobro.length === 0 ? (
                     <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
-                      No hay cuentas ni renovaciones pendientes de cobro.
+                      No hay cobros de revendedores pendientes. (La deuda al fíe de Marcus se gestiona en Ajustes → Usuarios Admin).
                     </p>
                   ) : (
                     misNotificacionesCobro.map((n) => (
@@ -932,7 +1006,7 @@ export default function MossCRM() {
                           ) : (
                             <button
                               onClick={() => marcarCobroRevendedorComoPagado(n)}
-                              className="px-4 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(102,255,0,0.4)]"
+                              className="px-4 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                             >
                               <Check className="w-4 h-4" /> Marcar Pagado (+Bs {n.monto_cobrar})
                             </button>

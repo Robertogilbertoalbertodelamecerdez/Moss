@@ -73,6 +73,17 @@ export default function ModuloDirectorio({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
+  // Detecta si una venta registrada por un Sub-Admin (Marcus) fue sacada de tu Stock o con proveedor "Moss Mateus"
+  const esVentaFieDeSubAdminParaMateus = (s) => {
+    const owner = s.admin_propietario || "admin";
+    if (owner === "admin") return false;
+    const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
+    const matDeMateus =
+      s.matriz_id &&
+      (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
+    return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
+  };
+
   const abrirMensajeDeSuscripcion = (s, tituloForzado = null) => {
     const tituloUsar =
       tituloForzado !== null
@@ -100,7 +111,7 @@ export default function ModuloDirectorio({
       ],
       linkWhatsappMoss,
       tituloUsar,
-      s.tipo_comprador === "revendedor"
+      s.tipo_comprador === "revendedor" || s.tipo_comprador === "subadmin"
     );
     setMensajeActivo(msg);
   };
@@ -295,11 +306,21 @@ export default function ModuloDirectorio({
     });
   };
 
+  // En el Directorio de Mateus ('admin') aparecen TODAS las ventas de Mateus + TODAS las cuentas que Marcus sacó al fíe de Mateus o con proveedor "Moss Mateus"
   const suscripcionesFiltradas = suscripciones
     .filter((s) => {
       const owner = s.admin_propietario || "admin";
-      if (esSuperAdmin && owner !== vistaAdminDir) return false;
-      if (!esSuperAdmin && owner !== adminKeyActual) return false;
+      const vinculadaAMateus = esVentaFieDeSubAdminParaMateus(s);
+
+      if (esSuperAdmin) {
+        if (vistaAdminDir === "admin") {
+          if (owner !== "admin" && !vinculadaAMateus) return false;
+        } else {
+          if (owner !== vistaAdminDir) return false;
+        }
+      } else {
+        if (owner !== adminKeyActual) return false;
+      }
 
       if (filtroEstado === "papelera") {
         if (!s.en_papelera) return false;
@@ -312,7 +333,7 @@ export default function ModuloDirectorio({
       const dias = calcularDiasRestantes(s.fecha_corte);
       if (filtroEstado === "vence_3" && (dias > 3 || s.estado !== "Activa")) return false;
       if (filtroEstado === "caidos" && s.estado !== "Caida") return false;
-      if (filtroEstado === "revendedores" && s.tipo_comprador !== "revendedor") return false;
+      if (filtroEstado === "revendedores" && s.tipo_comprador !== "revendedor" && !vinculadaAMateus) return false;
       if (filtroEstado === "reembolsados" && s.estado !== "Reembolsada") return false;
 
       if (filtroRevendedorId !== "todos") {
@@ -346,11 +367,16 @@ export default function ModuloDirectorio({
       await supabase.from("perfiles_matriz").update({ caido: nuevo === "Caida" }).eq("id", s.perfil_id);
     }
     await recargarTodo();
-    notificar(nuevo === "Caida" ? "Cuenta marcada como Caída" : "Cuenta reactivada");
+    notificar(
+      nuevo === "Caida"
+        ? "Cuenta marcada como Caída (Ya tienes habilitado el botón amarillo Dar Reemplazo)"
+        : "Cuenta reactivada"
+    );
   };
 
   const guardarEdicionManual = async (e) => {
     e.preventDefault();
+    const estabaCaida = subEditar.estado === "Caida";
     const diasFinal = Number(subEditar.dias_totales || 30);
     const mesesFinal = Number(subEditar.meses_contratados || Math.max(1, Math.round(diasFinal / 30)));
     const mesesPagProv = diasFinal > 30 ? Number(subEditar.meses_pagados_proveedor || 1) : mesesFinal;
@@ -387,7 +413,32 @@ export default function ModuloDirectorio({
       telefono_proveedor: subEditar.telefono_proveedor || null
     };
 
-    if (subEditar.perfil_id) {
+    if (subEditar.origen === "stock" && matrizNuevaEdicionId) {
+      const mat = matrices.find((m) => m.id === matrizNuevaEdicionId);
+      if (!mat) return notificar("Selecciona una matriz válida", "error");
+      const libres = (mat.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido);
+      const slot = libres[0];
+      if (!slot) return notificar("Esa matriz no tiene cupos libres", "error");
+
+      if (subEditar.perfil_id) {
+        await supabase
+          .from("perfiles_matriz")
+          .update({ ocupado: false, caido: estabaCaida ? true : false })
+          .eq("id", subEditar.perfil_id);
+      }
+      await supabase.from("perfiles_matriz").update({ ocupado: true, caido: false }).eq("id", slot.id);
+
+      payload = {
+        ...payload,
+        plataforma: mat.plataforma,
+        matriz_id: mat.id,
+        perfil_id: slot.id,
+        correo_cuenta: mat.correo,
+        password_cuenta: mat.password,
+        nombre_perfil: slot.nombre_perfil,
+        pin_perfil: slot.pin
+      };
+    } else if (subEditar.perfil_id) {
       await supabase
         .from("perfiles_matriz")
         .update({
@@ -412,15 +463,10 @@ export default function ModuloDirectorio({
       .eq("referencia_id", subEditar.id)
       .eq("tipo", "Ingreso Venta");
 
-    await supabase
-      .from("notificaciones_sistema")
-      .update({ monto_cobrar: nuevoPrecioCobrado })
-      .eq("suscripcion_id", subEditar.id);
-
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("¡Datos actualizados!");
+    notificar("¡Datos y precio al fíe actualizados!");
     if (editada) abrirMensajeDeSuscripcion(editada);
   };
 
@@ -453,7 +499,7 @@ export default function ModuloDirectorio({
                   : "bg-[#070B06] text-gray-300 border-[#2A4226]"
               }`}
             >
-              📦 Mi Directorio (Mateus)
+              📦 Mi Directorio + Ventas al Fíe de Marcus
             </button>
             {subAdmins.map((sa) => (
               <button
@@ -466,7 +512,7 @@ export default function ModuloDirectorio({
                     : "bg-[#070B06] text-amber-300 border-amber-500/40"
                 }`}
               >
-                🤝 Directorio de {sa.nombre}
+                🤝 Todo el Directorio de {sa.nombre}
               </button>
             ))}
           </div>
@@ -501,7 +547,7 @@ export default function ModuloDirectorio({
         <div className="flex flex-wrap items-center gap-2">
           {[
             { id: "todos", label: `Todos por Hora (${suscripcionesFiltradas.length})` },
-            { id: "revendedores", label: "🤝 Solo Revendedores" },
+            { id: "revendedores", label: "🤝 Revendedores y Fíe Admin" },
             { id: "vence_3", label: "Por Vencer (≤ 3 días)" },
             { id: "caidos", label: "⚠️ Caídos" },
             { id: "reembolsados", label: "Reembolsados" },
@@ -531,11 +577,20 @@ export default function ModuloDirectorio({
             (s.proveedor_id ? proveedores.find((pr) => pr.id === s.proveedor_id)?.nombre : null) ||
             "Sin asignar";
 
+          const esFieDeSubAdmin = esVentaFieDeSubAdminParaMateus(s);
+          const subAdminObj = esFieDeSubAdmin
+            ? subAdmins.find((sa) => sa.id === s.admin_propietario)
+            : null;
+
           return (
             <div
               key={s.id}
               className={`bg-[#111A10] border rounded-2xl p-4 space-y-3 ${
-                s.estado === "Caida" ? "border-2 border-red-500 bg-red-950/15" : "border-[#233820]"
+                s.estado === "Caida"
+                  ? "border-2 border-red-500 bg-red-950/15"
+                  : esFieDeSubAdmin
+                  ? "border-2 border-amber-400/70"
+                  : "border-[#233820]"
               }`}
             >
               <div className="flex flex-wrap justify-between items-start gap-2">
@@ -547,9 +602,16 @@ export default function ModuloDirectorio({
                     <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-gray-800 text-gray-300">
                       ⏳ Plan: {diasPlan} días
                     </span>
-                    <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
-                      💰 Te pagó: Bs {s.precio_venta}
-                    </span>
+
+                    {esFieDeSubAdmin ? (
+                      <span className="px-2.5 py-0.5 text-[11px] font-black rounded-full bg-amber-400 text-black">
+                        👑 Fíe Admin {subAdminObj?.nombre || "Marcus"}: Te paga Bs {Number(s.costo_proveedor || 0).toFixed(1)} (Cobró Bs {s.precio_venta})
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
+                        💰 Cobrado: Bs {s.precio_venta}
+                      </span>
+                    )}
 
                     {s.origen === "stock" || matrizAlbergadora ? (
                       <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-[#152413] border border-[#66FF00]/40 text-gray-200 flex items-center gap-1">
@@ -630,7 +692,7 @@ export default function ModuloDirectorio({
                     }}
                     className="px-3 py-1.5 bg-[#1A2B18] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Precio / Fíe / Proveedor)
                   </button>
 
                   <button
@@ -641,12 +703,15 @@ export default function ModuloDirectorio({
                     {s.estado === "Caida" ? "Quitar Caído" : "Marcar Caído"}
                   </button>
 
-                  <button
-                    onClick={() => abrirModalReemplazo(s)}
-                    className="px-3 py-1.5 bg-amber-400 text-black rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer"
-                  >
-                    <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo
-                  </button>
+                  {/* EL BOTÓN DAR REEMPLAZO SOLO SALE CUANDO LA CUENTA ESTÁ MARCADA COMO CAÍDA */}
+                  {s.estado === "Caida" && (
+                    <button
+                      onClick={() => abrirModalReemplazo(s)}
+                      className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-black rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer shadow-[0_0_20px_rgba(251,191,36,0.5)] ring-2 ring-amber-300"
+                    >
+                      <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo
+                    </button>
+                  )}
 
                   {s.estado !== "Reembolsada" ? (
                     <button
@@ -788,7 +853,7 @@ export default function ModuloDirectorio({
         </div>
       )}
 
-      {/* MODAL EDICIÓN TOTAL */}
+      {/* MODAL EDICIÓN TOTAL (PERMITE CAMBIAR ORIGEN, MATRIZ, PROVEEDOR Y PRECIO AL FÍE) */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -802,39 +867,96 @@ export default function ModuloDirectorio({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="text-[11px] text-gray-400">Proveedor</label>
-                <select
-                  value={subEditar.proveedor_id || ""}
-                  onChange={(e) => {
-                    const prov = proveedores.find((p) => p.id === e.target.value);
-                    if (prov) {
-                      setSubEditar({
-                        ...subEditar,
-                        proveedor_id: prov.id,
-                        nombre_proveedor: prov.nombre,
-                        telefono_proveedor: prov.telefono
-                      });
-                    }
-                  }}
-                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
-                >
-                  <option value="">{subEditar.nombre_proveedor || "-- Seleccionar Proveedor --"}</option>
-                  {proveedores.map((p) => (
-                    <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
-                  ))}
-                </select>
+            <div className="bg-[#0B120A] border border-[#66FF00]/60 rounded-2xl p-3.5 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-black text-[#66FF00]">Origen y Proveedor:</span>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, origen: "stock" })}
+                    className={`px-3 py-1 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      subEditar.origen === "stock"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    📦 Matriz Stock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubEditar({ ...subEditar, origen: "proveedor" })}
+                    className={`px-3 py-1 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                      subEditar.origen === "proveedor"
+                        ? "bg-[#66FF00] text-black border-[#66FF00]"
+                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    🚚 Proveedor
+                  </button>
+                </div>
               </div>
 
+              {subEditar.origen === "stock" && (
+                <select
+                  value={matrizNuevaEdicionId}
+                  onChange={(e) => setMatrizNuevaEdicionId(e.target.value)}
+                  className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white"
+                >
+                  <option value="">-- Mantener matriz actual ({subEditar.correo_cuenta}) --</option>
+                  {matrices
+                    .filter((m) => !m.en_papelera && m.estado === "Activa")
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.plataforma} — {m.correo}
+                      </option>
+                    ))}
+                </select>
+              )}
+
+              <select
+                value={subEditar.proveedor_id || ""}
+                onChange={(e) => {
+                  const prov = proveedores.find((p) => p.id === e.target.value);
+                  if (prov) {
+                    setSubEditar({
+                      ...subEditar,
+                      proveedor_id: prov.id,
+                      nombre_proveedor: prov.nombre,
+                      telefono_proveedor: prov.telefono
+                    });
+                  }
+                }}
+                className="w-full bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+              >
+                <option value="">{subEditar.nombre_proveedor || "-- Seleccionar Proveedor --"}</option>
+                {proveedores.map((p) => (
+                  <option key={p.id} value={p.id}>{p.nombre} ({p.telefono})</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
               <div>
-                <label className="text-[11px] text-[#66FF00] font-black">💰 Precio Cobrado (Bs):</label>
+                <label className="text-[11px] text-[#66FF00] font-black">💰 Precio Cobrado al Cliente (Bs):</label>
                 <input
                   type="number"
                   step="0.01"
                   value={subEditar.precio_venta ?? 0}
                   onChange={(e) => setSubEditar({ ...subEditar, precio_venta: e.target.value })}
                   className="w-full mt-1 bg-[#070B06] border-2 border-[#66FF00] rounded-lg p-2 text-xs text-white font-black"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-amber-300 font-black">
+                  👑 Costo Proveedor / Lo que paga al Fíe (Bs):
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={subEditar.costo_proveedor ?? 0}
+                  onChange={(e) => setSubEditar({ ...subEditar, costo_proveedor: e.target.value })}
+                  className="w-full mt-1 bg-[#070B06] border-2 border-amber-400 rounded-lg p-2 text-xs text-white font-black"
                 />
               </div>
 

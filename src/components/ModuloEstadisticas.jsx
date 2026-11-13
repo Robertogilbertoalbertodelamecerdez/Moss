@@ -16,11 +16,9 @@ import {
   Users,
   Trophy,
   CheckCircle2,
-  Clock,
   X,
   Sparkles,
   RotateCcw,
-  Trash2,
   ShieldCheck
 } from "lucide-react";
 
@@ -51,6 +49,8 @@ function armarSerieConPrediccion(mapaPorFecha) {
       ventas: promVtas,
       ingreso: Number(ingEst.toFixed(2)),
       ganancia: Number(ganEst.toFixed(2)),
+      gananciaParaAdmin: Number(ganEst.toFixed(2)),
+      gananciaDeEllos: Number(ganEst.toFixed(2)),
       esPrediccion: true
     };
   });
@@ -86,10 +86,12 @@ export default function ModuloEstadisticas({
 
   const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos");
 
+  // Controles de la Gráfica de Revendedores con su propio filtro Diario / Semanal / Mensual / Histórico
   const [verEstadisticasRevendedores, setVerEstadisticasRevendedores] = useState(false);
   const [modoMetricaRevendedores, setModoMetricaRevendedores] = useState("para_mi");
+  const [periodoGraficaRev, setPeriodoGraficaRev] = useState("semana"); // 'dia' | 'semana' | 'mes' | 'todo'
 
-  // Botón exclusivo para que Mateus (Cabeza) inspeccione las estadísticas de Marcus / Sub-Admins
+  // Botón exclusivo para que Mateus vea las estadísticas de Marcus / Sub-Admins
   const [verPanelSubAdmins, setVerPanelSubAdmins] = useState(false);
   const [subAdminInspeccionadoId, setSubAdminInspeccionadoId] = useState("");
 
@@ -98,33 +100,42 @@ export default function ModuloEstadisticas({
   const [pctTop1, setPctTop1] = useState(5);
   const [pctTop2, setPctTop2] = useState(3);
   const [pctTop3, setPctTop3] = useState(2);
-  const [timestampUltimoReinicio, setTimestampUltimoReinicio] = useState("");
 
   const [puntoActivoIdx, setPuntoActivoIdx] = useState(null);
+  const [puntoActivoRevIdx, setPuntoActivoRevIdx] = useState(null);
 
   useEffect(() => {
     const gTop = localStorage.getItem("moss_top_count");
     const p1 = localStorage.getItem("moss_pct_bono_1");
     const p2 = localStorage.getItem("moss_pct_bono_2");
     const p3 = localStorage.getItem("moss_pct_bono_3");
-    const tsReset = localStorage.getItem("moss_ciclo_bono_reset_ts");
     if (gTop) setCantidadGanadoresTop(Number(gTop));
     if (p1) setPctTop1(Number(p1));
     if (p2) setPctTop2(Number(p2));
     if (p3) setPctTop3(Number(p3));
-    if (tsReset) setTimestampUltimoReinicio(tsReset);
   }, []);
 
-  // Qué Admin se está visualizando actualmente en la pantalla de Estadísticas
   const adminEnVista =
     esSuperAdmin && verPanelSubAdmins && subAdminInspeccionadoId
       ? subAdminInspeccionadoId
       : adminKeyActual;
 
+  const esCuentaDeSubAdminVinculadaAMateus = (s) => {
+    if ((s.admin_propietario || "admin") === "admin") return false;
+    const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
+    const matDeMateus =
+      s.matriz_id &&
+      (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
+    return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
+  };
+
   const calcularGananciaAdminDeVenta = (s) => {
     const ingresoQueMePago = Number(s.precio_venta || 0);
     if (s.origen === "stock" && s.matriz_id) {
       const mat = matrices.find((m) => m.id === s.matriz_id);
+      if ((s.admin_propietario || "admin") !== "admin" && (mat?.admin_propietario || "admin") === "admin") {
+        return ingresoQueMePago - Number(s.costo_proveedor || 0);
+      }
       if (mat && Number(mat.costo_total) > 0) {
         const costoPorCupo = Number(mat.costo_total) / Math.max(1, Number(mat.capacidad_total || 5));
         return ingresoQueMePago - costoPorCupo;
@@ -149,10 +160,21 @@ export default function ModuloEstadisticas({
     return true;
   };
 
-  // Suscripciones y Movimientos del Admin en vista (Mateus ve lo suyo por defecto, o lo de Marcus al activar el botón)
+  const cumplePeriodoGraficaRev = (fechaRaw) => {
+    const f = extraerFechaLocalISO(fechaRaw);
+    if (periodoGraficaRev === "dia") return f === hoyISO;
+    if (periodoGraficaRev === "semana") return f >= lunesSemanaActualISO && f <= domingoSemanaActualISO;
+    if (periodoGraficaRev === "mes") return f.startsWith(mesActualISO);
+    return true;
+  };
+
   const suscripcionesDelAdminVista = useMemo(() => {
     return suscripciones.filter((s) => (s.admin_propietario || "admin") === adminEnVista);
   }, [suscripciones, adminEnVista]);
+
+  const matricesDelAdminVista = useMemo(() => {
+    return matrices.filter((m) => !m.en_papelera && (m.admin_propietario || "admin") === adminEnVista);
+  }, [matrices, adminEnVista]);
 
   const movimientosDelAdminVista = useMemo(() => {
     return movimientosYolo.filter((m) => (m.admin_propietario || "admin") === adminEnVista);
@@ -162,7 +184,9 @@ export default function ModuloEstadisticas({
     return revendedores.filter((r) => (r.admin_propietario || "admin") === adminEnVista);
   }, [revendedores, adminEnVista]);
 
-  // Ciclo Semanal de Bono (Lunes a Domingo)
+  // =========================================================================
+  // TOP 3 DE MEJORES REVENDEDORES (NUNCA DESAPARECE AL LIMPIAR/PAGAR)
+  // =========================================================================
   const rankingSemanalBono = useMemo(() => {
     const mapa = {};
     revendedoresDelAdminVista.forEach((r) => {
@@ -179,13 +203,6 @@ export default function ModuloEstadisticas({
       .forEach((s) => {
         const f = extraerFechaLocalISO(s.fecha_venta);
         if (f < lunesSemanaActualISO || f > domingoSemanaActualISO) return;
-        if (
-          timestampUltimoReinicio &&
-          s.creado_en &&
-          String(s.creado_en) < String(timestampUltimoReinicio)
-        ) {
-          return;
-        }
 
         let target = mapa[s.revendedor_id];
         if (!target) {
@@ -223,48 +240,44 @@ export default function ModuloEstadisticas({
     pctTop1,
     pctTop2,
     pctTop3,
-    cantidadGanadoresTop,
-    timestampUltimoReinicio
+    cantidadGanadoresTop
   ]);
 
   const ganadoresActivosPodio = rankingSemanalBono.filter((r) => r.entraEnPodio);
   const totalProfitSemanalRevendedores = rankingSemanalBono.reduce((acc, r) => acc + r.gananciaNetaParaAdmin, 0);
   const totalBonoSemanalAPagar = ganadoresActivosPodio.reduce((acc, r) => acc + r.bonoCalculado, 0);
 
-  const reiniciarCicloSemanalDomingo = async (esAutomatico = false) => {
-    const ahoraISO = new Date().toISOString();
-    localStorage.setItem("moss_ciclo_bono_reset_ts", ahoraISO);
-    setTimestampUltimoReinicio(ahoraISO);
-
+  // Al desmarcar o reiniciar los estados de pago, el Top 3 sigue visible con sus ventas de la semana
+  const desmarcarPagosBonoSemana = async () => {
     for (const r of revendedoresDelAdminVista) {
       if (r.bono_semanal_pagado || r.mostrar_bono_semanal) {
         await supabase
           .from("revendedores")
           .update({
             bono_semanal_pagado: false,
-            mostrar_bono_semanal: false,
-            monto_bono_semanal: 0,
-            ganancia_generada_semana: 0
+            mostrar_bono_semanal: false
           })
           .eq("id", r.id);
       }
     }
     await recargarTodo();
-    notificar(esAutomatico ? "🎉 ¡Ciclo semanal reiniciado automáticamente!" : "Ciclo semanal reiniciado en 0");
+    notificar("Estados de pago de esta semana restablecidos (El Top 3 sigue visible).");
   };
 
   const pagarBonoAGanadorTop = async (revObj) => {
     if (!revObj.entraEnPodio) return;
+    const nuevoEstado = !revObj.bono_semanal_pagado;
+
     await supabase
       .from("revendedores")
       .update({
-        bono_semanal_pagado: true,
+        bono_semanal_pagado: nuevoEstado,
         monto_bono_semanal: Number(revObj.bonoCalculado.toFixed(2)),
         ganancia_generada_semana: Number(revObj.gananciaNetaParaAdmin.toFixed(2))
       })
       .eq("id", revObj.id);
 
-    if (revObj.bonoCalculado > 0) {
+    if (nuevoEstado && revObj.bonoCalculado > 0) {
       await supabase.from("movimientos_yolo").insert([
         {
           admin_propietario: adminEnVista,
@@ -276,16 +289,12 @@ export default function ModuloEstadisticas({
       ]);
     }
 
-    const cuantosFaltaban = ganadoresActivosPodio.filter(
-      (g) => g.id !== revObj.id && !g.bono_semanal_pagado
-    ).length;
-
-    if (cuantosFaltaban === 0 && ganadoresActivosPodio.length > 0) {
-      await reiniciarCicloSemanalDomingo(true);
-    } else {
-      await recargarTodo();
-      notificar(`Bono del Puesto #${revObj.puesto} pagado.`);
-    }
+    await recargarTodo();
+    notificar(
+      nuevoEstado
+        ? `Bono del Puesto #${revObj.puesto} marcado como Pagado.`
+        : `Pago del Puesto #${revObj.puesto} desmarcado.`
+    );
   };
 
   const ventasFiltradas = useMemo(() => {
@@ -311,6 +320,31 @@ export default function ModuloEstadisticas({
     .reduce((acc, m) => acc + Number(m.monto || 0), 0);
   const saldoTotalBilletera = movimientosDelAdminVista.reduce((acc, m) => acc + Number(m.monto || 0), 0);
 
+  // =========================================================================
+  // MÉTRICAS DE PROVEEDORES, MATRICES Y FÍE DEL ADMIN EN VISTA (MATEUS O MARCUS)
+  // =========================================================================
+  const gastoEnMatricesAdminVista = matricesDelAdminVista
+    .filter((m) => cumplePeriodoActual(m.fecha_compra))
+    .reduce((acc, m) => acc + Number(m.costo_total || 0), 0);
+
+  const fiadoDeMateusAdminVista =
+    adminEnVista !== "admin"
+      ? ventasFiltradas
+          .filter((s) => esCuentaDeSubAdminVinculadaAMateus(s))
+          .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0)
+      : 0;
+
+  const deudaPendienteFieAdminVista =
+    adminEnVista !== "admin"
+      ? suscripcionesDelAdminVista
+          .filter((s) => !s.en_papelera && esCuentaDeSubAdminVinculadaAMateus(s) && s.pagado_al_admin === false)
+          .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0)
+      : 0;
+
+  const pagadoAProveedoresExternosAdminVista = ventasFiltradas
+    .filter((s) => !esCuentaDeSubAdminVinculadaAMateus(s))
+    .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
+
   const { serie: serieBursatil, prevision30d: previsionMensualProfit } = useMemo(() => {
     const mapa = {};
     ventasFiltradas.forEach((s) => {
@@ -323,6 +357,9 @@ export default function ModuloEstadisticas({
     return armarSerieConPrediccion(mapa);
   }, [ventasFiltradas, matrices]);
 
+  // =========================================================================
+  // GRÁFICA DE REVENDEDORES REPARADA (CON PUNTOS, FECHAS Y FILTRO DÍA/SEMANA/MES)
+  // =========================================================================
   const {
     serie: serieRevendedores,
     prevision30d: previsionRevendedores30d,
@@ -334,15 +371,27 @@ export default function ModuloEstadisticas({
     let sumaGananciaDeEllos = 0;
 
     suscripcionesDelAdminVista
-      .filter((s) => !s.en_papelera && s.tipo_comprador === "revendedor" && cumplePeriodoActual(s.fecha_venta))
+      .filter((s) => !s.en_papelera && s.tipo_comprador === "revendedor" && cumplePeriodoGraficaRev(s.fecha_venta))
       .forEach((s) => {
         const f = extraerFechaLocalISO(s.fecha_venta);
-        if (!mapa[f]) mapa[f] = { fecha: f, ventas: 0, ingreso: 0, ganancia: 0, esPrediccion: false };
+        if (!mapa[f]) {
+          mapa[f] = {
+            fecha: f,
+            ventas: 0,
+            ingreso: 0,
+            ganancia: 0,
+            gananciaParaAdmin: 0,
+            gananciaDeEllos: 0,
+            esPrediccion: false
+          };
+        }
         const profitMio = calcularGananciaAdminDeVenta(s);
         const gananciaEl = calcularGananciaPropiaDelRevendedor(s);
         sumaProfitParaMi += profitMio;
         sumaGananciaDeEllos += gananciaEl;
         mapa[f].ventas += 1;
+        mapa[f].gananciaParaAdmin += profitMio;
+        mapa[f].gananciaDeEllos += gananciaEl;
         mapa[f].ingreso += Number(s.precio_venta || 0);
         mapa[f].ganancia += modoMetricaRevendedores === "para_mi" ? profitMio : gananciaEl;
       });
@@ -353,7 +402,7 @@ export default function ModuloEstadisticas({
       totalProfitParaMiRev: sumaProfitParaMi,
       totalGananciaDeEllosRev: sumaGananciaDeEllos
     };
-  }, [suscripcionesDelAdminVista, matrices, periodo, fechaEspecifica, mesEspecifico, anioEspecifico, modoMetricaRevendedores]);
+  }, [suscripcionesDelAdminVista, matrices, periodoGraficaRev, modoMetricaRevendedores]);
 
   const construirGeometriaSVG = (serie, activeIdx) => {
     const svgWidth = 680;
@@ -386,7 +435,7 @@ export default function ModuloEstadisticas({
   };
 
   const geoAdmin = construirGeometriaSVG(serieBursatil, puntoActivoIdx);
-  const geoRev = construirGeometriaSVG(serieRevendedores, null);
+  const geoRev = construirGeometriaSVG(serieRevendedores, puntoActivoRevIdx);
 
   const rankingPlataformas = useMemo(() => {
     const mapa = {};
@@ -478,7 +527,6 @@ export default function ModuloEstadisticas({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {/* BOTÓN EXCLUSIVO DE MATEUS PARA VER LAS ESTADÍSTICAS DE MARCUS / SUB-ADMINS */}
             {esSuperAdmin && subAdmins.length > 0 && (
               <button
                 type="button"
@@ -527,11 +575,10 @@ export default function ModuloEstadisticas({
           </div>
         </div>
 
-        {/* SELECTOR DE SUB-ADMIN CUANDO MATEUS ACTIVA EL BOTÓN DE VER ESTADÍSTICAS DE MARCUS */}
         {esSuperAdmin && verPanelSubAdmins && (
           <div className="bg-amber-950/30 border-2 border-amber-400 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-black text-amber-300">
-              👑 Inspeccionando Panel y Revendedores de:
+              👑 Inspeccionando Panel, Fíe, Proveedores y Matrices de:
             </span>
             <div className="flex flex-wrap gap-2">
               {subAdmins.map((sa) => (
@@ -553,29 +600,56 @@ export default function ModuloEstadisticas({
         )}
       </div>
 
-      {/* RESUMEN DE TARJETAS */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {/* 5 TARJETAS COMPLETAS: VENTAS | PROFIT | FÍE + PROVEEDORES + MATRICES | PREVISIÓN | SALDO */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 font-bold uppercase">Cuentas Vendidas</p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase">Cuentas Vendidas</p>
           <p className="text-2xl font-black text-[#66FF00] mt-1">{ventasFiltradas.length}</p>
           <p className="text-[10px] text-gray-400">Ingreso: Bs {totalVendidoPeriodo.toFixed(2)}</p>
         </div>
 
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
-          <p className="text-[11px] text-gray-400 font-bold uppercase">Profit Real Ventas</p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase">Profit Real Ventas</p>
           <p className="text-2xl font-black text-[#66FF00] mt-1">Bs {gananciaVentasPeriodo.toFixed(2)}</p>
           <p className="text-[10px] text-gray-400">Neto c/Matrices: Bs {gananciaNetaContablePeriodo.toFixed(2)}</p>
         </div>
 
+        {/* TARJETA DE FÍE DE MATEUS, PROVEEDORES Y GASTOS EN MATRICES */}
+        <div className="bg-[#111A10] border border-amber-500/50 rounded-2xl p-4">
+          {adminEnVista !== "admin" ? (
+            <>
+              <p className="text-[10px] text-amber-300 font-black uppercase">
+                👑 Fiado de Mateus ({deudaPendienteFieAdminVista > 0 ? `Debe Bs ${deudaPendienteFieAdminVista.toFixed(0)}` : "Al día"})
+              </p>
+              <p className="text-xl font-black text-white mt-1">Bs {fiadoDeMateusAdminVista.toFixed(2)}</p>
+              <p className="text-[10px] text-gray-300 mt-0.5">
+                Prov: <b className="text-orange-300">Bs {pagadoAProveedoresExternosAdminVista.toFixed(1)}</b> · Matrices:{" "}
+                <b className="text-purple-300">Bs {gastoEnMatricesAdminVista.toFixed(1)}</b>
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-[10px] text-orange-300 font-black uppercase">🚚 Prov. & Matrices (Míos)</p>
+              <p className="text-xl font-black text-white mt-1">
+                Bs {(pagadoAProveedoresExternosAdminVista + gastoEnMatricesAdminVista).toFixed(2)}
+              </p>
+              <p className="text-[10px] text-gray-300 mt-0.5">
+                Prov: <b className="text-orange-300">Bs {pagadoAProveedoresExternosAdminVista.toFixed(1)}</b> · Matrices:{" "}
+                <b className="text-purple-300">Bs {gastoEnMatricesAdminVista.toFixed(1)}</b>
+              </p>
+            </>
+          )}
+        </div>
+
         <div className="bg-[#111A10] border border-cyan-500/40 rounded-2xl p-4">
-          <p className="text-[11px] text-cyan-300 font-bold uppercase flex items-center gap-1">
-            <Sparkles className="w-3.5 h-3.5" /> Previsión Profit (30d)
+          <p className="text-[10px] text-cyan-300 font-bold uppercase flex items-center gap-1">
+            <Sparkles className="w-3 h-3" /> Previsión (30d)
           </p>
           <p className="text-2xl font-black text-cyan-300 mt-1">Bs {previsionMensualProfit.toFixed(2)}</p>
         </div>
 
         <div className="bg-[#111A10] border-2 border-[#66FF00]/60 rounded-2xl p-4">
-          <p className="text-[11px] text-[#66FF00] font-bold uppercase">Saldo Billetera ({nombreAdminEnVista})</p>
+          <p className="text-[10px] text-[#66FF00] font-bold uppercase">Saldo Billetera</p>
           <p className="text-2xl font-black text-white mt-1">Bs {saldoTotalBilletera.toFixed(2)}</p>
         </div>
       </div>
@@ -648,18 +722,45 @@ export default function ModuloEstadisticas({
         </div>
       </div>
 
-      {/* ESTADÍSTICAS GENERALES DE REVENDEDORES (OCULTA TRAS BOTÓN, SOLO TOTAL GENERAL) */}
+      {/* ========================================================================= */}
+      {/* ESTADÍSTICAS GENERALES DE REVENDEDORES (REPARADA + FILTRO DÍA/SEMANA/MES) */}
+      {/* ========================================================================= */}
       {verEstadisticasRevendedores && (
         <div className="bg-[#111A10] border-2 border-purple-500/40 rounded-3xl p-5 space-y-4 shadow-lg animate-modal">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap justify-between items-center gap-3">
             <div>
               <h3 className="text-sm sm:text-base font-black text-purple-300 uppercase flex items-center gap-2">
                 <Users className="w-5 h-5 text-purple-400" /> Estadísticas Generales de Revendedores ({nombreAdminEnVista})
               </h3>
+              <p className="text-[11px] text-gray-400">
+                Filtra aquí mismo la ganancia diaria, semanal, mensual o histórica de los revendedores.
+              </p>
             </div>
-            <button onClick={() => setVerEstadisticasRevendedores(false)} className="text-gray-400 hover:text-white">
-              <X className="w-5 h-5" />
-            </button>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                { id: "dia", label: "Hoy (Diario)" },
+                { id: "semana", label: "Esta Semana (Lun - Dom)" },
+                { id: "mes", label: "Este Mes" },
+                { id: "todo", label: "Histórico" }
+              ].map((op) => (
+                <button
+                  key={op.id}
+                  type="button"
+                  onClick={() => setPeriodoGraficaRev(op.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                    periodoGraficaRev === op.id
+                      ? "bg-purple-500 text-white border-purple-400"
+                      : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
+                  {op.label}
+                </button>
+              ))}
+              <button onClick={() => setVerEstadisticasRevendedores(false)} className="text-gray-400 hover:text-white ml-2">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -701,9 +802,33 @@ export default function ModuloEstadisticas({
             </div>
           </div>
 
-          {geoRev.puntos.length > 0 && (
+          {geoRev.seleccionado && (
+            <div className="bg-[#070B06] border border-purple-500/50 rounded-2xl p-3 flex flex-wrap justify-between items-center gap-2 text-xs">
+              <span className="font-mono font-bold text-white">{formatearFechaDMA(geoRev.seleccionado.fecha)}</span>
+              <span>Ventas de revendedores: <b>{geoRev.seleccionado.ventas}</b></span>
+              <span className="text-[#66FF00] font-black">
+                🟢 Profit p/Admin: Bs {Number(geoRev.seleccionado.gananciaParaAdmin ?? geoRev.seleccionado.ganancia).toFixed(2)}
+              </span>
+              <span className="text-purple-300 font-black">
+                🟣 Ganancia de Ellos: Bs {Number(geoRev.seleccionado.gananciaDeEllos ?? geoRev.seleccionado.ganancia).toFixed(2)}
+              </span>
+            </div>
+          )}
+
+          {geoRev.puntos.length === 0 ? (
+            <div className="h-44 flex items-center justify-center text-xs text-gray-500">
+              Sin ventas de revendedores en este filtro.
+            </div>
+          ) : (
             <div className="relative w-full overflow-x-auto">
-              <svg viewBox={`0 0 ${geoRev.svgWidth} ${geoRev.svgHeight}`} className="w-full h-48 select-none overflow-visible">
+              <svg viewBox={`0 0 ${geoRev.svgWidth} ${geoRev.svgHeight}`} className="w-full h-52 select-none overflow-visible">
+                <defs>
+                  <linearGradient id="revStockGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={modoMetricaRevendedores === "para_mi" ? "#66FF00" : "#A855F7"} stopOpacity="0.4" />
+                    <stop offset="100%" stopColor={modoMetricaRevendedores === "para_mi" ? "#66FF00" : "#A855F7"} stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+                {geoRev.rutaArea && <path d={geoRev.rutaArea} fill="url(#revStockGrad)" />}
                 {geoRev.rutaReal && (
                   <path
                     d={geoRev.rutaReal}
@@ -713,13 +838,53 @@ export default function ModuloEstadisticas({
                     strokeLinecap="round"
                   />
                 )}
+                {geoRev.rutaPred && (
+                  <path d={geoRev.rutaPred} fill="none" stroke="#22D3EE" strokeWidth="2.5" strokeDasharray="6 4" strokeLinecap="round" />
+                )}
+                {geoRev.puntos.map((p) => (
+                  <g
+                    key={p.fecha}
+                    onMouseEnter={() => setPuntoActivoRevIdx(p.idx)}
+                    onClick={() => setPuntoActivoRevIdx(p.idx)}
+                    className="cursor-pointer"
+                  >
+                    <circle cx={p.x} cy={p.yGan} r="14" fill="transparent" />
+                    <circle
+                      cx={p.x}
+                      cy={p.yGan}
+                      r="4.5"
+                      fill={p.esPrediccion ? "#22D3EE" : modoMetricaRevendedores === "para_mi" ? "#66FF00" : "#C084FC"}
+                      stroke="#070B06"
+                      strokeWidth="2"
+                    />
+                    <text
+                      x={p.x}
+                      y={p.yGan - 10}
+                      textAnchor="middle"
+                      fill={p.esPrediccion ? "#67E8F9" : "#66FF00"}
+                      fontSize="9"
+                      fontWeight="bold"
+                    >
+                      {p.ganancia.toFixed(0)}
+                    </text>
+                    <text
+                      x={p.x}
+                      y={geoRev.svgHeight - 6}
+                      textAnchor="middle"
+                      fill="#9CA3AF"
+                      fontSize="9"
+                    >
+                      {formatearFechaDMA(p.fecha).slice(0, 5)}
+                    </text>
+                  </g>
+                ))}
               </svg>
             </div>
           )}
         </div>
       )}
 
-      {/* MODAL BONO SEMANAL */}
+      {/* MODAL BONO SEMANAL (SIEMPRE MUESTRA EL TOP 3 DE LA SEMANA SIN BORRARLO) */}
       {modalBonoAbierto && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto animate-modal">
@@ -737,10 +902,10 @@ export default function ModuloEstadisticas({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => reiniciarCicloSemanalDomingo(false)}
+                  onClick={desmarcarPagosBonoSemana}
                   className="px-3 py-1.5 rounded-xl bg-amber-950/60 text-amber-300 border border-amber-500/50 text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" /> Reiniciar Semana
+                  <RotateCcw className="w-3.5 h-3.5" /> Desmarcar Pagos
                 </button>
                 <button onClick={() => setModalBonoAbierto(false)} className="text-gray-400 hover:text-white">
                   <X className="w-5 h-5" />
@@ -751,7 +916,7 @@ export default function ModuloEstadisticas({
             <div className="space-y-2">
               {ganadoresActivosPodio.length === 0 ? (
                 <p className="text-xs text-gray-400 bg-[#070B06] p-4 rounded-xl text-center">
-                  Sin comisiones pendientes en este ciclo semanal.
+                  Aún no hay ventas de revendedores entre el Lunes {formatearFechaDMA(lunesSemanaActualISO)} y el Domingo {formatearFechaDMA(domingoSemanaActualISO)}.
                 </p>
               ) : (
                 ganadoresActivosPodio.map((g) => (

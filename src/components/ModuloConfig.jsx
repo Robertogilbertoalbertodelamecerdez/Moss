@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useRef } from "react";
-import { supabase, PLATAFORMAS } from "@/config";
+import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
 import {
   Download,
   Upload,
@@ -19,7 +19,8 @@ import {
   Layers,
   ArrowUp,
   ArrowDown,
-  ShieldCheck
+  ShieldCheck,
+  History
 } from "lucide-react";
 
 export default function ModuloConfig({
@@ -49,11 +50,13 @@ export default function ModuloConfig({
   const [modalRevendedores, setModalRevendedores] = useState(false);
   const [modalSubAdmins, setModalSubAdmins] = useState(false);
 
+  // Modal para ver todo el Historial al Fíe de un Sub-Admin (Marcus)
+  const [subAdminHistorialFie, setSubAdminHistorialFie] = useState(null);
+
   const [busquedaProv, setBusquedaProv] = useState("");
   const [busquedaRev, setBusquedaRev] = useState("");
   const [busquedaPlat, setBusquedaPlat] = useState("");
 
-  // Filtro en el modal de Revendedores para que Mateus pueda ver/agregar a los suyos o a los de Marcus
   const [propietarioRevFiltro, setPropietarioRevFiltro] = useState(adminKeyActual);
 
   const [nuevaPlatNombre, setNuevaPlatNombre] = useState("");
@@ -71,7 +74,6 @@ export default function ModuloConfig({
   const [telProv, setTelProv] = useState("");
   const [editProv, setEditProv] = useState(null);
 
-  // Crear Revendedor
   const [nombreRev, setNombreRev] = useState("");
   const [telRev, setTelRev] = useState("");
   const [userRev, setUserRev] = useState("");
@@ -79,12 +81,57 @@ export default function ModuloConfig({
   const [stockPermRev, setStockPermRev] = useState(true);
   const [editRev, setEditRev] = useState(null);
 
-  // Crear Sub-Admin (Mano Derecha ej. Marcus)
   const [nombreSubAdm, setNombreSubAdm] = useState("");
   const [telSubAdm, setTelSubAdm] = useState("");
   const [userSubAdm, setUserSubAdm] = useState("");
   const [pinSubAdm, setPinSubAdm] = useState("1234");
   const [editSubAdm, setEditSubAdm] = useState(null);
+
+  // Obtiene todas las cuentas que un Sub-Admin (Marcus) sacó al fíe de Mateus (de Stock de Mateus o con proveedor Moss Mateus)
+  const obtenerCuentasAlFieDeSubAdmin = (subAdminId) => {
+    return suscripciones.filter((s) => {
+      if (s.en_papelera) return false;
+      if (s.admin_propietario !== subAdminId) return false;
+      const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
+      const matDeMateus =
+        s.matriz_id &&
+        (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
+      return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
+    });
+  };
+
+  // Liquidar (Cerar) toda la deuda al fíe pendiente de Marcus en 1 clic
+  const cerarDeudaAlFieSubAdmin = async (sa) => {
+    const pendientes = obtenerCuentasAlFieDeSubAdmin(sa.id).filter(
+      (s) => s.pagado_al_admin === false
+    );
+    if (pendientes.length === 0) {
+      return notificar(`${sa.nombre} no tiene deuda al fíe pendiente.`);
+    }
+
+    const totalCobrado = pendientes.reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
+    const ids = pendientes.map((s) => s.id);
+
+    await supabase
+      .from("suscripciones")
+      .update({ pagado_al_admin: true })
+      .in("id", ids);
+
+    if (totalCobrado > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: "admin",
+          tipo: "Ingreso Venta",
+          monto: Math.abs(totalCobrado),
+          afecta_ganancia_neta: true,
+          descripcion: `Liquidación de ${pendientes.length} cuenta(s) al fíe de Admin ${sa.nombre}`
+        }
+      ]);
+    }
+
+    await recargarTodo();
+    notificar(`¡Deuda al fíe de ${sa.nombre} cerada (+Bs ${totalCobrado.toFixed(2)} en tu banco)!`);
+  };
 
   const seleccionarModoInvitacionCrear = (modoInv) => {
     setEsPorInvitacion(modoInv);
@@ -203,7 +250,6 @@ export default function ModuloConfig({
     notificar("Plataforma eliminada");
   };
 
-  // Proveedores compartidos entre Mateus y Sub-Admins (Marcus)
   const agregarProveedor = async (e) => {
     e.preventDefault();
     if (!nombreProv.trim() || !telProv.trim()) return;
@@ -211,7 +257,7 @@ export default function ModuloConfig({
     setNombreProv("");
     setTelProv("");
     await recargarTodo();
-    notificar("Proveedor agregado y sincronizado para todos los Admins");
+    notificar("Proveedor agregado y sincronizado");
   };
 
   const guardarEdicionProv = async () => {
@@ -225,7 +271,6 @@ export default function ModuloConfig({
     notificar("Proveedor actualizado");
   };
 
-  // Crear Sub-Admin (Mano Derecha ej. Marcus)
   const agregarSubAdmin = async (e) => {
     e.preventDefault();
     if (!nombreSubAdm.trim() || !telSubAdm.trim()) {
@@ -248,7 +293,7 @@ export default function ModuloConfig({
     setUserSubAdm("");
     setPinSubAdm("1234");
     await recargarTodo();
-    notificar(`Usuario Admin ${nombreSubAdm.trim()} creado (Login: ${usuarioFinal})`);
+    notificar(`Usuario Admin ${nombreSubAdm.trim()} creado`);
   };
 
   const guardarEdicionSubAdmin = async () => {
@@ -267,7 +312,6 @@ export default function ModuloConfig({
     notificar("Datos del Admin Asociado actualizados");
   };
 
-  // Crear Revendedor asignado al Admin seleccionado (Mateus o Marcus)
   const agregarRevendedor = async (e) => {
     e.preventDefault();
     if (!nombreRev.trim() || !telRev.trim()) return notificar("Ingresa nombre y teléfono", "error");
@@ -308,7 +352,7 @@ export default function ModuloConfig({
       .eq("id", editRev.id);
     setEditRev(null);
     await recargarTodo();
-    notificar("Acceso y datos del revendedor actualizados");
+    notificar("Datos actualizados");
   };
 
   const togglePermisoStockRevendedor = async (r) => {
@@ -317,11 +361,7 @@ export default function ModuloConfig({
       .update({ puede_ver_matrices: !r.puede_ver_matrices })
       .eq("id", r.id);
     await recargarTodo();
-    notificar(
-      !r.puede_ver_matrices
-        ? `${r.nombre} ahora puede sacar cuentas de Stock`
-        : `Permiso de Stock retirado a ${r.nombre}`
-    );
+    notificar("Permiso actualizado");
   };
 
   const guardarAjusteEnSupabase = async (clave, valor) => {
@@ -344,7 +384,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_6.0",
+      version: "MOSS_CRM_6.5",
       sub_admins: saRes.data || [],
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
@@ -456,13 +496,13 @@ export default function ModuloConfig({
               <h3 className="font-black text-amber-300 text-sm flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-amber-400" /> Usuarios Admin ({subAdmins.length})
               </h3>
-              <p className="text-[11px] text-gray-400 mt-0.5">Mano Derecha (Ej: Marcus)</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">Cobrar Fíe e Historial</p>
             </div>
             <button
               onClick={() => setModalSubAdmins(true)}
               className="px-3.5 py-2 bg-amber-400 text-black font-black rounded-xl text-xs cursor-pointer"
             >
-              Crear / Ver
+              Administrar
             </button>
           </div>
         )}
@@ -526,14 +566,12 @@ export default function ModuloConfig({
         </div>
       </div>
 
-      {/* BACKUP */}
       {esSuperAdmin && (
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-bold text-[#66FF00] flex items-center gap-2">
               <Settings className="w-4 h-4" /> Respaldo Total (Backup .JSON)
             </h2>
-            <p className="text-xs text-gray-400">Incluye sub-admins, plataformas, proveedores, revendedores, stock y ventas.</p>
           </div>
           <div className="flex gap-2">
             <button onClick={descargarBackup} className="px-4 py-2.5 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer">
@@ -548,18 +586,18 @@ export default function ModuloConfig({
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL CREAR USUARIOS SUB-ADMIN (MANO DERECHA EJ. MARCUS)                  */}
+      {/* MODAL DE USUARIOS ADMIN (CON DEUDA AL FÍE, BOTÓN CERAR DEUDA E HISTORIAL) */}
       {/* ========================================================================= */}
       {modalSubAdmins && esSuperAdmin && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
+          <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-3xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
               <div>
                 <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
-                  <ShieldCheck className="w-5 h-5" /> Administradores Asociados / Mano Derecha ({subAdmins.length})
+                  <ShieldCheck className="w-5 h-5" /> Usuarios Admin Asociados & Liquidación de Deuda al Fíe
                 </h3>
                 <p className="text-[11px] text-gray-400">
-                  Pueden crear sus propias matrices, crear sus propios revendedores, compartir proveedores contigo y si sacan de tu Stock te marca para cobrarles.
+                  Aquí se acumula automáticamente todo lo que Marcus saca al fíe de tu Stock o te compra como proveedor Moss Mateus.
                 </p>
               </div>
               <button onClick={() => setModalSubAdmins(false)} className="text-gray-400 hover:text-white">
@@ -586,7 +624,7 @@ export default function ModuloConfig({
                 />
                 <input
                   type="text"
-                  placeholder="Usuario Login (Ej: marcus)"
+                  placeholder="Usuario Login"
                   value={userSubAdm}
                   onChange={(e) => setUserSubAdm(e.target.value)}
                   className="bg-[#111A10] border border-amber-400/60 rounded-xl p-2 text-xs text-white"
@@ -607,14 +645,17 @@ export default function ModuloConfig({
               </button>
             </form>
 
-            <div className="space-y-2.5 max-h-72 overflow-y-auto">
-              {subAdmins.length === 0 ? (
-                <p className="text-xs text-gray-500 text-center py-4">
-                  Aún no has creado ningún usuario Admin asociado.
-                </p>
-              ) : (
-                subAdmins.map((sa) => (
-                  <div key={sa.id} className="bg-[#070B06] border border-amber-500/40 p-3.5 rounded-2xl text-xs">
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {subAdmins.map((sa) => {
+                const todasAlFie = obtenerCuentasAlFieDeSubAdmin(sa.id);
+                const pendientesAlFie = todasAlFie.filter((s) => s.pagado_al_admin === false);
+                const montoDeudaFie = pendientesAlFie.reduce(
+                  (acc, s) => acc + Number(s.costo_proveedor || 0),
+                  0
+                );
+
+                return (
+                  <div key={sa.id} className="bg-[#070B06] border-2 border-amber-500/50 p-4 rounded-2xl space-y-3 text-xs">
                     {editSubAdm?.id === sa.id ? (
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-center">
                         <input
@@ -649,43 +690,131 @@ export default function ModuloConfig({
                         </button>
                       </div>
                     ) : (
-                      <div className="flex flex-wrap justify-between items-center gap-2">
+                      <div className="flex flex-wrap justify-between items-center gap-3">
                         <div>
-                          <p className="font-black text-amber-300 text-sm">
-                            👑 {sa.nombre} · <span className="text-white font-mono">📞 {sa.telefono}</span>
+                          <p className="font-black text-amber-300 text-base">
+                            👑 {sa.nombre} · <span className="text-white font-mono text-xs">📞 {sa.telefono}</span>
                           </p>
                           <p className="text-gray-400 text-[11px] mt-0.5">
                             🔑 Usuario: <b className="text-white font-mono">{sa.usuario}</b> | PIN:{" "}
                             <b className="text-amber-300 font-mono">{sa.pin}</b>
                           </p>
+                          <p className="mt-1.5 text-xs">
+                            Deuda actual al fíe ({pendientesAlFie.length} ctas sin pagar):{" "}
+                            <b className={montoDeudaFie > 0 ? "text-amber-400 text-sm font-black" : "text-[#66FF00] font-black"}>
+                              Bs {montoDeudaFie.toFixed(2)}
+                            </b>
+                          </p>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* BOTÓN MARCAR PAGADO Y CERAR DEUDA AL FÍE */}
+                          <button
+                            type="button"
+                            onClick={() => cerarDeudaAlFieSubAdmin(sa)}
+                            className={`px-3.5 py-2 rounded-xl font-black text-xs flex items-center gap-1 cursor-pointer ${
+                              montoDeudaFie > 0
+                                ? "bg-[#66FF00] text-black shadow-[0_0_15px_rgba(102,255,0,0.4)]"
+                                : "bg-green-950/50 text-green-300 border border-green-600/40"
+                            }`}
+                          >
+                            <Check className="w-4 h-4" />
+                            {montoDeudaFie > 0
+                              ? `Marcar Pagado (+Bs ${montoDeudaFie.toFixed(1)})`
+                              : "✓ Deuda en 0"}
+                          </button>
+
+                          {/* BOTÓN HISTORIAL AL FÍE */}
+                          <button
+                            type="button"
+                            onClick={() => setSubAdminHistorialFie(sa)}
+                            className="px-3 py-2 bg-amber-400 text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <History className="w-4 h-4" /> Historial al Fíe ({todasAlFie.length})
+                          </button>
+
                           <button
                             onClick={() => {
                               setModalSubAdmins(false);
                               setPropietarioRevFiltro(sa.id);
                               setModalRevendedores(true);
                             }}
-                            className="px-3 py-1.5 bg-purple-950 text-purple-200 border border-purple-500 rounded-xl font-bold cursor-pointer"
+                            className="px-3 py-2 bg-purple-950 text-purple-200 border border-purple-500 rounded-xl font-bold cursor-pointer"
                           >
-                            Ver Revendedores de {sa.nombre} ({revendedores.filter((r) => r.admin_propietario === sa.id).length})
+                            Revendedores ({revendedores.filter((r) => r.admin_propietario === sa.id).length})
                           </button>
+
                           <button onClick={() => setEditSubAdm(sa)} className="p-1.5 text-gray-400 hover:text-amber-300">
                             <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await supabase.from("sub_admins").delete().eq("id", sa.id);
-                              await recargarTodo();
-                            }}
-                            className="p-1.5 text-gray-500 hover:text-red-400"
-                          >
-                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
                     )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE HISTORIAL COMPLETO DE LO QUE SACÓ AL FÍE MARCUS */}
+      {subAdminHistorialFie && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-[60] overflow-y-auto">
+          <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+              <div>
+                <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
+                  <History className="w-5 h-5" /> Historial de Cuentas al Fíe de {subAdminHistorialFie.nombre}
+                </h3>
+                <p className="text-[11px] text-gray-400">
+                  Muestra todo lo que {subAdminHistorialFie.nombre} sacó de tu Stock o registró con proveedor Moss Mateus.
+                </p>
+              </div>
+              <button onClick={() => setSubAdminHistorialFie(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {obtenerCuentasAlFieDeSubAdmin(subAdminHistorialFie.id).length === 0 ? (
+                <p className="text-xs text-gray-500 text-center py-6">
+                  Aún no hay cuentas registradas al fíe para {subAdminHistorialFie.nombre}.
+                </p>
+              ) : (
+                obtenerCuentasAlFieDeSubAdmin(subAdminHistorialFie.id).map((s) => (
+                  <div
+                    key={s.id}
+                    className={`p-3 rounded-2xl border flex flex-wrap justify-between items-center gap-2 text-xs ${
+                      s.pagado_al_admin
+                        ? "bg-[#070B06] border-[#1E331A] opacity-75"
+                        : "bg-amber-950/30 border-amber-400"
+                    }`}
+                  >
+                    <div>
+                      <span className="px-2 py-0.5 rounded bg-amber-400 text-black font-black text-[10px]">
+                        {s.plataforma}
+                      </span>
+                      <span className="ml-2 text-gray-400 font-mono">{formatearFechaDMA(s.fecha_venta)}</span>
+                      <p className="text-white font-bold mt-1">
+                        Cuenta: <span className="font-mono">{s.correo_cuenta}</span> ({s.nombre_perfil}) · Cliente de {subAdminHistorialFie.nombre}: {s.nombre_cliente}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="font-black text-amber-300">
+                        Te paga: Bs {Number(s.costo_proveedor || 0).toFixed(2)}
+                      </span>
+                      {s.pagado_al_admin ? (
+                        <span className="px-2.5 py-1 rounded-lg bg-green-900/40 text-green-300 font-bold">
+                          ✓ Pagado
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-black font-black">
+                          ⏳ Pendiente al Fíe
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))
               )}
@@ -699,11 +828,9 @@ export default function ModuloConfig({
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-3xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
-              <div>
-                <h3 className="font-black text-[#66FF00] text-base">
-                  Catálogo de Plataformas, Precios y Orden ({plataformasList.length})
-                </h3>
-              </div>
+              <h3 className="font-black text-[#66FF00] text-base">
+                Catálogo de Plataformas, Precios y Orden ({plataformasList.length})
+              </h3>
               <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
@@ -727,7 +854,7 @@ export default function ModuloConfig({
                     esPorInvitacion ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#111A10] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación (Solo Correo)
+                  <MailCheck className="w-3.5 h-3.5 inline mr-1" /> Por Invitación
                 </button>
               </div>
 
@@ -875,7 +1002,7 @@ export default function ModuloConfig({
                                 : "bg-blue-950 text-blue-300 border-blue-500"
                             }`}
                           >
-                            {platEditando.pidePass ? "🔑 Pide Contraseña: SÍ" : "📩 Por Invitación (Sin Clave)"}
+                            {platEditando.pidePass ? "🔑 Pide Contraseña: SÍ" : "📩 Por Invitación"}
                           </button>
 
                           {platEditando.pidePass && (
@@ -950,12 +1077,6 @@ export default function ModuloConfig({
                             <p className="font-black text-white text-sm">
                               #{idx + 1} {p.nombre}
                             </p>
-                            <p className="text-[11px] text-gray-400">
-                              {p.pidePass === false ? "📩 Por Invitación" : "🔑 Con Clave"}
-                              {p.pidePass !== false && p.pidePerfil !== false ? " · 👤 Perfil" : ""}
-                              {p.pidePass !== false && p.pidePin !== false ? " · 📌 PIN" : ""}
-                              {` · ${p.perfilesDefault ?? 5} cupos`}
-                            </p>
                           </div>
                         </div>
 
@@ -993,17 +1114,12 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* MODAL PROVEEDORES COMPARTIDOS */}
+      {/* MODAL PROVEEDORES */}
       {modalProveedores && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center">
-              <div>
-                <h3 className="font-black text-[#66FF00]">Proveedores Compartidos ({proveedores.length})</h3>
-                <p className="text-[11px] text-gray-400">
-                  Cualquier proveedor que agregues tú o Marcus les aparece a ambos automáticamente.
-                </p>
-              </div>
+              <h3 className="font-black text-[#66FF00]">Proveedores Compartidos ({proveedores.length})</h3>
               <button onClick={() => setModalProveedores(false)} className="text-gray-400"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={agregarProveedor} className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -1040,29 +1156,22 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL REVENDEDORES: SELECTOR DE "MIS REVENDEDORES" O "REVENDEDORES DE MARCUS" */}
-      {/* ========================================================================= */}
+      {/* MODAL REVENDEDORES */}
       {modalRevendedores && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00]">
-                Administrar Revendedores y Accesos
-              </h3>
+              <h3 className="font-black text-[#66FF00]">Administrar Revendedores y Accesos</h3>
               <button onClick={() => setModalRevendedores(false)} className="text-gray-400"><X className="w-5 h-5" /></button>
             </div>
 
-            {/* PESTAÑAS PARA QUE MATEUS VEA Y AGREGUE REVENDEDORES SUYOS O DE MARCUS */}
             {esSuperAdmin && (
               <div className="flex flex-wrap gap-2 bg-[#070B06] p-2 rounded-2xl border border-[#233820]">
                 <button
                   type="button"
                   onClick={() => setPropietarioRevFiltro("admin")}
                   className={`px-3.5 py-2 rounded-xl text-xs font-extrabold cursor-pointer ${
-                    propietarioRevFiltro === "admin"
-                      ? "bg-[#66FF00] text-black"
-                      : "text-gray-300 hover:text-white"
+                    propietarioRevFiltro === "admin" ? "bg-[#66FF00] text-black" : "text-gray-300"
                   }`}
                 >
                   👑 Mis Revendedores (Mateus) ({revendedores.filter((r) => (r.admin_propietario || "admin") === "admin").length})
@@ -1073,9 +1182,7 @@ export default function ModuloConfig({
                     type="button"
                     onClick={() => setPropietarioRevFiltro(sa.id)}
                     className={`px-3.5 py-2 rounded-xl text-xs font-extrabold cursor-pointer ${
-                      propietarioRevFiltro === sa.id
-                        ? "bg-amber-400 text-black"
-                        : "text-amber-300 hover:text-white"
+                      propietarioRevFiltro === sa.id ? "bg-amber-400 text-black" : "text-amber-300"
                     }`}
                   >
                     🤝 Revendedores de {sa.nombre} ({revendedores.filter((r) => r.admin_propietario === sa.id).length})
@@ -1085,14 +1192,6 @@ export default function ModuloConfig({
             )}
 
             <form onSubmit={agregarRevendedor} className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3">
-              <p className="text-xs font-bold text-[#66FF00]">
-                + Registrar Nuevo Revendedor para{" "}
-                {esSuperAdmin
-                  ? propietarioRevFiltro === "admin"
-                    ? "Mateus (Mi Cartera)"
-                    : subAdmins.find((s) => s.id === propietarioRevFiltro)?.nombre || "Sub-Admin"
-                  : sesionActual?.nombre}
-              </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <input type="text" placeholder="Nombre *" value={nombreRev} onChange={(e) => setNombreRev(e.target.value)} className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
                 <input type="text" placeholder="Teléfono *" value={telRev} onChange={(e) => setTelRev(e.target.value)} className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
@@ -1102,15 +1201,13 @@ export default function ModuloConfig({
               <div className="flex flex-wrap justify-between items-center gap-2 pt-1">
                 <label className="flex items-center gap-2 text-xs text-gray-200 cursor-pointer">
                   <input type="checkbox" checked={stockPermRev} onChange={(e) => setStockPermRev(e.target.checked)} />
-                  <span>📦 Habilitar apartado de Matrices (Puede sacar cupos libres del Stock)</span>
+                  <span>📦 Habilitar apartado de Matrices</span>
                 </label>
                 <button type="submit" className="px-5 py-2 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer">
                   + Crear Revendedor
                 </button>
               </div>
             </form>
-
-            <input type="text" placeholder="Buscar revendedor..." value={busquedaRev} onChange={(e) => setBusquedaRev(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
 
             <div className="space-y-2.5 max-h-72 overflow-y-auto">
               {revendedoresFiltradosModal.map((r) => (
@@ -1138,15 +1235,12 @@ export default function ModuloConfig({
                         <button
                           onClick={() => togglePermisoStockRevendedor(r)}
                           className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold border flex items-center gap-1 cursor-pointer ${
-                            r.puede_ver_matrices
-                              ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                              : "bg-gray-900 text-gray-400 border-gray-700"
+                            r.puede_ver_matrices ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]" : "bg-gray-900 text-gray-400 border-gray-700"
                           }`}
                         >
                           <Layers className="w-3.5 h-3.5" />
                           {r.puede_ver_matrices ? "✓ Acceso a Stock" : "Sin Stock"}
                         </button>
-
                         <button onClick={() => setEditRev({ ...r, usuario: r.usuario || r.nombre.toLowerCase(), pin: r.pin || "1234" })} className="p-1.5 text-gray-400 hover:text-[#66FF00]">
                           <Edit3 className="w-4 h-4" />
                         </button>

@@ -21,12 +21,15 @@ import {
   Calendar,
   MessageSquare,
   Users,
-  Send
+  Send,
+  ShieldCheck
 } from "lucide-react";
 
 export default function ModuloVentas({
+  esSuperAdmin = true,
   sesionActual = null,
   adminKeyActual = "admin",
+  subAdmins = [],
   matrices = [],
   clientes = [],
   proveedores = [],
@@ -41,8 +44,10 @@ export default function ModuloVentas({
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [modalNuevoRev, setModalNuevoRev] = useState(false);
 
+  // 'cliente' | 'revendedor' | 'subadmin' (Amarillo para venderle a Marcus)
   const [tipoComprador, setTipoComprador] = useState("cliente");
   const [revendedorId, setRevendedorId] = useState("");
+  const [subAdminCompradorId, setSubAdminCompradorId] = useState("");
   const [nuevoRevNombre, setNuevoRevNombre] = useState("");
   const [nuevoRevTelefono, setNuevoRevTelefono] = useState("");
 
@@ -75,7 +80,6 @@ export default function ModuloVentas({
   const [mesesPagadosProv, setMesesPagadosProv] = useState(1);
   const [cadaCuantosMesesAvisar, setCadaCuantosMesesAvisar] = useState(1);
 
-  const [modoFecha, setModoFecha] = useState("hoy");
   const [fechaVenta, setFechaVenta] = useState("");
 
   const [mensajeGenerado, setMensajeGenerado] = useState(null);
@@ -123,7 +127,7 @@ export default function ModuloVentas({
     const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
     if (!cfg) return;
     const base =
-      rolComprador === "revendedor"
+      rolComprador === "revendedor" || rolComprador === "subadmin"
         ? Number(cfg.precioRevendedor ?? 10)
         : Number(cfg.precioCliente ?? 20);
     setPrecioVenta(String(base * Number(cantMeses || 1)));
@@ -162,8 +166,20 @@ export default function ModuloVentas({
         setNombreCliente("");
         setTelefono("");
       }
+    } else if (nuevoTipo === "subadmin") {
+      const primerSub = subAdmins[0];
+      if (primerSub) {
+        setSubAdminCompradorId(primerSub.id);
+        setNombreCliente(primerSub.nombre);
+        setTelefono(primerSub.telefono);
+      } else {
+        setSubAdminCompradorId("");
+        setNombreCliente("");
+        setTelefono("");
+      }
     } else {
       setRevendedorId("");
+      setSubAdminCompradorId("");
       setNombreCliente("");
       setTelefono("");
     }
@@ -178,7 +194,15 @@ export default function ModuloVentas({
     }
   };
 
-  // Crea un revendedor asignado exclusivamente al Admin que está logueado (Mateus o Marcus)
+  const handleSelectSubAdminComprador = (id) => {
+    setSubAdminCompradorId(id);
+    const found = subAdmins.find((sa) => sa.id === id);
+    if (found) {
+      setNombreCliente(found.nombre);
+      setTelefono(found.telefono);
+    }
+  };
+
   const guardarNuevoRevendedor = async (e) => {
     e.preventDefault();
     if (!nuevoRevNombre.trim() || !nuevoRevTelefono.trim()) {
@@ -303,7 +327,7 @@ export default function ModuloVentas({
     }
 
     let correoFinal = "", passFinal = "", perfilFinal = "", pinFinal = "";
-    let perfilIdUsado = null, matrizIdUsada = null, costoFinal = 0;
+    let perfilIdUsado = null, matrizIdUsada = null, costoFinal = Number(costoProveedor || 0);
     let provIdFinal = null, provNombreFinal = null, provTelFinal = null;
     let propietarioMatrizUsada = adminKeyActual;
 
@@ -312,12 +336,7 @@ export default function ModuloVentas({
     if (origen === "stock" && !esModoInvitacion) {
       const matrizObj = matricesDisponibles.find((m) => m.id === matrizSeleccionadaId) || matricesDisponibles[0];
       if (!matrizObj) {
-        notificar(
-          tipoCuenta === "Cuenta Completa"
-            ? "No tienes ninguna matriz 100% libre para vender Cuenta Completa"
-            : "No tienes stock libre en esta plataforma",
-          "error"
-        );
+        notificar("No tienes stock libre en esta plataforma", "error");
         return null;
       }
       const slotLibre = obtenerSiguientePerfilLibre(matrizObj);
@@ -350,7 +369,6 @@ export default function ModuloVentas({
           ? "Por Invitación"
           : provPerfil.trim() || "1 Dispositivo";
       pinFinal = tipoCuenta === "Cuenta Completa" || esModoInvitacion ? "" : provPin.trim();
-      costoFinal = Number(costoProveedor || 0);
       provIdFinal = provObj ? provObj.id : null;
       provNombreFinal = provObj ? provObj.nombre : "Proveedor Externo";
       provTelFinal = provObj ? provObj.telefono : "";
@@ -440,22 +458,38 @@ export default function ModuloVentas({
       }
 
       for (const item of itemsParaGuardar) {
-        // Si un Sub-Admin (Marcus) saca de una Matriz de Mateus ('admin'), se le cobra el cupo mayorista a Marcus
+        const cfgPlat = plataformasList.find((p) => p.nombre === item.plataforma);
+        const costoMayoristaDefault = Number(cfgPlat?.precioRevendedor ?? 10) * Number(item.meses || 1);
+
+        // ¿Marcus sacó del Stock de Mateus o eligió a "Moss Mateus" como proveedor?
         const sacoDeStockDeMateus =
           adminKeyActual !== "admin" &&
           item.origen === "stock" &&
           item.propietarioMatrizUsada === "admin";
 
-        const cfgPlat = plataformasList.find((p) => p.nombre === item.plataforma);
-        const costoMayoristaCupo = Number(cfgPlat?.precioRevendedor ?? 10) * Number(item.meses || 1);
+        const eligioProveedorMossMateus =
+          adminKeyActual !== "admin" &&
+          item.origen === "proveedor" &&
+          String(item.provNombreFinal || "").toLowerCase().includes("moss");
+
+        const esFieDeMarcusAMateus = sacoDeStockDeMateus || eligioProveedorMossMateus;
+
+        // Si tú (Mateus) estás vendiéndole a Marcus con el botón Amarillo ('subadmin')
+        const esVentaMiaAMarcus = esSuperAdmin && tipoComprador === "subadmin";
+
+        const costoFieFinal =
+          Number(item.costoFinal) > 0 ? Number(item.costoFinal) : costoMayoristaDefault;
 
         const { data: nuevaSub, error: errSub } = await supabase
           .from("suscripciones")
           .insert([{
-            admin_propietario: adminKeyActual,
+            admin_propietario: esVentaMiaAMarcus
+              ? subAdminCompradorId || subAdmins[0]?.id || "admin"
+              : adminKeyActual,
             cliente_id: clienteId,
-            tipo_comprador: tipoComprador,
-            revendedor_id: tipoComprador === "revendedor" ? (revendedorId || revendedores[0]?.id || null) : null,
+            tipo_comprador: esVentaMiaAMarcus ? "subadmin" : tipoComprador,
+            revendedor_id:
+              tipoComprador === "revendedor" ? revendedorId || revendedores[0]?.id || null : null,
             telefono_cliente: telefono.trim(),
             nombre_cliente: nombreCliente.trim(),
             plataforma: item.plataforma,
@@ -464,15 +498,20 @@ export default function ModuloVentas({
             matriz_id: item.matrizIdUsada,
             perfil_id: item.perfilIdUsado,
             proveedor_id: item.provIdFinal,
-            nombre_proveedor: item.provNombreFinal,
+            nombre_proveedor: esVentaMiaAMarcus ? "Moss Mateus" : item.provNombreFinal,
             telefono_proveedor: item.provTelFinal,
             correo_cuenta: item.correoFinal,
             password_cuenta: item.passFinal || "",
             nombre_perfil: item.perfilFinal || item.tipoCuenta,
             pin_perfil: item.pinFinal || "",
-            costo_proveedor: sacoDeStockDeMateus ? costoMayoristaCupo : item.costoFinal,
+            costo_proveedor: esFieDeMarcusAMateus
+              ? costoFieFinal
+              : esVentaMiaAMarcus
+              ? Number(item.precioVenta)
+              : Number(item.costoFinal || 0),
             precio_venta: item.precioVenta,
-            pagado_al_admin: sacoDeStockDeMateus ? false : true,
+            // Si fue al fíe de Marcus o le vendiste a Marcus al fíe, queda pendiente en su Deuda al Fíe (sin spamear notificaciones)
+            pagado_al_admin: esFieDeMarcusAMateus || esVentaMiaAMarcus ? false : true,
             meses_contratados: item.meses,
             dias_totales: item.diasTotales,
             meses_pagados_proveedor: item.mesesPagadosProv,
@@ -501,39 +540,24 @@ export default function ModuloVentas({
           }
         }
 
-        // Si Marcus sacó de una matriz de Mateus, enviar alerta de cobro a la campana de Mateus
-        if (sacoDeStockDeMateus) {
-          await supabase.from("notificaciones_sistema").insert([
-            {
-              admin_destino: "admin",
-              tipo: "venta_revendedor",
-              titulo: `👑 Admin ${sesionActual?.nombre || "Asociado"} sacó ${item.plataforma} de tu Stock`,
-              mensaje: `Matriz tuya: ${item.correoFinal} (${item.perfilFinal}) · Plan: ${item.diasTotales}d · Vendido a: ${nombreCliente.trim()}. Cobrar a ${sesionActual?.nombre}: Bs ${costoMayoristaCupo.toFixed(2)}.`,
-              nombre_revendedor: sesionActual?.nombre || "Sub-Admin",
-              suscripcion_id: nuevaSub.id,
-              monto_cobrar: costoMayoristaCupo,
-              pagado: false
-            }
-          ]);
-        }
-
-        const tagRol = tipoComprador === "revendedor" ? " [Revendedor]" : "";
+        // Registrar movimiento en la billetera del Admin correspondiente
         await supabase.from("movimientos_yolo").insert([{
           admin_propietario: adminKeyActual,
           tipo: "Ingreso Venta",
           monto: Math.abs(Number(item.precioVenta)),
           afecta_ganancia_neta: true,
-          descripcion: `Venta${tagRol} ${item.plataforma} (${item.diasTotales}d) a ${nombreCliente.trim()}`,
+          descripcion: `Venta ${item.plataforma} (${item.diasTotales}d) a ${nombreCliente.trim()}`,
           referencia_id: nuevaSub.id
         }]);
 
-        if (item.origen === "proveedor" && item.costoFinal > 0) {
+        // Si pagó a un proveedor externo (no al fíe de Moss Mateus), descontar el costo de proveedor
+        if (!esFieDeMarcusAMateus && Number(item.costoFinal) > 0) {
           await supabase.from("movimientos_yolo").insert([{
             admin_propietario: adminKeyActual,
             tipo: "Costo Proveedor",
-            monto: -Math.abs(item.costoFinal),
+            monto: -Math.abs(Number(item.costoFinal)),
             afecta_ganancia_neta: true,
-            descripcion: `Pago a proveedor ${item.provNombreFinal} por ${item.plataforma} (${item.mesesPagadosProv}M)`,
+            descripcion: `Pago a proveedor ${item.provNombreFinal || "Externo"} por ${item.plataforma}`,
             referencia_id: nuevaSub.id
           }]);
         }
@@ -545,7 +569,7 @@ export default function ModuloVentas({
         itemsParaGuardar,
         linkWhatsappMoss,
         null,
-        tipoComprador === "revendedor"
+        tipoComprador === "revendedor" || tipoComprador === "subadmin"
       );
       setModalVentaAbierto(false);
       setMensajeGenerado(msgObj);
@@ -593,7 +617,6 @@ export default function ModuloVentas({
                   onClick={() => {
                     seleccionarPlataforma(p.nombre, libresPlat);
                     setFechaVenta(obtenerFechaBoliviaISO());
-                    setModoFecha("hoy");
                     setModalVentaAbierto(true);
                   }}
                   className={`px-3 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
@@ -628,7 +651,6 @@ export default function ModuloVentas({
           type="button"
           onClick={() => {
             setFechaVenta(obtenerFechaBoliviaISO());
-            setModoFecha("hoy");
             aplicarAtajoPrecio(plataforma, tipoComprador, meses);
             setModalVentaAbierto(true);
           }}
@@ -684,7 +706,7 @@ export default function ModuloVentas({
                         }],
                         linkWhatsappMoss,
                         v.fue_reemplazada ? "REEMPLAZO DE CUENTA" : null,
-                        v.tipo_comprador === "revendedor"
+                        v.tipo_comprador === "revendedor" || v.tipo_comprador === "subadmin"
                       )
                     )
                   }
@@ -698,7 +720,7 @@ export default function ModuloVentas({
         )}
       </div>
 
-      {/* MODAL REGISTRAR VENTA */}
+      {/* MODAL REGISTRAR VENTA CON BOTÓN AMARILLO PARA VENDER A MARCUS / ADMIN ASOCIADO */}
       {modalVentaAbierto && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50 overflow-y-auto">
           <form
@@ -715,7 +737,8 @@ export default function ModuloVentas({
             </div>
 
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3.5 space-y-3">
-              <div className="grid grid-cols-2 gap-2">
+              {/* SELECTOR DE 3 COLORES: CLIENTE (VERDE) | REVENDEDOR (VERDE) | ADMIN ASOCIADO MARCUS (AMARILLO) */}
+              <div className={`grid grid-cols-1 ${esSuperAdmin && subAdmins.length > 0 ? "sm:grid-cols-3" : "sm:grid-cols-2"} gap-2`}>
                 <button
                   type="button"
                   onClick={() => cambiarTipoComprador("cliente")}
@@ -725,8 +748,9 @@ export default function ModuloVentas({
                       : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <UserCheck className="w-4 h-4" /> Cliente (Catálogo Bs {configPlatActual.precioCliente ?? 20})
+                  <UserCheck className="w-4 h-4" /> Cliente (Bs {configPlatActual.precioCliente ?? 20})
                 </button>
+
                 <button
                   type="button"
                   onClick={() => cambiarTipoComprador("revendedor")}
@@ -736,8 +760,22 @@ export default function ModuloVentas({
                       : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                   }`}
                 >
-                  <Users className="w-4 h-4" /> Mis Revendedores (Atajo Bs {configPlatActual.precioRevendedor ?? 10})
+                  <Users className="w-4 h-4" /> Revendedor (Bs {configPlatActual.precioRevendedor ?? 10})
                 </button>
+
+                {esSuperAdmin && subAdmins.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => cambiarTipoComprador("subadmin")}
+                    className={`py-2.5 rounded-xl text-xs font-black border flex items-center justify-center gap-1.5 cursor-pointer ${
+                      tipoComprador === "subadmin"
+                        ? "bg-amber-400 text-black border-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.4)]"
+                        : "bg-amber-950/40 text-amber-300 border-amber-500/50"
+                    }`}
+                  >
+                    <ShieldCheck className="w-4 h-4" /> 👑 Admin (Marcus) (Bs {configPlatActual.precioRevendedor ?? 10})
+                  </button>
+                )}
               </div>
 
               {tipoComprador === "revendedor" && (
@@ -759,12 +797,28 @@ export default function ModuloVentas({
                     onChange={(e) => handleSelectRevendedor(e.target.value)}
                     className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
                   >
-                    {revendedores.length === 0 && (
-                      <option value="">-- No tienes revendedores creados aún --</option>
-                    )}
                     {revendedores.map((r) => (
                       <option key={r.id} value={r.id}>
                         {r.nombre} — 📞 {r.telefono}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {tipoComprador === "subadmin" && esSuperAdmin && (
+                <div className="bg-amber-950/30 border-2 border-amber-400 rounded-xl p-3 space-y-2">
+                  <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4" /> Seleccionar Usuario Admin Asociado (Se sumará a su cuenta y a su deuda al fíe):
+                  </label>
+                  <select
+                    value={subAdminCompradorId || subAdmins[0]?.id || ""}
+                    onChange={(e) => handleSelectSubAdminComprador(e.target.value)}
+                    className="w-full bg-[#070B06] border border-amber-400 rounded-xl p-2.5 text-amber-200 font-bold text-xs"
+                  >
+                    {subAdmins.map((sa) => (
+                      <option key={sa.id} value={sa.id}>
+                        👑 {sa.nombre} — 📞 {sa.telefono}
                       </option>
                     ))}
                   </select>
@@ -862,28 +916,26 @@ export default function ModuloVentas({
             </div>
 
             {origen === "stock" && !esModoInvitacionActual ? (
-              <div className="bg-[#0B120A] border border-[#233820] rounded-xl p-3.5">
+              <div className="bg-[#0B120A] border border-[#233820] rounded-xl p-3.5 space-y-2">
                 <label className="text-xs text-[#66FF00] font-semibold">
-                  {tipoCuenta === "Cuenta Completa"
-                    ? "Selecciona Matriz 100% Libre (Ocupará todos los perfiles):"
-                    : "Selecciona Matriz Disponible:"}
+                  Selecciona Matriz Disponible:
                 </label>
                 {matricesDisponibles.length === 0 ? (
                   <p className="text-xs text-orange-400 mt-1">
-                    No hay matrices libres en Stock para esta modalidad. Usa modo "Proveedor".
+                    No hay matrices libres en Stock. Cambia al botón "Proveedor" arriba.
                   </p>
                 ) : (
                   <select
                     value={matrizSeleccionadaId || matricesDisponibles[0]?.id || ""}
                     onChange={(e) => setMatrizSeleccionadaId(e.target.value)}
-                    className="w-full mt-1.5 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
+                    className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
                   >
                     {matricesDisponibles.map((m) => {
                       const sig = obtenerSiguientePerfilLibre(m);
                       const esDeMateus = (m.admin_propietario || "admin") === "admin";
                       const tagOwner =
                         adminKeyActual !== "admin" && esDeMateus
-                          ? " [Stock Mateus - Se cobrará cupo]"
+                          ? " [Stock Mateus - Al Fíe]"
                           : " [Mi Stock]";
                       return (
                         <option key={m.id} value={m.id}>
@@ -901,7 +953,9 @@ export default function ModuloVentas({
             ) : (
               <div className="bg-[#0B120A] border border-[#66FF00]/40 rounded-xl p-3.5 space-y-3">
                 <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-[#66FF00]">Proveedor Compartido</label>
+                  <label className="text-xs font-bold text-[#66FF00]">
+                    Proveedor Compartido (Si Marcus elige "Moss Mateus", queda registrado en tu Directorio)
+                  </label>
                   <button
                     type="button"
                     onClick={() => setModalNuevoProv(true)}
@@ -969,23 +1023,13 @@ export default function ModuloVentas({
                     </>
                   )}
                 </div>
-
-                <div>
-                  <label className="text-[11px] text-orange-300">Costo Pagado hoy al Proveedor (Bs)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={costoProveedor}
-                    onChange={(e) => setCostoProveedor(e.target.value)}
-                    className="w-40 mt-1 bg-[#070B06] border border-orange-500/40 rounded-lg p-2 text-xs text-white block"
-                  />
-                </div>
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-[#1E331A]">
+            {/* FILA DE PRECIO DE VENTA, COSTO DE PROVEEDOR (SIEMPRE VISIBLE PARA TI Y MARCUS), PLAN Y FECHA */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
-                <label className="text-xs text-[#66FF00] font-bold">Precio a Cobrar (Bs) *</label>
+                <label className="text-xs text-[#66FF00] font-bold">Precio Cobrado (Bs) *</label>
                 <input
                   type="number"
                   step="0.01"
@@ -996,46 +1040,36 @@ export default function ModuloVentas({
               </div>
 
               <div>
+                <label className="text-xs text-orange-300 font-bold">
+                  Costo Proveedor / Fíe (Bs)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Ej: 4 o 10"
+                  value={costoProveedor}
+                  onChange={(e) => setCostoProveedor(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-orange-500/60 rounded-xl p-2 text-white font-bold text-xs"
+                />
+              </div>
+
+              <div>
                 <label className="text-xs text-[#66FF00] font-bold">
-                  Plan: {diasPersonalizados} días ({meses}M)
+                  Plan: {diasPersonalizados}d ({meses}M)
                 </label>
                 <div className="flex gap-1 mt-1">
-                  {[
-                    { valor: 1, texto: "1M" },
-                    { valor: 2, texto: "2M" },
-                    { valor: 3, texto: "3M" },
-                    { valor: 6, texto: "6M" },
-                    { valor: 12, texto: "1A" }
-                  ].map((op) => (
+                  {[1, 2, 3, 6, 12].map((op) => (
                     <button
-                      key={op.valor}
+                      key={op}
                       type="button"
-                      onClick={() => cambiarDuracionMeses(op.valor)}
+                      onClick={() => cambiarDuracionMeses(op)}
                       className={`flex-1 py-2 rounded-xl text-[10px] font-extrabold border cursor-pointer ${
-                        Number(meses) === op.valor ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                        Number(meses) === op ? "bg-[#66FF00] text-black border-[#66FF00]" : "bg-[#070B06] text-gray-300 border-[#2A4226]"
                       }`}
                     >
-                      {op.texto}
+                      {op === 12 ? "1A" : `${op}M`}
                     </button>
                   ))}
-                </div>
-                <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-                  <input
-                    type="number"
-                    min="1"
-                    value={meses}
-                    onChange={(e) => cambiarDuracionMeses(e.target.value)}
-                    placeholder="Meses"
-                    className="bg-[#070B06] border border-[#2A4226] rounded-lg px-2 py-1 text-xs text-white text-center"
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    value={diasPersonalizados}
-                    onChange={(e) => cambiarDuracionDias(e.target.value)}
-                    placeholder="Días"
-                    className="bg-[#070B06] border border-[#66FF00] rounded-lg px-2 py-1 text-xs text-white font-bold text-center"
-                  />
                 </div>
               </div>
 
@@ -1049,36 +1083,6 @@ export default function ModuloVentas({
                 />
               </div>
             </div>
-
-            {Number(diasPersonalizados) > 30 && (
-              <div className="bg-amber-950/30 border-2 border-amber-500/60 rounded-2xl p-3.5 space-y-2">
-                <p className="text-xs font-black text-amber-300">
-                  📦 Recordatorio de Proveedor (El cliente pagó {diasPersonalizados} días):
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="flex items-center justify-between bg-[#070B06] p-2 rounded-xl border border-amber-500/30">
-                    <span className="text-gray-300">¿Cuántos meses pagaste HOY al proveedor?</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={mesesPagadosProv}
-                      onChange={(e) => setMesesPagadosProv(e.target.value)}
-                      className="w-14 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between bg-[#070B06] p-2 rounded-xl border border-amber-500/30">
-                    <span className="text-gray-300">¿Cada cuántos meses avisarte en Renovaciones?</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={cadaCuantosMesesAvisar}
-                      onChange={(e) => setCadaCuantosMesesAvisar(e.target.value)}
-                      className="w-14 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
 
             <button
               type="button"

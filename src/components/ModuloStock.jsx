@@ -39,7 +39,6 @@ export default function ModuloStock({
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [matrizEditar, setMatrizEditar] = useState(null);
 
-  // Pestaña para que Mateus vea sus propias matrices o las matrices creadas por Marcus/Sub-Admins en otro apartado
   const [vistaPropietarioStock, setVistaPropietarioStock] = useState(adminKeyActual);
 
   const [busquedaStock, setBusquedaStock] = useState("");
@@ -187,7 +186,7 @@ export default function ModuloStock({
       ],
       "",
       "REEMPLAZO DE CUENTA",
-      actualizada.tipo_comprador === "revendedor"
+      actualizada.tipo_comprador === "revendedor" || actualizada.tipo_comprador === "subadmin"
     );
 
     setPerfilModal(null);
@@ -419,7 +418,11 @@ export default function ModuloStock({
       await supabase.from("perfiles_matriz").update({ caido: false }).eq("matriz_id", matriz.id);
     }
     await recargarTodo();
-    notificar(nuevoEstado === "Caida" ? "Matriz marcada como Caída" : "Matriz resuelta");
+    notificar(
+      nuevoEstado === "Caida"
+        ? "Matriz marcada como Caída (Ya tienes habilitado el botón amarillo Dar Reemplazo Matriz)"
+        : "Matriz resuelta"
+    );
   };
 
   const calcularDiasRestantes = (fechaCorte) => {
@@ -429,15 +432,10 @@ export default function ModuloStock({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
-  // Filtra las matrices según el apartado elegido (Mis Matrices vs Matrices de Marcus/Sub-Admins)
   const matricesActivas = matrices.filter((m) => {
     if (m.en_papelera) return false;
     const owner = m.admin_propietario || "admin";
-    if (esSuperAdmin) {
-      return owner === vistaPropietarioStock;
-    }
-    // Marcus ve sus propias matrices y también las de Mateus para poder vender o gestionar
-    return vistaPropietarioStock === "todas" ? true : owner === vistaPropietarioStock;
+    return owner === vistaPropietarioStock;
   });
 
   const matricesFiltradas = matricesActivas.filter((m) => {
@@ -459,7 +457,6 @@ export default function ModuloStock({
 
   return (
     <div className="space-y-5">
-      {/* BARRA DE APARTADOS DE STOCK: MIS MATRICES (MATEUS) VS MATRICES DE MARCUS */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
           <ShieldCheck className="w-4 h-4 text-[#66FF00]" /> Apartado de Matrices:
@@ -500,7 +497,7 @@ export default function ModuloStock({
             <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en este Apartado ({matricesActivas.length})
           </h2>
           <p className="text-xs text-gray-300">
-            Proveedores sincronizados. Toca cualquier personita para ver datos, cambiar PIN o dar reemplazo.
+            El botón de Reemplazo aparece automáticamente cuando marcas como caída una matriz o un perfil.
           </p>
         </div>
         <div className="flex gap-2">
@@ -662,17 +659,20 @@ export default function ModuloStock({
                   <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave / Aviso
                 </button>
 
-                <button
-                  onClick={() => {
-                    setMatrizReemplazarCompleta(matriz);
-                    setNuevoCorreoMatrizReemp(matriz.correo);
-                    setNuevaPassMatrizReemp(matriz.password);
-                    setTextoCrudoMatrizReemp("");
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-xs font-black text-black flex items-center gap-1 cursor-pointer"
-                >
-                  <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo Matriz
-                </button>
+                {/* EL BOTÓN DAR REEMPLAZO MATRIZ SOLO APARECE CUANDO LA MATRIZ ESTÁ CAÍDA */}
+                {matriz.estado === "Caida" && (
+                  <button
+                    onClick={() => {
+                      setMatrizReemplazarCompleta(matriz);
+                      setNuevoCorreoMatrizReemp(matriz.correo);
+                      setNuevaPassMatrizReemp(matriz.password);
+                      setTextoCrudoMatrizReemp("");
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-xs font-black text-black flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(251,191,36,0.4)]"
+                  >
+                    <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo Matriz
+                  </button>
+                )}
 
                 <button
                   onClick={() => setMatrizEditar(matriz)}
@@ -747,7 +747,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL DE PERSONITA */}
+      {/* MODAL DE PERSONITA (EL BOTÓN DE REEMPLAZO SOLO SALE SI ESTÁ CAÍDA) */}
       {perfilModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
@@ -767,18 +767,23 @@ export default function ModuloStock({
               {perfilModal.subOcupante ? (
                 <>
                   <p className="text-sm font-black text-white">
-                    {perfilModal.subOcupante.nombre_cliente} ({perfilModal.subOcupante.tipo_comprador === "revendedor" ? "🤝 Revendedor" : "👤 Cliente"})
+                    {perfilModal.subOcupante.nombre_cliente}
                   </p>
                   <p className="text-xs text-[#66FF00] font-mono">
                     📞 {perfilModal.subOcupante.telefono_cliente} · Vence: {formatearFechaDMA(perfilModal.subOcupante.fecha_corte)}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setModoReemplazoEnPersonita(!modoReemplazoEnPersonita)}
-                    className="w-full py-2 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <RefreshCcw className="w-4 h-4" /> 🔄 Dar Reemplazo a este Cliente
-                  </button>
+                  {/* SOLO SALE DAR REEMPLAZO SI EL PERFIL O LA SUSCRIPCIÓN ESTÁ MARCADA CAÍDA */}
+                  {(perfilModal.perfil.caido ||
+                    perfilModal.matriz.estado === "Caida" ||
+                    perfilModal.subOcupante.estado === "Caida") && (
+                    <button
+                      type="button"
+                      onClick={() => setModoReemplazoEnPersonita(!modoReemplazoEnPersonita)}
+                      className="w-full py-2 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCcw className="w-4 h-4" /> 🔄 Dar Reemplazo a este Cliente
+                    </button>
+                  )}
                 </>
               ) : (
                 <p className="text-xs text-[#66FF00] font-semibold">● Perfil libre (PIN: {pinPerfilEdit})</p>
