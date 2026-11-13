@@ -32,6 +32,7 @@ import {
   BarChart3,
   Wallet,
   Trophy,
+  Trash2,
   TrendingUp,
   Calendar,
   RefreshCw,
@@ -350,7 +351,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // Cuando el revendedor (sea de Mateus o de Marcus) saca un perfil de Stock, la alerta de cobro va al dueño de la Matriz
   const venderPerfilDeMatriz = async (e) => {
     e.preventDefault();
     if (bloqueadoPorDeuda) {
@@ -426,7 +426,6 @@ export default function PortalRevendedor({
 
       await supabase.from("perfiles_matriz").update({ ocupado: true }).eq("id", slot.id);
 
-      // Si sacó de una matriz de Mateus ('admin'), le avisa a Mateus para cobrarle
       await supabase.from("notificaciones_sistema").insert([
         {
           admin_destino: adminDueñoDeEstaMatriz,
@@ -570,6 +569,7 @@ export default function PortalRevendedor({
     }
   };
 
+  // Guarda gasto o ingreso manual en la billetera del revendedor
   const registrarMovimientoPropio = async (e) => {
     e.preventDefault();
     const numBase = parseFloat(montoBanca);
@@ -585,7 +585,7 @@ export default function PortalRevendedor({
         ? -Math.abs(numBase)
         : Math.abs(numBase);
 
-    await supabase.from("movimientos_revendedor").insert([
+    const { error } = await supabase.from("movimientos_revendedor").insert([
       {
         revendedor_id: revendedor.id,
         tipo: montoFinal >= 0 ? "Ingreso Manual" : "Gasto / Retiro",
@@ -593,11 +593,17 @@ export default function PortalRevendedor({
         descripcion: descBanca || (montoFinal >= 0 ? "Ingreso manual" : "Gasto / Retiro")
       }
     ]);
+
+    if (error) {
+      registrarErrorSistema("Movimiento Billetera Revendedor", error.message, revendedor.nombre);
+      return notificar("Error al guardar: " + error.message, "error");
+    }
+
     setMontoBanca("");
     setDescBanca("");
     setModalAjusteBanca(false);
     await recargarTodo();
-    notificar("Movimiento registrado en tu billetera");
+    notificar("¡Movimiento registrado en tu billetera!");
   };
 
   const guardarNombreBilleteraRev = async () => {
@@ -682,6 +688,7 @@ export default function PortalRevendedor({
         </div>
       </div>
 
+      {/* TARJETAS FINANCIERAS CON BOTÓN FUNCIONAL DE REGISTRAR GASTO / INGRESO */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
           <p className="text-[11px] text-gray-400 uppercase font-bold">Total Cobrado ({etiquetaFiltroRev})</p>
@@ -715,14 +722,16 @@ export default function PortalRevendedor({
             <p className="text-2xl font-black text-white mt-1">Bs {saldoBilleteraRevendedor.toFixed(2)}</p>
           </div>
           <button
+            type="button"
             onClick={() => setModalAjusteBanca(true)}
-            className="mt-2 py-1 px-2.5 bg-[#66FF00] text-black font-black rounded-lg text-[11px] cursor-pointer"
+            className="mt-2 py-1.5 px-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-lg text-[11px] cursor-pointer transition"
           >
             + Registrar Gasto / Ingreso
           </button>
         </div>
       </div>
 
+      {/* BARRA DE PESTAÑAS */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#0E170D] p-2 rounded-2xl border border-[#264023]">
         <button
           onClick={() => setTabRev("mis_clientes")}
@@ -1101,7 +1110,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA */}
+      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA (CON HISTORIAL DE MOVIMIENTOS Y BOTÓN NUEVO GASTO/INGRESO) */}
       {tabRev === "estadisticas" && (
         <div className="space-y-5">
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
@@ -1127,6 +1136,22 @@ export default function PortalRevendedor({
                   {p.label}
                 </button>
               ))}
+              {periodoEst === "dia" && (
+                <input
+                  type="date"
+                  value={fechaDiaEst}
+                  onChange={(e) => setFechaDiaEst(e.target.value)}
+                  className="bg-[#070B06] border border-[#66FF00] rounded-xl px-2.5 py-1 text-xs text-white"
+                />
+              )}
+              {periodoEst === "mes" && (
+                <input
+                  type="month"
+                  value={mesEst}
+                  onChange={(e) => setMesEst(e.target.value)}
+                  className="bg-[#070B06] border border-[#66FF00] rounded-xl px-2.5 py-1 text-xs text-white"
+                />
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -1150,6 +1175,17 @@ export default function PortalRevendedor({
             <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
               <TrendingUp className="w-4 h-4" /> Mi Curva Bursátil de Ganancias & Predicción IA
             </h3>
+
+            {puntoSeleccionado && (
+              <div className="bg-[#070B06] border border-[#66FF00]/60 rounded-2xl p-3 flex flex-wrap justify-between items-center gap-2 text-xs text-white">
+                <span className="font-mono font-bold">{formatearFechaDMA(puntoSeleccionado.fecha)}</span>
+                <span>Ventas: <b>{puntoSeleccionado.ventas}</b></span>
+                <span className="text-[#66FF00] font-black">
+                  Ganancia: Bs {puntoSeleccionado.ganancia.toFixed(2)}
+                </span>
+              </div>
+            )}
+
             {puntosSVG.length > 0 && (
               <div className="relative w-full overflow-x-auto">
                 <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-52 select-none overflow-visible">
@@ -1160,10 +1196,268 @@ export default function PortalRevendedor({
                   {rutaLineaPrediccion && (
                     <path d={rutaLineaPrediccion} fill="none" stroke="#22D3EE" strokeWidth="2.5" strokeDasharray="6 4" />
                   )}
+                  {puntosSVG.map((p) => (
+                    <g
+                      key={p.fecha}
+                      onMouseEnter={() => setPuntoActivoIdx(p.idx)}
+                      onClick={() => setPuntoActivoIdx(p.idx)}
+                      className="cursor-pointer"
+                    >
+                      <circle cx={p.x} cy={p.yGan} r="16" fill="transparent" />
+                      <circle cx={p.x} cy={p.yGan} r="4.5" fill={p.esPrediccion ? "#22D3EE" : "#66FF00"} stroke="#070B06" strokeWidth="2" />
+                      <text x={p.x} y={p.yGan - 10} textAnchor="middle" fill="#66FF00" fontSize="9" fontWeight="bold">
+                        {p.ganancia.toFixed(0)}
+                      </text>
+                      <text x={p.x} y={svgHeight - 6} textAnchor="middle" fill="#9CA3AF" fontSize="9">
+                        {formatearFechaDMA(p.fecha).slice(0, 5)}
+                      </text>
+                    </g>
+                  ))}
                 </svg>
               </div>
             )}
           </div>
+
+          {/* HISTORIAL DE GASTOS E INGRESOS MANUALES DE SU BILLETERA */}
+          <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
+                <Wallet className="w-4 h-4" /> Movimientos Manuales en {revendedor.nombre_billetera || "Mi Billetera"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setModalAjusteBanca(true)}
+                className="px-3.5 py-1.5 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs cursor-pointer"
+              >
+                + Nuevo Gasto / Ingreso
+              </button>
+            </div>
+
+            {movimientosRevendedor.length === 0 ? (
+              <p className="text-xs text-gray-500 py-4 text-center">
+                Aún no registraste gastos o ingresos extras en tu billetera.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {movimientosRevendedor.map((m) => (
+                  <div
+                    key={m.id}
+                    className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2.5 flex justify-between items-center text-xs"
+                  >
+                    <div>
+                      <span className="font-bold text-white">{m.tipo}: </span>
+                      <span className="text-gray-300">{m.descripcion}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`font-black ${Number(m.monto) >= 0 ? "text-[#66FF00]" : "text-red-400"}`}>
+                        {Number(m.monto) >= 0 ? `+Bs ${m.monto}` : `-Bs ${Math.abs(m.monto)}`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await supabase.from("movimientos_revendedor").delete().eq("id", m.id);
+                          await recargarTodo();
+                        }}
+                        className="text-gray-500 hover:text-red-400 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL REGISTRAR GASTO / INGRESO EN LA BILLETERA DEL REVENDEDOR            */}
+      {/* ========================================================================= */}
+      {modalAjusteBanca && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <form
+            onSubmit={registrarMovimientoPropio}
+            className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4 animate-modal"
+          >
+            <div className="flex justify-between items-center">
+              <h3 className="font-black text-[#66FF00] text-sm flex items-center gap-2">
+                <Wallet className="w-4 h-4" /> Ajustar Saldo en {revendedor.nombre_billetera || "Mi Billetera"}
+              </h3>
+              <button type="button" onClick={() => setModalAjusteBanca(false)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setTipoMovBanca("gasto")}
+                className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  tipoMovBanca === "gasto"
+                    ? "bg-red-600 text-white border-red-400"
+                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                }`}
+              >
+                ➖ Gasto / Retiro (-)
+              </button>
+              <button
+                type="button"
+                onClick={() => setTipoMovBanca("ingreso")}
+                className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                  tipoMovBanca === "ingreso"
+                    ? "bg-[#66FF00] text-black border-[#66FF00]"
+                    : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                }`}
+              >
+                ➕ Ingreso Extra (+)
+              </button>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400">
+                Monto (Bs) — (Acepta números y signos + / -, bloquea letras)
+              </label>
+              <input
+                type="text"
+                autoComplete="off"
+                placeholder={tipoMovBanca === "gasto" ? "Ej: 15 o -15" : "Ej: 20 o +20"}
+                value={montoBanca}
+                onChange={(e) => setMontoBanca(limpiarMontoConSigno(e.target.value))}
+                className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-sm text-white font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400">Motivo / Descripción</label>
+              <input
+                type="text"
+                placeholder="Ej: Retiro, publicidad o pago"
+                value={descBanca}
+                onChange={(e) => setDescBanca(e.target.value)}
+                className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setModalAjusteBanca(false)}
+                className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL PERSONITA EN MATRIZ */}
+      {perfilPropioModal && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
+          <form
+            onSubmit={guardarEdicionDesdePersonitaMatriz}
+            className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4"
+          >
+            <div className="flex justify-between items-center border-b border-[#233820] pb-2">
+              <h3 className="font-black text-[#66FF00] text-sm">
+                {perfilPropioModal.matriz.plataforma} — {perfilPropioModal.perfil.nombre_perfil}
+              </h3>
+              <button type="button" onClick={() => setPerfilPropioModal(null)} className="text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="text-xs text-gray-400">Nombre de tu Cliente</label>
+                <input
+                  type="text"
+                  value={nomCliEditRev}
+                  onChange={(e) => setNomCliEditRev(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">Teléfono de tu Cliente</label>
+                <input
+                  type="text"
+                  value={telCliEditRev}
+                  onChange={(e) => setTelCliEditRev(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[#66FF00] font-bold">Precio de Venta (Bs)</label>
+                <input
+                  type="text"
+                  value={precioCliEditRev}
+                  onChange={(e) => setPrecioCliEditRev(limpiarMontoConSigno(e.target.value))}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[#66FF00] font-bold">PIN del Perfil</label>
+                <input
+                  type="text"
+                  value={pinEditRev}
+                  onChange={(e) => setPinEditRev(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-mono"
+                />
+              </div>
+            </div>
+
+            <button type="submit" className="w-full py-2.5 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
+              Guardar Cambios
+            </button>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const msg = generarMensajeCambioCredencial(
+                    "PIN de tu perfil",
+                    perfilPropioModal.matriz.plataforma,
+                    perfilPropioModal.matriz.correo,
+                    perfilPropioModal.matriz.password,
+                    perfilPropioModal.perfil.nombre_perfil,
+                    pinEditRev,
+                    revendedor.telefono
+                  );
+                  navigator.clipboard.writeText(msg);
+                  notificar("Aviso corto de cambio de PIN copiado");
+                }}
+                className="py-2.5 bg-purple-600 text-white font-extrabold rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copiar Aviso PIN
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const msg = generarMensajeCambioCredencial(
+                    "PIN de tu perfil",
+                    perfilPropioModal.matriz.plataforma,
+                    perfilPropioModal.matriz.correo,
+                    perfilPropioModal.matriz.password,
+                    perfilPropioModal.perfil.nombre_perfil,
+                    pinEditRev,
+                    revendedor.telefono
+                  );
+                  enviarWhatsappDirecto(telCliEditRev, msg);
+                }}
+                className="py-2.5 bg-[#66FF00] text-black font-extrabold rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" /> Enviar por WhatsApp
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
