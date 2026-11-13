@@ -37,7 +37,8 @@ import {
   Trash2,
   Check,
   Calendar,
-  Truck
+  Truck,
+  Edit3
 } from "lucide-react";
 
 const limpiarMontoConSigno = (val) => {
@@ -74,11 +75,14 @@ export default function MossCRM() {
   const [movimientosRevendedor, setMovimientosRevendedor] = useState([]);
   const [notificaciones, setNotificaciones] = useState([]);
 
+  // Estados del Modal de Banco (Registrar, Editar o Eliminar Gastos/Ingresos)
   const [modalYolo, setModalYolo] = useState(false);
   const [tipoAjusteYolo, setTipoAjusteYolo] = useState("gasto");
   const [montoAjusteYolo, setMontoAjusteYolo] = useState("");
   const [descAjusteYolo, setDescAjusteYolo] = useState("");
   const [afectaGanancia, setAfectaGanancia] = useState(false);
+  const [movEditandoBanco, setMovEditandoBanco] = useState(null);
+  const [confirmEliminarMovId, setConfirmEliminarMovId] = useState(null);
 
   const registrarErrorSistema = useCallback(async (origen, mensajeError, usuarioNombre = "Sistema") => {
     try {
@@ -146,7 +150,8 @@ export default function MossCRM() {
           pidePerfil: p.pide_perfil ?? true,
           pidePin: p.pide_pin ?? true,
           precioCliente: p.precio_cliente ?? 20,
-          precioRevendedor: p.precio_revendedor ?? 10
+          precioRevendedor: p.precio_revendedor ?? 10,
+          precioSubAdmin: p.precio_subadmin ?? p.precio_revendedor ?? 10
         }))
       );
     }
@@ -262,7 +267,6 @@ export default function MossCRM() {
     notificar("Usuario o PIN incorrecto (Verifica tus datos)", "error", false);
   };
 
-  // Las notificaciones de la campana son SOLO para revendedores normales (lo que saca Marcus al fíe va directo a Usuarios Admin)
   const misNotificacionesCobro = notificaciones.filter(
     (n) =>
       n.tipo === "venta_revendedor" &&
@@ -327,14 +331,13 @@ export default function MossCRM() {
     notificar(`¡${pendientes.length} cobros marcados como Pagados (+Bs ${sumaTotal.toFixed(2)})!`);
   };
 
-  // Detecta si una suscripción de Marcus fue sacada del Stock de Mateus o comprada a "Moss Mateus"
   const esCuentaDeMarcusVinculadaAMateus = (s) => {
     if ((s.admin_propietario || "admin") === "admin") return false;
     const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
     const matDeMateus =
       s.matriz_id &&
       (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
-    return provMoss || Boolean(matDeMateus);
+    return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
   };
 
   const misSuscripcionesPropias = suscripciones.filter(
@@ -370,7 +373,6 @@ export default function MossCRM() {
     const cobrado = Number(s.precio_venta || 0);
     if (s.origen === "stock" && s.matriz_id) {
       const mat = matrices.find((m) => m.id === s.matriz_id);
-      // Si Marcus sacó del stock de Mateus, su costo es lo que le debe a Mateus (costo_proveedor)
       if ((s.admin_propietario || "admin") !== "admin" && (mat?.admin_propietario || "admin") === "admin") {
         return cobrado - Number(s.costo_proveedor || 0);
       }
@@ -405,14 +407,10 @@ export default function MossCRM() {
     ventasEnPeriodoTop.reduce((acc, s) => acc + calcularGananciaUnitariaVenta(s), 0) +
     ajustesEnPeriodoTop;
 
-  // =========================================================================
-  // MÉTRICAS DE PROVEEDORES, MATRICES Y FÍE EN EL PERIODO SUPERIOR
-  // =========================================================================
   const gastoMatricesPeriodoTop = misMatricesPropias
     .filter((m) => cumpleFiltroTop(m.fecha_compra))
     .reduce((acc, m) => acc + Number(m.costo_total || 0), 0);
 
-  // Cuánto se fió Marcus de Mateus en este período (Stock de Mateus o Proveedor Moss Mateus)
   const fiadoDeMateusPeriodoTop = esSubAdmin
     ? ventasEnPeriodoTop
         .filter((s) => esCuentaDeMarcusVinculadaAMateus(s))
@@ -425,7 +423,6 @@ export default function MossCRM() {
         .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0)
     : 0;
 
-  // Cuánto pagó a otros proveedores externos en este período
   const pagadoProveedoresExternosTop = ventasEnPeriodoTop
     .filter((s) => !esCuentaDeMarcusVinculadaAMateus(s))
     .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
@@ -489,9 +486,36 @@ export default function MossCRM() {
 
     setMontoAjusteYolo("");
     setDescAjusteYolo("");
-    setModalYolo(false);
     await recargarTodo();
     notificar(`Saldo de ${nombreBilleteraMostrada} actualizado`);
+  };
+
+  // Guardar la edición de un gasto o movimiento existente del banco
+  const guardarEdicionMovimientoBanco = async () => {
+    if (!movEditandoBanco) return;
+    const num = parseFloat(movEditandoBanco.monto);
+    if (isNaN(num)) return notificar("Monto inválido", "error");
+
+    await supabase
+      .from("movimientos_yolo")
+      .update({
+        monto: num,
+        descripcion: movEditandoBanco.descripcion,
+        afecta_ganancia_neta: Boolean(movEditandoBanco.afecta_ganancia_neta)
+      })
+      .eq("id", movEditandoBanco.id);
+
+    setMovEditandoBanco(null);
+    await recargarTodo();
+    notificar("Movimiento de banco actualizado y saldo recalculado");
+  };
+
+  // Eliminar un gasto o movimiento con confirmación y devolver el saldo a como estaba antes
+  const eliminarMovimientoBancoConfirmado = async (idMov) => {
+    await supabase.from("movimientos_yolo").delete().eq("id", idMov);
+    setConfirmEliminarMovId(null);
+    await recargarTodo();
+    notificar("Movimiento eliminado. Tu saldo volvió a como estaba antes.");
   };
 
   const revendedorLogueadoObj =
@@ -689,7 +713,6 @@ export default function MossCRM() {
               </div>
             </div>
 
-            {/* 4 TARJETAS SUPERIORES: INGRESO | GANANCIA NETA | COSTOS PROVEEDOR / FÍE / MATRICES | SALDO */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-[#264023] rounded-2xl p-4 flex items-center justify-between shadow-lg">
                 <div>
@@ -719,7 +742,6 @@ export default function MossCRM() {
                 </div>
               </div>
 
-              {/* TARJETA AL LADO DE GANANCIA NETA: FÍE + PROVEEDORES + GASTO EN MATRICES */}
               <div className="bg-gradient-to-br from-[#121D11] to-[#0B120A] border border-amber-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
                 {esSubAdmin ? (
                   <>
@@ -764,13 +786,13 @@ export default function MossCRM() {
                     <span className="w-2 h-2 rounded-full bg-[#66FF00] animate-ping" /> Saldo en {nombreBilleteraMostrada}
                   </p>
                   <p className="text-2xl font-black text-white mt-1">Bs {saldoActualYolo.toFixed(2)}</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">Saldo total acumulado</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Toca Editar para ver/borrar gastos</p>
                 </div>
                 <button
                   onClick={() => setModalYolo(true)}
                   className="px-3 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl text-xs font-extrabold flex items-center gap-1 cursor-pointer"
                 >
-                  <Edit className="w-3.5 h-3.5" /> Editar
+                  <Edit className="w-3.5 h-3.5" /> Gasto / Editar
                 </button>
               </div>
             </div>
@@ -980,7 +1002,7 @@ export default function MossCRM() {
 
                   {misNotificacionesCobro.length === 0 ? (
                     <p className="text-xs text-gray-500 bg-[#070B06] p-3 rounded-xl">
-                      No hay cobros de revendedores pendientes. (La deuda al fíe de Marcus se gestiona en Ajustes → Usuarios Admin).
+                      No hay cobros de revendedores pendientes.
                     </p>
                   ) : (
                     misNotificacionesCobro.map((n) => (
@@ -1029,84 +1051,232 @@ export default function MossCRM() {
             </div>
           )}
 
+          {/* ========================================================================= */}
+          {/* MODAL DE BANCO: REGISTRAR + EDITAR O ELIMINAR GASTOS / MOVIMIENTOS         */}
+          {/* ========================================================================= */}
           {modalYolo && (
-            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <form
-                onSubmit={registrarAjusteYolo}
-                className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-sm w-full space-y-4 animate-modal"
-              >
-                <div className="flex justify-between items-center">
-                  <h3 className="font-extrabold text-[#66FF00] flex items-center gap-2">
-                    <Wallet className="w-5 h-5" /> Ajustar Saldo en {nombreBilleteraMostrada}
+            <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
+              <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-xl w-full space-y-4 max-h-[92vh] overflow-y-auto animate-modal">
+                <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+                  <h3 className="font-extrabold text-[#66FF00] flex items-center gap-2 text-base">
+                    <Wallet className="w-5 h-5" /> Banco / Billetera ({nombreBilleteraMostrada})
                   </h3>
                   <button type="button" onClick={() => setModalYolo(false)} className="text-gray-400 hover:text-white">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTipoAjusteYolo("gasto")}
-                    className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                      tipoAjusteYolo === "gasto"
-                        ? "bg-red-600 text-white border-red-400"
-                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    ➖ Gasto / Retiro (-)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTipoAjusteYolo("ingreso")}
-                    className={`py-2.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                      tipoAjusteYolo === "ingreso"
-                        ? "bg-[#66FF00] text-black border-[#66FF00]"
-                        : "bg-[#070B06] text-gray-300 border-[#2A4226]"
-                    }`}
-                  >
-                    ➕ Ingreso Extra (+)
-                  </button>
-                </div>
+                {/* FORMULARIO PARA AGREGAR NUEVO GASTO O INGRESO */}
+                <form onSubmit={registrarAjusteYolo} className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3">
+                  <p className="text-xs font-black text-[#66FF00]">+ Registrar Nuevo Gasto o Ingreso</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTipoAjusteYolo("gasto")}
+                      className={`py-2 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                        tipoAjusteYolo === "gasto"
+                          ? "bg-red-600 text-white border-red-400"
+                          : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                      }`}
+                    >
+                      ➖ Gasto / Retiro (-)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTipoAjusteYolo("ingreso")}
+                      className={`py-2 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                        tipoAjusteYolo === "ingreso"
+                          ? "bg-[#66FF00] text-black border-[#66FF00]"
+                          : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                      }`}
+                    >
+                      ➕ Ingreso Extra (+)
+                    </button>
+                  </div>
 
-                <div>
-                  <label className="text-xs text-gray-400">Monto (Bs)</label>
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    placeholder="Ej: 15.50"
-                    value={montoAjusteYolo}
-                    onChange={(e) => setMontoAjusteYolo(limpiarMontoConSigno(e.target.value))}
-                    className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2.5 text-white font-bold"
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      placeholder="Monto (Bs) Ej: 15.50"
+                      value={montoAjusteYolo}
+                      onChange={(e) => setMontoAjusteYolo(limpiarMontoConSigno(e.target.value))}
+                      className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2.5 text-white font-bold text-xs"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Motivo / Descripción"
+                      value={descAjusteYolo}
+                      onChange={(e) => setDescAjusteYolo(e.target.value)}
+                      className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap justify-between items-center gap-2">
+                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={afectaGanancia}
+                        onChange={(e) => setAfectaGanancia(e.target.checked)}
+                      />
+                      ¿Afecta también la Ganancia Neta?
+                    </label>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-black cursor-pointer"
+                    >
+                      Guardar Movimiento
+                    </button>
+                  </div>
+                </form>
+
+                {/* HISTORIAL DE GASTOS Y MOVIMIENTOS PARA EDITAR O ELIMINAR (VUELVE EL SALDO A ANTES) */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-black uppercase text-gray-300">
+                    📜 Historial de Gastos y Movimientos (Editar o Eliminar para restaurar saldo)
+                  </h4>
+
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {misMovimientosBilleteraPropios.length === 0 ? (
+                      <p className="text-xs text-gray-500 text-center py-4">
+                        No hay movimientos registrados en tu banco.
+                      </p>
+                    ) : (
+                      misMovimientosBilleteraPropios.slice(0, 40).map((m) => {
+                        const editandoEste = movEditandoBanco?.id === m.id;
+                        const confirmandoEste = confirmEliminarMovId === m.id;
+
+                        return (
+                          <div
+                            key={m.id}
+                            className="bg-[#070B06] border border-[#1E331A] rounded-2xl p-3 text-xs space-y-2"
+                          >
+                            {editandoEste ? (
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[10px] text-gray-400">
+                                      Monto (Negativo - para gasto, Positivo + para ingreso)
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={movEditandoBanco.monto}
+                                      onChange={(e) =>
+                                        setMovEditandoBanco({
+                                          ...movEditandoBanco,
+                                          monto: limpiarMontoConSigno(e.target.value)
+                                        })
+                                      }
+                                      className="w-full mt-0.5 bg-[#111A10] border border-[#66FF00] rounded-lg p-2 text-white font-bold"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] text-gray-400">Descripción</label>
+                                    <input
+                                      type="text"
+                                      value={movEditandoBanco.descripcion || ""}
+                                      onChange={(e) =>
+                                        setMovEditandoBanco({
+                                          ...movEditandoBanco,
+                                          descripcion: e.target.value
+                                        })
+                                      }
+                                      className="w-full mt-0.5 bg-[#111A10] border border-[#2A4226] rounded-lg p-2 text-white"
+                                    />
+                                  </div>
+                                </div>
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setMovEditandoBanco(null)}
+                                    className="px-3 py-1 bg-gray-800 text-white rounded-lg font-bold"
+                                  >
+                                    Cancelar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={guardarEdicionMovimientoBanco}
+                                    className="px-3.5 py-1 bg-[#66FF00] text-black rounded-lg font-black cursor-pointer"
+                                  >
+                                    Guardar Cambios
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap justify-between items-center gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-bold text-[10px]">
+                                    {m.tipo}
+                                  </span>
+                                  <span className="ml-2 text-gray-500 font-mono text-[10px]">
+                                    {formatearFechaDMA(m.fecha)}
+                                  </span>
+                                  <p className="text-gray-200 font-semibold truncate mt-0.5">
+                                    {m.descripcion}
+                                  </p>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`font-black text-sm ${
+                                      Number(m.monto) >= 0 ? "text-[#66FF00]" : "text-red-400"
+                                    }`}
+                                  >
+                                    {Number(m.monto) >= 0
+                                      ? `+Bs ${Number(m.monto).toFixed(2)}`
+                                      : `-Bs ${Math.abs(Number(m.monto)).toFixed(2)}`}
+                                  </span>
+
+                                  {confirmandoEste ? (
+                                    <div className="flex items-center gap-1 bg-red-950/80 border border-red-500 px-2 py-1 rounded-xl">
+                                      <span className="text-[10px] text-red-200 font-bold mr-1">
+                                        ¿Eliminar?
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => eliminarMovimientoBancoConfirmado(m.id)}
+                                        className="px-2 py-0.5 bg-red-600 text-white rounded font-black text-[10px] cursor-pointer"
+                                      >
+                                        Sí
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmEliminarMovId(null)}
+                                        className="px-2 py-0.5 bg-gray-800 text-gray-300 rounded font-bold text-[10px] cursor-pointer"
+                                      >
+                                        Cancelar
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setMovEditandoBanco(m)}
+                                        className="p-1.5 text-gray-400 hover:text-[#66FF00] cursor-pointer"
+                                        title="Editar monto o motivo"
+                                      >
+                                        <Edit3 className="w-4 h-4" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmEliminarMovId(m.id)}
+                                        className="p-1.5 text-gray-500 hover:text-red-400 cursor-pointer"
+                                        title="Eliminar movimiento y restaurar saldo"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs text-gray-400">Motivo / Descripción</label>
-                  <input
-                    type="text"
-                    placeholder="Ej: Retiro o pago"
-                    value={descAjusteYolo}
-                    onChange={(e) => setDescAjusteYolo(e.target.value)}
-                    className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white"
-                  />
-                </div>
-                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={afectaGanancia}
-                    onChange={(e) => setAfectaGanancia(e.target.checked)}
-                  />
-                  ¿Afecta también la Ganancia Neta?
-                </label>
-                <div className="flex gap-2 pt-2">
-                  <button type="button" onClick={() => setModalYolo(false)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
-                    Cancelar
-                  </button>
-                  <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
-                    Guardar
-                  </button>
-                </div>
-              </form>
+              </div>
             </div>
           )}
         </>

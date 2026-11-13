@@ -74,6 +74,9 @@ export default function ModuloVentas({
   const [costoProveedor, setCostoProveedor] = useState("");
 
   const [precioVenta, setPrecioVenta] = useState("");
+  // Cuando tú (Mateus) le vendes a Marcus con el botón amarillo, puedes definir tanto tu precio a Marcus como a cuánto la vendió él
+  const [precioQueTePagaMarcus, setPrecioQueTePagaMarcus] = useState("");
+
   const [meses, setMeses] = useState(1);
   const [diasPersonalizados, setDiasPersonalizados] = useState(30);
 
@@ -96,8 +99,15 @@ export default function ModuloVentas({
       pidePerfil: true,
       pidePin: true,
       precioCliente: 20,
-      precioRevendedor: 10
+      precioRevendedor: 10,
+      precioSubAdmin: 10
     };
+
+  const obtenerPrecioFijoMarcus = (nombrePlat, cantMeses = 1) => {
+    const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
+    const unitario = Number(cfg?.precioSubAdmin ?? cfg?.precioRevendedor ?? 10);
+    return unitario * Number(cantMeses || 1);
+  };
 
   const perfilesEnCarritoIds = carritoCombo.map((item) => item.perfilIdUsado).filter(Boolean);
   const matricesCompletasEnCarritoIds = carritoCombo
@@ -126,11 +136,25 @@ export default function ModuloVentas({
   const aplicarAtajoPrecio = (nombrePlat, rolComprador, cantMeses = 1) => {
     const cfg = plataformasList.find((p) => p.nombre === nombrePlat);
     if (!cfg) return;
-    const base =
-      rolComprador === "revendedor" || rolComprador === "subadmin"
-        ? Number(cfg.precioRevendedor ?? 10)
-        : Number(cfg.precioCliente ?? 20);
-    setPrecioVenta(String(base * Number(cantMeses || 1)));
+    const m = Number(cantMeses || 1);
+    const pCli = Number(cfg.precioCliente ?? 20) * m;
+    const pRev = Number(cfg.precioRevendedor ?? 10) * m;
+    const pSub = Number(cfg.precioSubAdmin ?? cfg.precioRevendedor ?? 10) * m;
+
+    if (rolComprador === "subadmin") {
+      // Si tú le vendes a Marcus: precio que te debe Marcus = pSub (editable), y precio de catálogo sugerido para la venta de él = pCli
+      setPrecioQueTePagaMarcus(String(pSub));
+      setPrecioVenta(String(pCli));
+    } else if (rolComprador === "revendedor") {
+      setPrecioVenta(String(pRev));
+    } else {
+      setPrecioVenta(String(pCli));
+    }
+
+    // Si es Marcus quien está logueado registrando una venta, pre-llenar su Costo Fíe con su precio fijo configurado
+    if (!esSuperAdmin) {
+      setCostoProveedor(String(pSub));
+    }
   };
 
   const cambiarDuracionMeses = (cantMeses) => {
@@ -150,6 +174,7 @@ export default function ModuloVentas({
     setDiasPersonalizados(d);
     const mAprox = Math.max(1, Math.round(d / 30));
     setMeses(mAprox);
+    aplicarAtajoPrecio(plataforma, tipoComprador, mAprox);
   };
 
   const cambiarTipoComprador = (nuevoTipo) => {
@@ -385,6 +410,8 @@ export default function ModuloVentas({
         ? sumarDiasBoliviaISO(mesesPagProv * 30, fechaBaseStr)
         : fechaCorte;
 
+    const precioFijoMarcusDef = obtenerPrecioFijoMarcus(plataforma, meses);
+
     return {
       tempId: Date.now() + Math.random(),
       plataforma,
@@ -401,6 +428,8 @@ export default function ModuloVentas({
       perfilFinal,
       pinFinal,
       costoFinal,
+      precioFijoMarcus:
+        precioQueTePagaMarcus !== "" ? Number(precioQueTePagaMarcus) : precioFijoMarcusDef,
       precioVenta: Number(precioVenta),
       meses: Number(meses),
       diasTotales,
@@ -458,10 +487,8 @@ export default function ModuloVentas({
       }
 
       for (const item of itemsParaGuardar) {
-        const cfgPlat = plataformasList.find((p) => p.nombre === item.plataforma);
-        const costoMayoristaDefault = Number(cfgPlat?.precioRevendedor ?? 10) * Number(item.meses || 1);
+        const precioFijoMarcusDefault = obtenerPrecioFijoMarcus(item.plataforma, item.meses);
 
-        // ¿Marcus sacó del Stock de Mateus o eligió a "Moss Mateus" como proveedor?
         const sacoDeStockDeMateus =
           adminKeyActual !== "admin" &&
           item.origen === "stock" &&
@@ -473,19 +500,23 @@ export default function ModuloVentas({
           String(item.provNombreFinal || "").toLowerCase().includes("moss");
 
         const esFieDeMarcusAMateus = sacoDeStockDeMateus || eligioProveedorMossMateus;
-
-        // Si tú (Mateus) estás vendiéndole a Marcus con el botón Amarillo ('subadmin')
         const esVentaMiaAMarcus = esSuperAdmin && tipoComprador === "subadmin";
 
-        const costoFieFinal =
-          Number(item.costoFinal) > 0 ? Number(item.costoFinal) : costoMayoristaDefault;
+        // Costo que se le descuenta a Marcus (editable por ti o por él, con el precio fijo a Marcus por defecto)
+        const costoDescontarAMarcus = esVentaMiaAMarcus
+          ? Number(item.precioFijoMarcus ?? precioFijoMarcusDefault)
+          : Number(item.costoFinal) > 0
+          ? Number(item.costoFinal)
+          : precioFijoMarcusDefault;
+
+        const targetAdminPropietario = esVentaMiaAMarcus
+          ? subAdminCompradorId || subAdmins[0]?.id || "admin"
+          : adminKeyActual;
 
         const { data: nuevaSub, error: errSub } = await supabase
           .from("suscripciones")
           .insert([{
-            admin_propietario: esVentaMiaAMarcus
-              ? subAdminCompradorId || subAdmins[0]?.id || "admin"
-              : adminKeyActual,
+            admin_propietario: targetAdminPropietario,
             cliente_id: clienteId,
             tipo_comprador: esVentaMiaAMarcus ? "subadmin" : tipoComprador,
             revendedor_id:
@@ -504,13 +535,11 @@ export default function ModuloVentas({
             password_cuenta: item.passFinal || "",
             nombre_perfil: item.perfilFinal || item.tipoCuenta,
             pin_perfil: item.pinFinal || "",
-            costo_proveedor: esFieDeMarcusAMateus
-              ? costoFieFinal
-              : esVentaMiaAMarcus
-              ? Number(item.precioVenta)
-              : Number(item.costoFinal || 0),
+            costo_proveedor:
+              esFieDeMarcusAMateus || esVentaMiaAMarcus
+                ? costoDescontarAMarcus
+                : Number(item.costoFinal || 0),
             precio_venta: item.precioVenta,
-            // Si fue al fíe de Marcus o le vendiste a Marcus al fíe, queda pendiente en su Deuda al Fíe (sin spamear notificaciones)
             pagado_al_admin: esFieDeMarcusAMateus || esVentaMiaAMarcus ? false : true,
             meses_contratados: item.meses,
             dias_totales: item.diasTotales,
@@ -540,9 +569,9 @@ export default function ModuloVentas({
           }
         }
 
-        // Registrar movimiento en la billetera del Admin correspondiente
+        // Registrar el ingreso de la venta en la billetera del dueño de esa venta
         await supabase.from("movimientos_yolo").insert([{
-          admin_propietario: adminKeyActual,
+          admin_propietario: targetAdminPropietario,
           tipo: "Ingreso Venta",
           monto: Math.abs(Number(item.precioVenta)),
           afecta_ganancia_neta: true,
@@ -550,8 +579,17 @@ export default function ModuloVentas({
           referencia_id: nuevaSub.id
         }]);
 
-        // Si pagó a un proveedor externo (no al fíe de Moss Mateus), descontar el costo de proveedor
-        if (!esFieDeMarcusAMateus && Number(item.costoFinal) > 0) {
+        // Si tú (Mateus) pagaste un costo a tu proveedor externo al conseguirle esa cuenta a Marcus, descontarlo de TU banco
+        if (esVentaMiaAMarcus && Number(item.costoFinal) > 0) {
+          await supabase.from("movimientos_yolo").insert([{
+            admin_propietario: "admin",
+            tipo: "Costo Proveedor",
+            monto: -Math.abs(Number(item.costoFinal)),
+            afecta_ganancia_neta: true,
+            descripcion: `Pago a proveedor ${item.provNombreFinal || "Externo"} por ${item.plataforma} (Vendida a ${nombreCliente.trim()})`,
+            referencia_id: nuevaSub.id
+          }]);
+        } else if (!esFieDeMarcusAMateus && !esVentaMiaAMarcus && Number(item.costoFinal) > 0) {
           await supabase.from("movimientos_yolo").insert([{
             admin_propietario: adminKeyActual,
             tipo: "Costo Proveedor",
@@ -720,7 +758,7 @@ export default function ModuloVentas({
         )}
       </div>
 
-      {/* MODAL REGISTRAR VENTA CON BOTÓN AMARILLO PARA VENDER A MARCUS / ADMIN ASOCIADO */}
+      {/* MODAL REGISTRAR VENTA */}
       {modalVentaAbierto && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50 overflow-y-auto">
           <form
@@ -737,7 +775,6 @@ export default function ModuloVentas({
             </div>
 
             <div className="bg-[#0B120A] border border-[#233820] rounded-2xl p-3.5 space-y-3">
-              {/* SELECTOR DE 3 COLORES: CLIENTE (VERDE) | REVENDEDOR (VERDE) | ADMIN ASOCIADO MARCUS (AMARILLO) */}
               <div className={`grid grid-cols-1 ${esSuperAdmin && subAdmins.length > 0 ? "sm:grid-cols-3" : "sm:grid-cols-2"} gap-2`}>
                 <button
                   type="button"
@@ -773,7 +810,7 @@ export default function ModuloVentas({
                         : "bg-amber-950/40 text-amber-300 border-amber-500/50"
                     }`}
                   >
-                    <ShieldCheck className="w-4 h-4" /> 👑 Admin (Marcus) (Bs {configPlatActual.precioRevendedor ?? 10})
+                    <ShieldCheck className="w-4 h-4" /> 👑 Admin (Marcus) (Fijo Bs {configPlatActual.precioSubAdmin ?? configPlatActual.precioRevendedor ?? 10})
                   </button>
                 )}
               </div>
@@ -807,21 +844,40 @@ export default function ModuloVentas({
               )}
 
               {tipoComprador === "subadmin" && esSuperAdmin && (
-                <div className="bg-amber-950/30 border-2 border-amber-400 rounded-xl p-3 space-y-2">
-                  <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4" /> Seleccionar Usuario Admin Asociado (Se sumará a su cuenta y a su deuda al fíe):
-                  </label>
-                  <select
-                    value={subAdminCompradorId || subAdmins[0]?.id || ""}
-                    onChange={(e) => handleSelectSubAdminComprador(e.target.value)}
-                    className="w-full bg-[#070B06] border border-amber-400 rounded-xl p-2.5 text-amber-200 font-bold text-xs"
-                  >
-                    {subAdmins.map((sa) => (
-                      <option key={sa.id} value={sa.id}>
-                        👑 {sa.nombre} — 📞 {sa.telefono}
-                      </option>
-                    ))}
-                  </select>
+                <div className="bg-amber-950/30 border-2 border-amber-400 rounded-xl p-3 space-y-2.5">
+                  <div className="flex flex-wrap justify-between items-center gap-2">
+                    <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4" /> Venta para Admin Asociado (Se descuenta de su ganancia neta):
+                    </label>
+                    <select
+                      value={subAdminCompradorId || subAdmins[0]?.id || ""}
+                      onChange={(e) => handleSelectSubAdminComprador(e.target.value)}
+                      className="bg-[#070B06] border border-amber-400 rounded-xl px-3 py-1.5 text-amber-200 font-bold text-xs"
+                    >
+                      {subAdmins.map((sa) => (
+                        <option key={sa.id} value={sa.id}>
+                          👑 {sa.nombre} — 📞 {sa.telefono}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* CASILLA EDITABLE DEL PRECIO FIJO AL QUE SE LA DAS A MARCUS */}
+                  <div className="bg-[#070B06] border border-amber-400/60 rounded-xl p-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-amber-200 font-bold">
+                      👑 Precio al que tú se la das a Marcus (Su Costo Fíe editable):
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400">Bs</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={precioQueTePagaMarcus}
+                        onChange={(e) => setPrecioQueTePagaMarcus(e.target.value)}
+                        className="w-24 bg-[#111A10] border-2 border-amber-400 rounded-lg p-1.5 text-center text-amber-300 font-black"
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -928,14 +984,14 @@ export default function ModuloVentas({
                   <select
                     value={matrizSeleccionadaId || matricesDisponibles[0]?.id || ""}
                     onChange={(e) => setMatrizSeleccionadaId(e.target.value)}
-                    className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
+                    className="w-full mt-1.5 bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
                   >
                     {matricesDisponibles.map((m) => {
                       const sig = obtenerSiguientePerfilLibre(m);
                       const esDeMateus = (m.admin_propietario || "admin") === "admin";
                       const tagOwner =
                         adminKeyActual !== "admin" && esDeMateus
-                          ? " [Stock Mateus - Al Fíe]"
+                          ? ` [Stock Mateus - Fíe Bs ${obtenerPrecioFijoMarcus(plataforma, meses)}]`
                           : " [Mi Stock]";
                       return (
                         <option key={m.id} value={m.id}>
@@ -954,7 +1010,7 @@ export default function ModuloVentas({
               <div className="bg-[#0B120A] border border-[#66FF00]/40 rounded-xl p-3.5 space-y-3">
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-bold text-[#66FF00]">
-                    Proveedor Compartido (Si Marcus elige "Moss Mateus", queda registrado en tu Directorio)
+                    Proveedor Compartido
                   </label>
                   <button
                     type="button"
@@ -1026,10 +1082,11 @@ export default function ModuloVentas({
               </div>
             )}
 
-            {/* FILA DE PRECIO DE VENTA, COSTO DE PROVEEDOR (SIEMPRE VISIBLE PARA TI Y MARCUS), PLAN Y FECHA */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-[#1E331A]">
               <div>
-                <label className="text-xs text-[#66FF00] font-bold">Precio Cobrado (Bs) *</label>
+                <label className="text-xs text-[#66FF00] font-bold">
+                  {tipoComprador === "subadmin" ? "A cuánto la vendió Marcus (Bs) *" : "Precio Cobrado (Bs) *"}
+                </label>
                 <input
                   type="number"
                   step="0.01"
@@ -1041,12 +1098,12 @@ export default function ModuloVentas({
 
               <div>
                 <label className="text-xs text-orange-300 font-bold">
-                  Costo Proveedor / Fíe (Bs)
+                  {tipoComprador === "subadmin" ? "Tu Costo de Proveedor (Bs)" : "Costo Proveedor / Fíe (Bs)"}
                 </label>
                 <input
                   type="number"
                   step="0.01"
-                  placeholder="Ej: 4 o 10"
+                  placeholder={`Fijo: Bs ${obtenerPrecioFijoMarcus(plataforma, meses)}`}
                   value={costoProveedor}
                   onChange={(e) => setCostoProveedor(e.target.value)}
                   className="w-full mt-1 bg-[#070B06] border border-orange-500/60 rounded-xl p-2 text-white font-bold text-xs"
@@ -1202,7 +1259,7 @@ export default function ModuloVentas({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(mensajeGenerado.completo);
+                  navigator.clipboard.writeText(mensajeActivo?.completo || mensajeGenerado.completo);
                   notificar("¡Mensaje copiado!");
                 }}
                 className="py-3 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/50 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer"

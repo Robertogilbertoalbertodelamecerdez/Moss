@@ -50,8 +50,9 @@ export default function ModuloConfig({
   const [modalRevendedores, setModalRevendedores] = useState(false);
   const [modalSubAdmins, setModalSubAdmins] = useState(false);
 
-  // Modal para ver todo el Historial al Fíe de un Sub-Admin (Marcus)
   const [subAdminHistorialFie, setSubAdminHistorialFie] = useState(null);
+  const [cuentaFieEditandoId, setCuentaFieEditandoId] = useState(null);
+  const [nuevoCostoFieInput, setNuevoCostoFieInput] = useState("");
 
   const [busquedaProv, setBusquedaProv] = useState("");
   const [busquedaRev, setBusquedaRev] = useState("");
@@ -64,6 +65,7 @@ export default function ModuloConfig({
   const [nuevaPlatCupos, setNuevaPlatCupos] = useState(5);
   const [nuevaPlatPrecioCli, setNuevaPlatPrecioCli] = useState(20);
   const [nuevaPlatPrecioRev, setNuevaPlatPrecioRev] = useState(10);
+  const [nuevaPlatPrecioSubAdmin, setNuevaPlatPrecioSubAdmin] = useState(10);
   const [nuevaPlatPidePass, setNuevaPlatPidePass] = useState(true);
   const [nuevaPlatPidePerfil, setNuevaPlatPidePerfil] = useState(true);
   const [nuevaPlatPidePin, setNuevaPlatPidePin] = useState(false);
@@ -87,7 +89,6 @@ export default function ModuloConfig({
   const [pinSubAdm, setPinSubAdm] = useState("1234");
   const [editSubAdm, setEditSubAdm] = useState(null);
 
-  // Obtiene todas las cuentas que un Sub-Admin (Marcus) sacó al fíe de Mateus (de Stock de Mateus o con proveedor Moss Mateus)
   const obtenerCuentasAlFieDeSubAdmin = (subAdminId) => {
     return suscripciones.filter((s) => {
       if (s.en_papelera) return false;
@@ -100,7 +101,6 @@ export default function ModuloConfig({
     });
   };
 
-  // Liquidar (Cerar) toda la deuda al fíe pendiente de Marcus en 1 clic
   const cerarDeudaAlFieSubAdmin = async (sa) => {
     const pendientes = obtenerCuentasAlFieDeSubAdmin(sa.id).filter(
       (s) => s.pagado_al_admin === false
@@ -133,6 +133,18 @@ export default function ModuloConfig({
     notificar(`¡Deuda al fíe de ${sa.nombre} cerada (+Bs ${totalCobrado.toFixed(2)} en tu banco)!`);
   };
 
+  // Guardar la edición del precio al fíe de una cuenta de Marcus para que su costo y ganancia neta se recalculen bien
+  const guardarNuevoCostoFieCuenta = async (subId) => {
+    const num = Number(nuevoCostoFieInput || 0);
+    await supabase
+      .from("suscripciones")
+      .update({ costo_proveedor: num })
+      .eq("id", subId);
+    setCuentaFieEditandoId(null);
+    await recargarTodo();
+    notificar("Precio al fíe actualizado (Se ajustó automáticamente el costo y ganancia neta de Marcus)");
+  };
+
   const seleccionarModoInvitacionCrear = (modoInv) => {
     setEsPorInvitacion(modoInv);
     if (modoInv) {
@@ -160,6 +172,7 @@ export default function ModuloConfig({
           perfiles_default: esPorInvitacion ? 1 : Number(nuevaPlatCupos || 5),
           precio_cliente: Number(nuevaPlatPrecioCli || 20),
           precio_revendedor: Number(nuevaPlatPrecioRev || 10),
+          precio_subadmin: Number(nuevaPlatPrecioSubAdmin || nuevaPlatPrecioRev || 10),
           tiene_extra_2020: limpio.toLowerCase().includes("netflix"),
           pide_pass: esPorInvitacion ? false : nuevaPlatPidePass,
           pide_perfil: esPorInvitacion ? false : nuevaPlatPidePerfil,
@@ -182,6 +195,7 @@ export default function ModuloConfig({
       perfilesDefault: p.perfilesDefault ?? 5,
       precioCliente: p.precioCliente ?? 20,
       precioRevendedor: p.precioRevendedor ?? 10,
+      precioSubAdmin: p.precioSubAdmin ?? p.precioRevendedor ?? 10,
       pidePass: p.pidePass !== false,
       pidePerfil: p.pidePerfil !== false,
       pidePin: p.pidePin !== false
@@ -197,6 +211,7 @@ export default function ModuloConfig({
       tiene_extra_2020: platEditando.nombre.toLowerCase().includes("netflix"),
       precio_cliente: Number(platEditando.precioCliente || 0),
       precio_revendedor: Number(platEditando.precioRevendedor || 0),
+      precio_subadmin: Number(platEditando.precioSubAdmin ?? platEditando.precioRevendedor ?? 0),
       pide_pass: Boolean(platEditando.pidePass),
       pide_perfil: platEditando.pidePass ? Boolean(platEditando.pidePerfil) : false,
       pide_pin: platEditando.pidePass ? Boolean(platEditando.pidePin) : false
@@ -234,6 +249,7 @@ export default function ModuloConfig({
       tiene_extra_2020: Boolean(p.tieneExtra2020),
       precio_cliente: Number(p.precioCliente ?? 20),
       precio_revendedor: Number(p.precioRevendedor ?? 10),
+      precio_subadmin: Number(p.precioSubAdmin ?? p.precioRevendedor ?? 10),
       pide_pass: p.pidePass !== false,
       pide_perfil: p.pidePerfil !== false,
       pide_pin: p.pidePin !== false
@@ -384,7 +400,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_6.5",
+      version: "MOSS_CRM_7.0",
       sub_admins: saRes.data || [],
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
@@ -451,7 +467,7 @@ export default function ModuloConfig({
             <h3 className="font-black text-white text-sm flex items-center gap-2">
               <Tv className="w-4 h-4 text-[#66FF00]" /> Catálogo ({plataformasList.length})
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Apps, precios y orden</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Precios Cliente, Rev. y Marcus</p>
           </div>
           <button onClick={() => setModalPlataformas(true)} className="px-3.5 py-2 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer">
             Abrir
@@ -508,7 +524,6 @@ export default function ModuloConfig({
         )}
       </div>
 
-      {/* LINK DE COMUNIDAD Y BILLETERA */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-2">
           <h3 className="font-black text-[#66FF00] text-xs flex items-center gap-2">
@@ -585,9 +600,7 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL DE USUARIOS ADMIN (CON DEUDA AL FÍE, BOTÓN CERAR DEUDA E HISTORIAL) */}
-      {/* ========================================================================= */}
+      {/* MODAL USUARIOS ADMIN */}
       {modalSubAdmins && esSuperAdmin && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-3xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
@@ -596,9 +609,6 @@ export default function ModuloConfig({
                 <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
                   <ShieldCheck className="w-5 h-5" /> Usuarios Admin Asociados & Liquidación de Deuda al Fíe
                 </h3>
-                <p className="text-[11px] text-gray-400">
-                  Aquí se acumula automáticamente todo lo que Marcus saca al fíe de tu Stock o te compra como proveedor Moss Mateus.
-                </p>
               </div>
               <button onClick={() => setModalSubAdmins(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -708,7 +718,6 @@ export default function ModuloConfig({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
-                          {/* BOTÓN MARCAR PAGADO Y CERAR DEUDA AL FÍE */}
                           <button
                             type="button"
                             onClick={() => cerarDeudaAlFieSubAdmin(sa)}
@@ -724,7 +733,6 @@ export default function ModuloConfig({
                               : "✓ Deuda en 0"}
                           </button>
 
-                          {/* BOTÓN HISTORIAL AL FÍE */}
                           <button
                             type="button"
                             onClick={() => setSubAdminHistorialFie(sa)}
@@ -758,7 +766,7 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* MODAL DE HISTORIAL COMPLETO DE LO QUE SACÓ AL FÍE MARCUS */}
+      {/* MODAL HISTORIAL AL FÍE CON EDICIÓN DIRECTA DEL COSTO DE CADA CUENTA */}
       {subAdminHistorialFie && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-[60] overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[90vh] overflow-y-auto">
@@ -768,7 +776,7 @@ export default function ModuloConfig({
                   <History className="w-5 h-5" /> Historial de Cuentas al Fíe de {subAdminHistorialFie.nombre}
                 </h3>
                 <p className="text-[11px] text-gray-400">
-                  Muestra todo lo que {subAdminHistorialFie.nombre} sacó de tu Stock o registró con proveedor Moss Mateus.
+                  Puedes tocar "Editar Precio" en cualquier cuenta para ajustar cuánto te paga {subAdminHistorialFie.nombre} y que su ganancia neta se recalcule sola.
                 </p>
               </div>
               <button onClick={() => setSubAdminHistorialFie(null)} className="text-gray-400 hover:text-white">
@@ -782,55 +790,104 @@ export default function ModuloConfig({
                   Aún no hay cuentas registradas al fíe para {subAdminHistorialFie.nombre}.
                 </p>
               ) : (
-                obtenerCuentasAlFieDeSubAdmin(subAdminHistorialFie.id).map((s) => (
-                  <div
-                    key={s.id}
-                    className={`p-3 rounded-2xl border flex flex-wrap justify-between items-center gap-2 text-xs ${
-                      s.pagado_al_admin
-                        ? "bg-[#070B06] border-[#1E331A] opacity-75"
-                        : "bg-amber-950/30 border-amber-400"
-                    }`}
-                  >
-                    <div>
-                      <span className="px-2 py-0.5 rounded bg-amber-400 text-black font-black text-[10px]">
-                        {s.plataforma}
-                      </span>
-                      <span className="ml-2 text-gray-400 font-mono">{formatearFechaDMA(s.fecha_venta)}</span>
-                      <p className="text-white font-bold mt-1">
-                        Cuenta: <span className="font-mono">{s.correo_cuenta}</span> ({s.nombre_perfil}) · Cliente de {subAdminHistorialFie.nombre}: {s.nombre_cliente}
-                      </p>
-                    </div>
+                obtenerCuentasAlFieDeSubAdmin(subAdminHistorialFie.id).map((s) => {
+                  const editandoPrecioEsta = cuentaFieEditandoId === s.id;
+                  const gananciaDeMarcusEnEsta =
+                    Number(s.precio_venta || 0) - Number(s.costo_proveedor || 0);
 
-                    <div className="flex items-center gap-2">
-                      <span className="font-black text-amber-300">
-                        Te paga: Bs {Number(s.costo_proveedor || 0).toFixed(2)}
-                      </span>
-                      {s.pagado_al_admin ? (
-                        <span className="px-2.5 py-1 rounded-lg bg-green-900/40 text-green-300 font-bold">
-                          ✓ Pagado
+                  return (
+                    <div
+                      key={s.id}
+                      className={`p-3 rounded-2xl border flex flex-wrap justify-between items-center gap-2 text-xs ${
+                        s.pagado_al_admin
+                          ? "bg-[#070B06] border-[#1E331A] opacity-80"
+                          : "bg-amber-950/30 border-amber-400"
+                      }`}
+                    >
+                      <div>
+                        <span className="px-2 py-0.5 rounded bg-amber-400 text-black font-black text-[10px]">
+                          {s.plataforma}
                         </span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-black font-black">
-                          ⏳ Pendiente al Fíe
-                        </span>
-                      )}
+                        <span className="ml-2 text-gray-400 font-mono">{formatearFechaDMA(s.fecha_venta)}</span>
+                        <p className="text-white font-bold mt-1">
+                          Cuenta: <span className="font-mono">{s.correo_cuenta}</span> ({s.nombre_perfil}) · Cliente: {s.nombre_cliente}
+                        </p>
+                        <p className="text-[11px] text-gray-400">
+                          Él la vendió en: <b>Bs {Number(s.precio_venta || 0).toFixed(2)}</b> · Su ganancia neta:{" "}
+                          <b className="text-[#66FF00]">Bs {gananciaDeMarcusEnEsta.toFixed(2)}</b>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {editandoPrecioEsta ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={nuevoCostoFieInput}
+                              onChange={(e) => setNuevoCostoFieInput(e.target.value)}
+                              className="w-20 bg-black border border-amber-400 rounded-lg p-1.5 text-center text-white font-black"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => guardarNuevoCostoFieCuenta(s.id)}
+                              className="px-2.5 py-1.5 bg-[#66FF00] text-black font-black rounded-lg cursor-pointer"
+                            >
+                              Guardar
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="font-black text-amber-300">
+                              Su Costo / Fíe: Bs {Number(s.costo_proveedor || 0).toFixed(2)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCuentaFieEditandoId(s.id);
+                                setNuevoCostoFieInput(String(s.costo_proveedor || 0));
+                              }}
+                              className="px-2.5 py-1 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 rounded-lg font-bold cursor-pointer"
+                            >
+                              ✏️ Editar Precio
+                            </button>
+                          </>
+                        )}
+
+                        {s.pagado_al_admin ? (
+                          <span className="px-2.5 py-1 rounded-lg bg-green-900/40 text-green-300 font-bold">
+                            ✓ Pagado
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-black font-black">
+                            ⏳ Debe
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL PLATAFORMAS */}
+      {/* ========================================================================= */}
+      {/* MODAL PLATAFORMAS CON 3 PRECIOS FIJOS (CLIENTE | REVENDEDOR | MARCUS)      */}
+      {/* ========================================================================= */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-3xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
-              <h3 className="font-black text-[#66FF00] text-base">
-                Catálogo de Plataformas, Precios y Orden ({plataformasList.length})
-              </h3>
+              <div>
+                <h3 className="font-black text-[#66FF00] text-base">
+                  Catálogo de Plataformas y Precios Fijos ({plataformasList.length})
+                </h3>
+                <p className="text-[11px] text-gray-400">
+                  Configura el precio fijo de Catálogo Cliente, Revendedor y Admin Asociado (Marcus).
+                </p>
+              </div>
               <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
@@ -858,7 +915,7 @@ export default function ModuloConfig({
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
                 <input
                   type="text"
                   placeholder="Nombre de la App *"
@@ -877,7 +934,7 @@ export default function ModuloConfig({
                 <input
                   type="number"
                   step="0.5"
-                  placeholder="Catálogo Bs"
+                  placeholder="Cliente Bs"
                   value={nuevaPlatPrecioCli}
                   onChange={(e) => setNuevaPlatPrecioCli(e.target.value)}
                   className="bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
@@ -885,10 +942,18 @@ export default function ModuloConfig({
                 <input
                   type="number"
                   step="0.5"
-                  placeholder="Reventa Bs"
+                  placeholder="Rev. Bs"
                   value={nuevaPlatPrecioRev}
                   onChange={(e) => setNuevaPlatPrecioRev(e.target.value)}
                   className="bg-[#111A10] border border-purple-500 rounded-xl p-2 text-xs text-white font-bold"
+                />
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="Marcus Bs"
+                  value={nuevaPlatPrecioSubAdmin}
+                  onChange={(e) => setNuevaPlatPrecioSubAdmin(e.target.value)}
+                  className="bg-[#111A10] border border-amber-400 rounded-xl p-2 text-xs text-amber-300 font-bold"
                 />
               </div>
 
@@ -943,7 +1008,7 @@ export default function ModuloConfig({
                   >
                     {estaEditandoEsta ? (
                       <div className="space-y-3">
-                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
                           <div className="col-span-2">
                             <label className="text-[10px] text-gray-400">Nombre Plataforma</label>
                             <input
@@ -964,7 +1029,7 @@ export default function ModuloConfig({
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] text-[#66FF00] font-bold">Catálogo (Bs)</label>
+                            <label className="text-[10px] text-[#66FF00] font-bold">Cliente (Bs)</label>
                             <input
                               type="number"
                               step="0.5"
@@ -981,6 +1046,16 @@ export default function ModuloConfig({
                               value={platEditando.precioRevendedor}
                               onChange={(e) => setPlatEditando({ ...platEditando, precioRevendedor: e.target.value })}
                               className="w-full mt-0.5 bg-[#111A10] border border-purple-500 rounded-lg p-2 text-xs text-white font-bold text-center"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-amber-300 font-black">👑 Marcus (Bs)</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={platEditando.precioSubAdmin}
+                              onChange={(e) => setPlatEditando({ ...platEditando, precioSubAdmin: e.target.value })}
+                              className="w-full mt-0.5 bg-[#111A10] border-2 border-amber-400 rounded-lg p-2 text-xs text-amber-300 font-black text-center"
                             />
                           </div>
                         </div>
@@ -1004,34 +1079,6 @@ export default function ModuloConfig({
                           >
                             {platEditando.pidePass ? "🔑 Pide Contraseña: SÍ" : "📩 Por Invitación"}
                           </button>
-
-                          {platEditando.pidePass && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => setPlatEditando({ ...platEditando, pidePerfil: !platEditando.pidePerfil })}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                                  platEditando.pidePerfil
-                                    ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                                    : "bg-gray-900 text-gray-400 border-gray-700"
-                                }`}
-                              >
-                                {platEditando.pidePerfil ? "👤 Pide Perfil: SÍ" : "👤 Pide Perfil: NO"}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => setPlatEditando({ ...platEditando, pidePin: !platEditando.pidePin })}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                                  platEditando.pidePin
-                                    ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                                    : "bg-gray-900 text-gray-400 border-gray-700"
-                                }`}
-                              >
-                                {platEditando.pidePin ? "📌 Pide PIN: SÍ" : "📌 Pide PIN: NO"}
-                              </button>
-                            </>
-                          )}
 
                           <div className="ml-auto flex gap-2">
                             <button
@@ -1073,19 +1120,20 @@ export default function ModuloConfig({
                             </button>
                           </div>
 
-                          <div>
-                            <p className="font-black text-white text-sm">
-                              #{idx + 1} {p.nombre}
-                            </p>
-                          </div>
+                          <p className="font-black text-white text-sm">
+                            #{idx + 1} {p.nombre}
+                          </p>
                         </div>
 
-                        <div className="flex items-center gap-2.5">
-                          <span className="px-2.5 py-1 rounded-lg bg-[#122210] border border-[#66FF00]/40 text-[#66FF00] font-bold">
-                            Catálogo: Bs {p.precioCliente ?? 20}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2 py-1 rounded-lg bg-[#122210] border border-[#66FF00]/40 text-[#66FF00] font-bold">
+                            Cliente: Bs {p.precioCliente ?? 20}
                           </span>
-                          <span className="px-2.5 py-1 rounded-lg bg-purple-950/50 border border-purple-500/40 text-purple-300 font-bold">
-                            Revendedor: Bs {p.precioRevendedor ?? 10}
+                          <span className="px-2 py-1 rounded-lg bg-purple-950/50 border border-purple-500/40 text-purple-300 font-bold">
+                            Rev: Bs {p.precioRevendedor ?? 10}
+                          </span>
+                          <span className="px-2 py-1 rounded-lg bg-amber-950/50 border border-amber-400/50 text-amber-300 font-black">
+                            👑 Marcus: Bs {p.precioSubAdmin ?? p.precioRevendedor ?? 10}
                           </span>
 
                           <button

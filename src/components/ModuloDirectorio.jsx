@@ -23,7 +23,6 @@ import {
   Copy,
   CheckCircle2,
   Send,
-  Sparkles,
   ShieldCheck
 } from "lucide-react";
 
@@ -49,6 +48,9 @@ export default function ModuloDirectorio({
 
   const [mensajeActivo, setMensajeActivo] = useState(null);
 
+  // Confirmación antes de eliminar para siempre una cuenta de la Papelera
+  const [confirmarEliminarDefinitivoId, setConfirmarEliminarDefinitivoId] = useState(null);
+
   const [subReemplazo, setSubReemplazo] = useState(null);
   const [origenReemp, setOrigenReemp] = useState("proveedor");
   const [matrizReempId, setMatrizReempId] = useState("");
@@ -73,7 +75,6 @@ export default function ModuloDirectorio({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
-  // Detecta si una venta registrada por un Sub-Admin (Marcus) fue sacada de tu Stock o con proveedor "Moss Mateus"
   const esVentaFieDeSubAdminParaMateus = (s) => {
     const owner = s.admin_propietario || "admin";
     if (owner === "admin") return false;
@@ -306,7 +307,6 @@ export default function ModuloDirectorio({
     });
   };
 
-  // En el Directorio de Mateus ('admin') aparecen TODAS las ventas de Mateus + TODAS las cuentas que Marcus sacó al fíe de Mateus o con proveedor "Moss Mateus"
   const suscripcionesFiltradas = suscripciones
     .filter((s) => {
       const owner = s.admin_propietario || "admin";
@@ -388,6 +388,7 @@ export default function ModuloDirectorio({
         : subEditar.fecha_corte;
 
     const nuevoPrecioCobrado = Number(subEditar.precio_venta ?? 0);
+    const nuevoCostoProvOFie = Number(subEditar.costo_proveedor ?? 0);
 
     let payload = {
       plataforma: subEditar.plataforma,
@@ -399,7 +400,7 @@ export default function ModuloDirectorio({
       nombre_perfil: subEditar.nombre_perfil,
       pin_perfil: subEditar.pin_perfil,
       precio_venta: nuevoPrecioCobrado,
-      costo_proveedor: Number(subEditar.costo_proveedor || 0),
+      costo_proveedor: nuevoCostoProvOFie,
       meses_contratados: mesesFinal,
       dias_totales: diasFinal,
       meses_pagados_proveedor: mesesPagProv,
@@ -466,7 +467,7 @@ export default function ModuloDirectorio({
     setSubEditar(null);
     setMatrizNuevaEdicionId("");
     await recargarTodo();
-    notificar("¡Datos y precio al fíe actualizados!");
+    notificar("¡Precios, costo al fíe y datos actualizados! Su ganancia neta ya se recalculó.");
     if (editada) abrirMensajeDeSuscripcion(editada);
   };
 
@@ -479,7 +480,42 @@ export default function ModuloDirectorio({
     await supabase.from("suscripciones").update({ en_papelera: true, perfil_id: null }).eq("id", s.id);
     await supabase.from("movimientos_yolo").delete().eq("referencia_id", s.id);
     await recargarTodo();
-    notificar("Enviado a papelera");
+    notificar("Cuenta enviada a la papelera");
+  };
+
+  // =========================================================================
+  // RECUPERAR DE LA PAPELERA O ELIMINAR PARA SIEMPRE CON CONFIRMACIÓN
+  // =========================================================================
+  const recuperarCuentaDePapelera = async (s) => {
+    await supabase
+      .from("suscripciones")
+      .update({ en_papelera: false, estado: "Activa" })
+      .eq("id", s.id);
+
+    if (Number(s.precio_venta) > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: s.admin_propietario || adminKeyActual,
+          tipo: "Ingreso Venta",
+          monto: Math.abs(Number(s.precio_venta)),
+          afecta_ganancia_neta: true,
+          descripcion: `Cuenta recuperada de papelera: ${s.plataforma} (${s.nombre_cliente})`,
+          referencia_id: s.id
+        }
+      ]);
+    }
+
+    await recargarTodo();
+    notificar("♻️ ¡Cuenta recuperada de la papelera y restaurada en el Directorio!");
+  };
+
+  const eliminarParaSiempreConfirmado = async (s) => {
+    await supabase.from("movimientos_yolo").delete().eq("referencia_id", s.id);
+    await supabase.from("notificaciones_sistema").delete().eq("suscripcion_id", s.id);
+    await supabase.from("suscripciones").delete().eq("id", s.id);
+    setConfirmarEliminarDefinitivoId(null);
+    await recargarTodo();
+    notificar("🗑️ Cuenta eliminada para siempre de la base de datos.");
   };
 
   return (
@@ -582,6 +618,9 @@ export default function ModuloDirectorio({
             ? subAdmins.find((sa) => sa.id === s.admin_propietario)
             : null;
 
+          const gananciaNetaDeMarcusEnEsta =
+            Number(s.precio_venta || 0) - Number(s.costo_proveedor || 0);
+
           return (
             <div
               key={s.id}
@@ -605,7 +644,7 @@ export default function ModuloDirectorio({
 
                     {esFieDeSubAdmin ? (
                       <span className="px-2.5 py-0.5 text-[11px] font-black rounded-full bg-amber-400 text-black">
-                        👑 Fíe Admin {subAdminObj?.nombre || "Marcus"}: Te paga Bs {Number(s.costo_proveedor || 0).toFixed(1)} (Cobró Bs {s.precio_venta})
+                        👑 Fíe Admin {subAdminObj?.nombre || "Marcus"}: Su Costo Bs {Number(s.costo_proveedor || 0).toFixed(1)} · Cobró Bs {s.precio_venta} (Su Ganancia: Bs {gananciaNetaDeMarcusEnEsta.toFixed(1)})
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-[#182916] text-[#66FF00] border border-[#66FF00]/40">
@@ -671,7 +710,48 @@ export default function ModuloDirectorio({
                 </div>
               </div>
 
-              {!s.en_papelera && (
+              {/* SI ESTÁ EN LA PAPELERA: BOTONES DE RECUPERAR O ELIMINAR PARA SIEMPRE CON CONFIRMACIÓN */}
+              {s.en_papelera ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E331A]">
+                  <button
+                    type="button"
+                    onClick={() => recuperarCuentaDePapelera(s)}
+                    className="px-4 py-2 bg-[#66FF00] hover:bg-[#52cc00] text-black rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4" /> ♻️ Recuperar Cuenta al Directorio
+                  </button>
+
+                  {confirmarEliminarDefinitivoId === s.id ? (
+                    <div className="flex items-center gap-2 bg-red-950/90 border-2 border-red-500 px-3 py-1.5 rounded-xl">
+                      <span className="text-xs font-black text-red-200">
+                        ¿Estás seguro de eliminarla para siempre?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => eliminarParaSiempreConfirmado(s)}
+                        className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-black cursor-pointer"
+                      >
+                        Sí, eliminar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmarEliminarDefinitivoId(null)}
+                        className="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmarEliminarDefinitivoId(s.id)}
+                      className="px-4 py-2 bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-600/60 rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" /> 🗑️ Eliminar para Siempre
+                    </button>
+                  )}
+                </div>
+              ) : (
                 <div className="flex flex-wrap gap-2 pt-2 border-t border-[#1E331A]">
                   <button
                     onClick={() => abrirMensajeDeSuscripcion(s)}
@@ -692,7 +772,7 @@ export default function ModuloDirectorio({
                     }}
                     className="px-3 py-1.5 bg-[#1A2B18] text-white border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Todo (Precio / Fíe / Proveedor)
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar Precios / Costo Fíe / Datos
                   </button>
 
                   <button
@@ -703,7 +783,6 @@ export default function ModuloDirectorio({
                     {s.estado === "Caida" ? "Quitar Caído" : "Marcar Caído"}
                   </button>
 
-                  {/* EL BOTÓN DAR REEMPLAZO SOLO SALE CUANDO LA CUENTA ESTÁ MARCADA COMO CAÍDA */}
                   {s.estado === "Caida" && (
                     <button
                       onClick={() => abrirModalReemplazo(s)}
@@ -732,6 +811,7 @@ export default function ModuloDirectorio({
                   <button
                     onClick={() => enviarAPapelera(s)}
                     className="ml-auto p-1.5 bg-gray-900 text-gray-400 hover:text-red-400 rounded-xl cursor-pointer"
+                    title="Enviar a la Papelera"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -853,7 +933,7 @@ export default function ModuloDirectorio({
         </div>
       )}
 
-      {/* MODAL EDICIÓN TOTAL (PERMITE CAMBIAR ORIGEN, MATRIZ, PROVEEDOR Y PRECIO AL FÍE) */}
+      {/* MODAL EDICIÓN TOTAL */}
       {subEditar && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -949,7 +1029,7 @@ export default function ModuloDirectorio({
 
               <div>
                 <label className="text-[11px] text-amber-300 font-black">
-                  👑 Costo Proveedor / Lo que paga al Fíe (Bs):
+                  👑 Costo Proveedor / Precio al Fíe a Marcus (Bs):
                 </label>
                 <input
                   type="number"
