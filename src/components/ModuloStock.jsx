@@ -23,7 +23,9 @@ import {
   CheckCircle2,
   ShieldCheck,
   FileText,
-  ExternalLink
+  ExternalLink,
+  Trash2,
+  RotateCcw
 } from "lucide-react";
 
 export default function ModuloStock({
@@ -41,11 +43,12 @@ export default function ModuloStock({
   const [modalNuevoProv, setModalNuevoProv] = useState(false);
   const [matrizEditar, setMatrizEditar] = useState(null);
 
-  // Modal rápido de Notas / Código 2FA de cualquier Matriz
   const [matrizNotasModal, setMatrizNotasModal] = useState(null);
   const [textoNotasEditModal, setTextoNotasEditModal] = useState("");
 
   const [vistaPropietarioStock, setVistaPropietarioStock] = useState(adminKeyActual);
+  const [verPapeleraMatrices, setVerPapeleraMatrices] = useState(false);
+  const [confirmarEliminarMatrizId, setConfirmarEliminarMatrizId] = useState(null);
 
   const [busquedaStock, setBusquedaStock] = useState("");
   const [filtroPlatStock, setFiltroPlatStock] = useState("Todas");
@@ -102,6 +105,63 @@ export default function ModuloStock({
     setPassProvReempPersonita("");
     setPerfilProvReempPersonita(perfil.nombre_perfil || "1 Dispositivo");
     setPinProvReempPersonita("");
+  };
+
+  // =========================================================================
+  // ENVIAR A PAPELERA, RECUPERAR O ELIMINAR MATRIZ PARA SIEMPRE CON CONFIRMACIÓN
+  // =========================================================================
+  const enviarMatrizAPapelera = async (matriz) => {
+    await supabase
+      .from("matrices_stock")
+      .update({ en_papelera: true })
+      .eq("id", matriz.id);
+
+    // Elimina el descuento de Costo Matriz de tu banco para devolver tu saldo a como estaba antes
+    await supabase
+      .from("movimientos_yolo")
+      .delete()
+      .eq("referencia_id", matriz.id)
+      .eq("tipo", "Costo Matriz");
+
+    await recargarTodo();
+    notificar("🗑️ Matriz enviada a la Papelera y tu saldo del banco fue restaurado");
+  };
+
+  const recuperarMatrizDePapelera = async (matriz) => {
+    await supabase
+      .from("matrices_stock")
+      .update({ en_papelera: false, estado: "Activa" })
+      .eq("id", matriz.id);
+
+    if (Number(matriz.costo_total) > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: matriz.admin_propietario || adminKeyActual,
+          tipo: "Costo Matriz",
+          monto: -Math.abs(Number(matriz.costo_total)),
+          afecta_ganancia_neta: true,
+          descripcion: `Compra matriz ${matriz.plataforma} (${matriz.correo})`,
+          referencia_id: matriz.id
+        }
+      ]);
+    }
+
+    await recargarTodo();
+    notificar("♻️ Matriz recuperada a tu Stock activo");
+  };
+
+  const eliminarMatrizDefinitivamente = async (matriz) => {
+    await supabase.from("movimientos_yolo").delete().eq("referencia_id", matriz.id);
+    await supabase
+      .from("suscripciones")
+      .update({ matriz_id: null, perfil_id: null, origen: "proveedor" })
+      .eq("matriz_id", matriz.id);
+    await supabase.from("perfiles_matriz").delete().eq("matriz_id", matriz.id);
+    await supabase.from("matrices_stock").delete().eq("id", matriz.id);
+
+    setConfirmarEliminarMatrizId(null);
+    await recargarTodo();
+    notificar("🗑️ Matriz eliminada para siempre de la base de datos");
   };
 
   const guardarNotasRapidasMatriz = async () => {
@@ -316,7 +376,6 @@ export default function ModuloStock({
     }
   };
 
-  // Extrae correo, contraseña y Código 2FA para las Notas de la matriz
   const procesarTextoMatriz = (texto) => {
     setTextoProveedorMatriz(texto);
     const extraido = extraerDatosProveedor(texto);
@@ -402,7 +461,6 @@ export default function ModuloStock({
     }
   };
 
-  // Guarda la edición de la matriz incluyendo cambio de Proveedor y edición de Notas / 2FA
   const guardarEdicionMatriz = async (e) => {
     e.preventDefault();
     const provObj = proveedores.find((p) => p.id === matrizEditar.proveedor_id);
@@ -461,11 +519,15 @@ export default function ModuloStock({
     return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
   };
 
-  const matricesActivas = matrices.filter((m) => {
-    if (m.en_papelera) return false;
-    const owner = m.admin_propietario || "admin";
-    return owner === vistaPropietarioStock;
-  });
+  const matricesDelPropietario = matrices.filter(
+    (m) => (m.admin_propietario || "admin") === vistaPropietarioStock
+  );
+
+  const matricesActivas = matricesDelPropietario.filter((m) =>
+    verPapeleraMatrices ? Boolean(m.en_papelera) : !m.en_papelera
+  );
+
+  const cantidadEnPapelera = matricesDelPropietario.filter((m) => m.en_papelera).length;
 
   const matricesFiltradas = matricesActivas.filter((m) => {
     if (filtroPlatStock !== "Todas" && m.plataforma !== filtroPlatStock) return false;
@@ -494,9 +556,12 @@ export default function ModuloStock({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => setVistaPropietarioStock("admin")}
+            onClick={() => {
+              setVistaPropietarioStock("admin");
+              setVerPapeleraMatrices(false);
+            }}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-              vistaPropietarioStock === "admin"
+              vistaPropietarioStock === "admin" && !verPapeleraMatrices
                 ? "bg-[#66FF00] text-black border-[#66FF00]"
                 : "bg-[#070B06] text-gray-300 border-[#2A4226]"
             }`}
@@ -508,9 +573,12 @@ export default function ModuloStock({
             <button
               key={sa.id}
               type="button"
-              onClick={() => setVistaPropietarioStock(sa.id)}
+              onClick={() => {
+                setVistaPropietarioStock(sa.id);
+                setVerPapeleraMatrices(false);
+              }}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                vistaPropietarioStock === sa.id
+                vistaPropietarioStock === sa.id && !verPapeleraMatrices
                   ? "bg-amber-400 text-black border-amber-400"
                   : "bg-[#070B06] text-amber-300 border-amber-500/40"
               }`}
@@ -518,16 +586,34 @@ export default function ModuloStock({
               🤝 Matrices de {sa.nombre} ({matrices.filter((m) => !m.en_papelera && m.admin_propietario === sa.id).length})
             </button>
           ))}
+
+          {/* BOTÓN DE PAPELERA DE MATRICES */}
+          <button
+            type="button"
+            onClick={() => setVerPapeleraMatrices(!verPapeleraMatrices)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold border flex items-center gap-1.5 cursor-pointer ${
+              verPapeleraMatrices
+                ? "bg-red-600 text-white border-red-400"
+                : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+            }`}
+          >
+            <Trash2 className="w-3.5 h-3.5" /> 🗑️ Papelera ({cantidadEnPapelera})
+          </button>
         </div>
       </div>
 
       <div className="bg-gradient-to-r from-[#162914] to-[#0E180D] border border-[#66FF00]/40 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-black text-white flex items-center gap-2">
-            <Layers className="w-5 h-5 text-[#66FF00]" /> Matrices en este Apartado ({matricesActivas.length})
+            <Layers className="w-5 h-5 text-[#66FF00]" />{" "}
+            {verPapeleraMatrices
+              ? `Papelera de Matrices (${matricesActivas.length})`
+              : `Matrices en este Apartado (${matricesActivas.length})`}
           </h2>
           <p className="text-xs text-gray-300">
-            Usa el botón "📝 Notas / 2FA" en cualquier matriz para copiar el código de 2fa.live o editar sus notas.
+            {verPapeleraMatrices
+              ? "Aquí puedes recuperar una matriz equivocada o eliminarla para siempre de la base de datos."
+              : "Si te equivocaste al crear una matriz, dale al ícono de basurero 🗑️ para borrarla y restaurar tu saldo."}
           </p>
         </div>
         <div className="flex gap-2">
@@ -621,125 +707,205 @@ export default function ModuloStock({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
-                {perfiles.map((p) => {
-                  const subOcupante = suscripciones.find(
-                    (s) => s.perfil_id === p.id && !s.en_papelera && s.estado !== "Reembolsada"
-                  );
+              {!matriz.en_papelera && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
+                  {perfiles.map((p) => {
+                    const subOcupante = suscripciones.find(
+                      (s) => s.perfil_id === p.id && !s.en_papelera && s.estado !== "Reembolsada"
+                    );
 
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => abrirModalPersonita(p, matriz, subOcupante)}
-                      className={`p-2.5 rounded-2xl border text-left transition flex items-center gap-2 cursor-pointer ${
-                        p.caido
-                          ? "bg-red-950/60 border-red-500"
-                          : p.ocupado
-                          ? "bg-[#070B06] border-[#2A4226] hover:border-[#66FF00]"
-                          : "bg-[#142412] border-[#66FF00]/40 hover:border-[#66FF00]"
-                      }`}
-                    >
-                      <div
-                        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border ${
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => abrirModalPersonita(p, matriz, subOcupante)}
+                        className={`p-2.5 rounded-2xl border text-left transition flex items-center gap-2 cursor-pointer ${
                           p.caido
-                            ? "bg-red-900/70 border-red-400 text-red-200"
+                            ? "bg-red-950/60 border-red-500"
                             : p.ocupado
-                            ? "bg-orange-500/15 border-orange-400/50 text-orange-300"
-                            : "bg-[#66FF00]/20 border-[#66FF00] text-[#66FF00]"
+                            ? "bg-[#070B06] border-[#2A4226] hover:border-[#66FF00]"
+                            : "bg-[#142412] border-[#66FF00]/40 hover:border-[#66FF00]"
                         }`}
                       >
-                        {p.caido ? <UserX className="w-4 h-4" /> : p.ocupado ? <UserCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
-                      </div>
+                        <div
+                          className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border ${
+                            p.caido
+                              ? "bg-red-900/70 border-red-400 text-red-200"
+                              : p.ocupado
+                              ? "bg-orange-500/15 border-orange-400/50 text-orange-300"
+                              : "bg-[#66FF00]/20 border-[#66FF00] text-[#66FF00]"
+                          }`}
+                        >
+                          {p.caido ? <UserX className="w-4 h-4" /> : p.ocupado ? <UserCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
+                        </div>
 
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-black text-white truncate">
-                          {p.nombre_perfil} {p.pin ? <span className="text-[#66FF00] font-mono">(PIN {p.pin})</span> : ""}
-                        </p>
-                        {p.caido ? (
-                          <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído (Reemplazar)</p>
-                        ) : p.ocupado && subOcupante ? (
-                          <>
-                            <p className="text-[10px] text-orange-300 font-bold truncate">
-                              {subOcupante.nombre_cliente}
-                            </p>
-                            <p className="text-[10px] text-[#66FF00] font-mono truncate">
-                              📞 {subOcupante.telefono_cliente}
-                            </p>
-                          </>
-                        ) : (
-                          <p className="text-[10px] text-[#66FF00] font-semibold">● Libre</p>
-                        )}
-                      </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-black text-white truncate">
+                            {p.nombre_perfil} {p.pin ? <span className="text-[#66FF00] font-mono">(PIN {p.pin})</span> : ""}
+                          </p>
+                          {p.caido ? (
+                            <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído (Reemplazar)</p>
+                          ) : p.ocupado && subOcupante ? (
+                            <>
+                              <p className="text-[10px] text-orange-300 font-bold truncate">
+                                {subOcupante.nombre_cliente}
+                              </p>
+                              <p className="text-[10px] text-[#66FF00] font-mono truncate">
+                                📞 {subOcupante.telefono_cliente}
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-[10px] text-[#66FF00] font-semibold">● Libre</p>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* SI ESTÁ EN PAPELERA: RECUPERAR O ELIMINAR PARA SIEMPRE CON CONFIRMACIÓN */}
+              {matriz.en_papelera ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E331A]">
+                  <button
+                    type="button"
+                    onClick={() => recuperarMatrizDePapelera(matriz)}
+                    className="px-3.5 py-2 bg-[#66FF00] text-black font-black rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4" /> ♻️ Recuperar Matriz
+                  </button>
+
+                  {confirmarEliminarMatrizId === matriz.id ? (
+                    <div className="flex items-center gap-1.5 bg-red-950/90 border border-red-500 px-3 py-1.5 rounded-xl">
+                      <span className="text-xs font-black text-red-200">¿Eliminar para siempre?</span>
+                      <button
+                        type="button"
+                        onClick={() => eliminarMatrizDefinitivamente(matriz)}
+                        className="px-2.5 py-1 bg-red-600 text-white rounded-lg text-xs font-black cursor-pointer"
+                      >
+                        Sí, eliminar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmarEliminarMatrizId(null)}
+                        className="px-2.5 py-1 bg-gray-800 text-white rounded-lg text-xs font-bold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmarEliminarMatrizId(matriz.id)}
+                      className="px-3.5 py-2 bg-red-950/80 text-red-200 border border-red-600/60 rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" /> 🗑️ Eliminar para Siempre
                     </button>
-                  );
-                })}
-              </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#1E331A]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMatrizNotasModal(matriz);
+                      setTextoNotasEditModal(matriz.notas || "");
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer border ${
+                      matriz.notas
+                        ? "bg-cyan-500 text-black border-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.35)]"
+                        : "bg-[#0B1418] text-cyan-300 border-cyan-500/40"
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" /> 📝 Notas / 2FA
+                  </button>
 
-              <div className="flex flex-wrap gap-2 pt-2 border-t border-[#1E331A]">
-                {/* BOTÓN NOTAS / 2FA SIEMPRE PRESENTE EN CADA MATRIZ */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMatrizNotasModal(matriz);
-                    setTextoNotasEditModal(matriz.notas || "");
-                  }}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer border ${
-                    matriz.notas
-                      ? "bg-cyan-500 text-black border-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.35)]"
-                      : "bg-[#0B1418] text-cyan-300 border-cyan-500/40"
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" /> 📝 Notas / 2FA
-                </button>
-
-                <button
-                  onClick={() => {
-                    setMatrizCambioPass(matriz);
-                    setNuevaPass(matriz.password);
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white flex items-center gap-1 cursor-pointer"
-                >
-                  <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave / Aviso
-                </button>
-
-                {matriz.estado === "Caida" && (
                   <button
                     onClick={() => {
-                      setMatrizReemplazarCompleta(matriz);
-                      setNuevoCorreoMatrizReemp(matriz.correo);
-                      setNuevaPassMatrizReemp(matriz.password);
-                      setTextoCrudoMatrizReemp("");
+                      setMatrizCambioPass(matriz);
+                      setNuevaPass(matriz.password);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-xs font-black text-black flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(251,191,36,0.4)]"
+                    className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white flex items-center gap-1 cursor-pointer"
                   >
-                    <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo Matriz
+                    <KeyRound className="w-3.5 h-3.5" /> Cambiar Clave
                   </button>
-                )}
 
-                <button
-                  onClick={() => setMatrizEditar(matriz)}
-                  className="px-2.5 py-1.5 rounded-lg bg-[#1A2B18] text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
-                >
-                  <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar (Proveedor / Notas)
-                </button>
+                  {matriz.estado === "Caida" && (
+                    <button
+                      onClick={() => {
+                        setMatrizReemplazarCompleta(matriz);
+                        setNuevoCorreoMatrizReemp(matriz.correo);
+                        setNuevaPassMatrizReemp(matriz.password);
+                        setTextoCrudoMatrizReemp("");
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-xs font-black text-black flex items-center gap-1 cursor-pointer shadow-[0_0_15px_rgba(251,191,36,0.4)]"
+                    >
+                      <RefreshCcw className="w-3.5 h-3.5" /> 🔄 Dar Reemplazo Matriz
+                    </button>
+                  )}
 
-                <button
-                  onClick={() => marcarMatrizCaida(matriz)}
-                  className="px-2.5 py-1.5 rounded-lg bg-red-950/60 text-xs text-red-300 border border-red-800/50 flex items-center gap-1 cursor-pointer"
-                >
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  {matriz.estado === "Caida" ? "Quitar Caída" : "Marcar Caída"}
-                </button>
-              </div>
+                  <button
+                    onClick={() => setMatrizEditar(matriz)}
+                    className="px-2.5 py-1.5 rounded-lg bg-[#1A2B18] text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-[#66FF00]" /> Editar
+                  </button>
+
+                  <button
+                    onClick={() => marcarMatrizCaida(matriz)}
+                    className="px-2.5 py-1.5 rounded-lg bg-red-950/60 text-xs text-red-300 border border-red-800/50 flex items-center gap-1 cursor-pointer"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    {matriz.estado === "Caida" ? "Quitar Caída" : "Marcar Caída"}
+                  </button>
+
+                  {/* BOTÓN DE ELIMINAR / ENVIAR A PAPELERA EN CADA MATRIZ */}
+                  {confirmarEliminarMatrizId === matriz.id ? (
+                    <div className="ml-auto flex items-center gap-1 bg-red-950 border border-red-500 px-2 py-1 rounded-xl">
+                      <span className="text-[10px] font-bold text-red-200 mr-1">¿Borrar matriz?</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmarEliminarMatrizId(null);
+                          enviarMatrizAPapelera(matriz);
+                        }}
+                        className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-black cursor-pointer"
+                      >
+                        Sí, a Papelera
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => eliminarMatrizDefinitivamente(matriz)}
+                        className="px-2 py-0.5 bg-amber-400 text-black rounded text-[10px] font-black cursor-pointer"
+                      >
+                        Definitivo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmarEliminarMatrizId(null)}
+                        className="px-2 py-0.5 bg-gray-800 text-white rounded text-[10px] font-bold cursor-pointer"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmarEliminarMatrizId(matriz.id)}
+                      className="ml-auto p-1.5 bg-gray-900 text-gray-400 hover:text-red-400 rounded-xl cursor-pointer"
+                      title="Eliminar Matriz (Restaura tu saldo del banco)"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODAL DE NOTAS / CÓDIGO 2FA PARA COPIAR Y ABRIR 2FA.LIVE EN 1 CLIC        */}
-      {/* ========================================================================= */}
+      {/* MODAL DE NOTAS / CÓDIGO 2FA */}
       {matrizNotasModal && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-cyan-400 rounded-3xl p-6 max-w-md w-full space-y-4 animate-modal">
@@ -1138,9 +1304,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL EDITAR MATRIZ (AHORA CON SELECTOR DE PROVEEDOR Y NOTAS / 2FA)       */}
-      {/* ========================================================================= */}
+      {/* MODAL EDITAR MATRIZ */}
       {matrizEditar && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form onSubmit={guardarEdicionMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-3 animate-modal">
@@ -1243,7 +1407,7 @@ export default function ModuloStock({
         </div>
       )}
 
-      {/* MODAL NUEVA MATRIZ (CON EXTRACTOR DE CÓDIGO 2FA Y CAMPO DE NOTAS) */}
+      {/* MODAL NUEVA MATRIZ */}
       {modalNuevaMatriz && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form onSubmit={crearMatriz} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-xl w-full space-y-3">
