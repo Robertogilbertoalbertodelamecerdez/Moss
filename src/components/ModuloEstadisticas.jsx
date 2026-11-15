@@ -19,7 +19,9 @@ import {
   X,
   Sparkles,
   RotateCcw,
-  ShieldCheck
+  ShieldCheck,
+  Bell,
+  Trash2
 } from "lucide-react";
 
 function armarSerieConPrediccion(mapaPorFecha) {
@@ -86,12 +88,13 @@ export default function ModuloEstadisticas({
 
   const [filtroTipoComprador, setFiltroTipoComprador] = useState("todos");
 
-  // Controles de la Gráfica de Revendedores con su propio filtro Diario / Semanal / Mensual / Histórico
+  // Estadísticas de Revendedores: Total o filtrando quién es cada uno
   const [verEstadisticasRevendedores, setVerEstadisticasRevendedores] = useState(false);
+  const [revendedorSeleccionadoStatsId, setRevendedorSeleccionadoStatsId] = useState("todos");
   const [modoMetricaRevendedores, setModoMetricaRevendedores] = useState("para_mi");
-  const [periodoGraficaRev, setPeriodoGraficaRev] = useState("semana"); // 'dia' | 'semana' | 'mes' | 'todo'
+  const [periodoGraficaRev, setPeriodoGraficaRev] = useState("semana");
 
-  // Botón exclusivo para que Mateus vea las estadísticas de Marcus / Sub-Admins
+  // Panel de Marcus / Sub-Admins
   const [verPanelSubAdmins, setVerPanelSubAdmins] = useState(false);
   const [subAdminInspeccionadoId, setSubAdminInspeccionadoId] = useState("");
 
@@ -180,12 +183,21 @@ export default function ModuloEstadisticas({
     return movimientosYolo.filter((m) => (m.admin_propietario || "admin") === adminEnVista);
   }, [movimientosYolo, adminEnVista]);
 
+  // Lista de revendedores del Admin en vista (Excluye automáticamente a Marcus o cualquier Sub-Admin por nombre/teléfono)
   const revendedoresDelAdminVista = useMemo(() => {
-    return revendedores.filter((r) => (r.admin_propietario || "admin") === adminEnVista);
-  }, [revendedores, adminEnVista]);
+    const telefonosSubAdmins = subAdmins.map((sa) => String(sa.telefono || "").trim());
+    const nombresSubAdmins = subAdmins.map((sa) => String(sa.nombre || "").trim().toLowerCase());
+
+    return revendedores.filter((r) => {
+      if ((r.admin_propietario || "admin") !== adminEnVista) return false;
+      if (telefonosSubAdmins.includes(String(r.telefono || "").trim())) return false;
+      if (nombresSubAdmins.includes(String(r.nombre || "").trim().toLowerCase())) return false;
+      return true;
+    });
+  }, [revendedores, adminEnVista, subAdmins]);
 
   // =========================================================================
-  // TOP 3 DE MEJORES REVENDEDORES (NUNCA DESAPARECE AL LIMPIAR/PAGAR)
+  // RANKING DEL CICLO SEMANAL: MUESTRA QUIÉN ES CADA PUESTO (NOMBRE Y TELÉFONO)
   // =========================================================================
   const rankingSemanalBono = useMemo(() => {
     const mapa = {};
@@ -194,7 +206,8 @@ export default function ModuloEstadisticas({
         ...r,
         ventasSemana: 0,
         ingresoSemana: 0,
-        gananciaNetaParaAdmin: 0
+        gananciaNetaParaAdmin: 0,
+        gananciaDelRevendedorSemana: 0
       };
     });
 
@@ -212,6 +225,7 @@ export default function ModuloEstadisticas({
           target.ventasSemana += 1;
           target.ingresoSemana += Number(s.precio_venta || 0);
           target.gananciaNetaParaAdmin += calcularGananciaAdminDeVenta(s);
+          target.gananciaDelRevendedorSemana += calcularGananciaPropiaDelRevendedor(s);
         }
       });
 
@@ -247,7 +261,6 @@ export default function ModuloEstadisticas({
   const totalProfitSemanalRevendedores = rankingSemanalBono.reduce((acc, r) => acc + r.gananciaNetaParaAdmin, 0);
   const totalBonoSemanalAPagar = ganadoresActivosPodio.reduce((acc, r) => acc + r.bonoCalculado, 0);
 
-  // Al desmarcar o reiniciar los estados de pago, el Top 3 sigue visible con sus ventas de la semana
   const desmarcarPagosBonoSemana = async () => {
     for (const r of revendedoresDelAdminVista) {
       if (r.bono_semanal_pagado || r.mostrar_bono_semanal) {
@@ -261,7 +274,25 @@ export default function ModuloEstadisticas({
       }
     }
     await recargarTodo();
-    notificar("Estados de pago de esta semana restablecidos (El Top 3 sigue visible).");
+    notificar("Estados de pago de esta semana restablecidos.");
+  };
+
+  const toggleMostrarCartelBonoEnPortal = async (revObj) => {
+    const nuevoMostrar = !revObj.mostrar_bono_semanal;
+    await supabase
+      .from("revendedores")
+      .update({
+        mostrar_bono_semanal: nuevoMostrar,
+        monto_bono_semanal: Number(revObj.bonoCalculado.toFixed(2)),
+        ganancia_generada_semana: Number(revObj.gananciaNetaParaAdmin.toFixed(2))
+      })
+      .eq("id", revObj.id);
+    await recargarTodo();
+    notificar(
+      nuevoMostrar
+        ? `🏆 Cartel de premio activado en el portal de ${revObj.nombre}`
+        : `Cartel ocultado en el portal de ${revObj.nombre}`
+    );
   };
 
   const pagarBonoAGanadorTop = async (revObj) => {
@@ -284,7 +315,7 @@ export default function ModuloEstadisticas({
           tipo: `Bono Revendedor Top #${revObj.puesto} (${revObj.pctAplicado}%)`,
           monto: -Math.abs(Number(revObj.bonoCalculado.toFixed(2))),
           afecta_ganancia_neta: true,
-          descripcion: `Pago Bono Semanal Domingo Puesto #${revObj.puesto} (${revObj.pctAplicado}%)`
+          descripcion: `Pago Bono Semanal a ${revObj.nombre} - Puesto #${revObj.puesto} (${revObj.pctAplicado}%)`
         }
       ]);
     }
@@ -292,10 +323,14 @@ export default function ModuloEstadisticas({
     await recargarTodo();
     notificar(
       nuevoEstado
-        ? `Bono del Puesto #${revObj.puesto} marcado como Pagado.`
-        : `Pago del Puesto #${revObj.puesto} desmarcado.`
+        ? `Bono de ${revObj.nombre} (Puesto #${revObj.puesto}) marcado como Pagado.`
+        : `Pago de ${revObj.nombre} desmarcado.`
     );
   };
+
+  const historialBonosPagados = useMemo(() => {
+    return movimientosDelAdminVista.filter((m) => String(m.tipo || "").startsWith("Bono Revendedor"));
+  }, [movimientosDelAdminVista]);
 
   const ventasFiltradas = useMemo(() => {
     return suscripcionesDelAdminVista
@@ -320,9 +355,6 @@ export default function ModuloEstadisticas({
     .reduce((acc, m) => acc + Number(m.monto || 0), 0);
   const saldoTotalBilletera = movimientosDelAdminVista.reduce((acc, m) => acc + Number(m.monto || 0), 0);
 
-  // =========================================================================
-  // MÉTRICAS DE PROVEEDORES, MATRICES Y FÍE DEL ADMIN EN VISTA (MATEUS O MARCUS)
-  // =========================================================================
   const gastoEnMatricesAdminVista = matricesDelAdminVista
     .filter((m) => cumplePeriodoActual(m.fecha_compra))
     .reduce((acc, m) => acc + Number(m.costo_total || 0), 0);
@@ -357,21 +389,36 @@ export default function ModuloEstadisticas({
     return armarSerieConPrediccion(mapa);
   }, [ventasFiltradas, matrices]);
 
-  // =========================================================================
-  // GRÁFICA DE REVENDEDORES REPARADA (CON PUNTOS, FECHAS Y FILTRO DÍA/SEMANA/MES)
-  // =========================================================================
+  // Estadísticas y Gráfica de Revendedores (Permite ver Todos o elegir un Revendedor específico)
   const {
     serie: serieRevendedores,
     prevision30d: previsionRevendedores30d,
     totalProfitParaMiRev,
-    totalGananciaDeEllosRev
+    totalGananciaDeEllosRev,
+    totalVentasRevFiltro
   } = useMemo(() => {
     const mapa = {};
     let sumaProfitParaMi = 0;
     let sumaGananciaDeEllos = 0;
+    let conteoVentas = 0;
+
+    const revObjSeleccionado =
+      revendedorSeleccionadoStatsId !== "todos"
+        ? revendedoresDelAdminVista.find((r) => r.id === revendedorSeleccionadoStatsId)
+        : null;
 
     suscripcionesDelAdminVista
-      .filter((s) => !s.en_papelera && s.tipo_comprador === "revendedor" && cumplePeriodoGraficaRev(s.fecha_venta))
+      .filter((s) => {
+        if (s.en_papelera || s.tipo_comprador !== "revendedor") return false;
+        if (!cumplePeriodoGraficaRev(s.fecha_venta)) return false;
+        if (revObjSeleccionado) {
+          const coincide =
+            s.revendedor_id === revObjSeleccionado.id ||
+            s.telefono_cliente === revObjSeleccionado.telefono;
+          if (!coincide) return false;
+        }
+        return true;
+      })
       .forEach((s) => {
         const f = extraerFechaLocalISO(s.fecha_venta);
         if (!mapa[f]) {
@@ -389,6 +436,7 @@ export default function ModuloEstadisticas({
         const gananciaEl = calcularGananciaPropiaDelRevendedor(s);
         sumaProfitParaMi += profitMio;
         sumaGananciaDeEllos += gananciaEl;
+        conteoVentas += 1;
         mapa[f].ventas += 1;
         mapa[f].gananciaParaAdmin += profitMio;
         mapa[f].gananciaDeEllos += gananciaEl;
@@ -400,9 +448,17 @@ export default function ModuloEstadisticas({
     return {
       ...res,
       totalProfitParaMiRev: sumaProfitParaMi,
-      totalGananciaDeEllosRev: sumaGananciaDeEllos
+      totalGananciaDeEllosRev: sumaGananciaDeEllos,
+      totalVentasRevFiltro: conteoVentas
     };
-  }, [suscripcionesDelAdminVista, matrices, periodoGraficaRev, modoMetricaRevendedores]);
+  }, [
+    suscripcionesDelAdminVista,
+    matrices,
+    periodoGraficaRev,
+    modoMetricaRevendedores,
+    revendedorSeleccionadoStatsId,
+    revendedoresDelAdminVista
+  ]);
 
   const construirGeometriaSVG = (serie, activeIdx) => {
     const svgWidth = 680;
@@ -600,7 +656,7 @@ export default function ModuloEstadisticas({
         )}
       </div>
 
-      {/* 5 TARJETAS COMPLETAS: VENTAS | PROFIT | FÍE + PROVEEDORES + MATRICES | PREVISIÓN | SALDO */}
+      {/* 5 TARJETAS COMPLETAS */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
           <p className="text-[10px] text-gray-400 font-bold uppercase">Cuentas Vendidas</p>
@@ -614,7 +670,6 @@ export default function ModuloEstadisticas({
           <p className="text-[10px] text-gray-400">Neto c/Matrices: Bs {gananciaNetaContablePeriodo.toFixed(2)}</p>
         </div>
 
-        {/* TARJETA DE FÍE DE MATEUS, PROVEEDORES Y GASTOS EN MATRICES */}
         <div className="bg-[#111A10] border border-amber-500/50 rounded-2xl p-4">
           {adminEnVista !== "admin" ? (
             <>
@@ -723,24 +778,37 @@ export default function ModuloEstadisticas({
       </div>
 
       {/* ========================================================================= */}
-      {/* ESTADÍSTICAS GENERALES DE REVENDEDORES (REPARADA + FILTRO DÍA/SEMANA/MES) */}
+      {/* ESTADÍSTICAS DE REVENDEDORES: CON SELECTOR DE REVENDEDOR Y TABLA RANKING  */}
       {/* ========================================================================= */}
       {verEstadisticasRevendedores && (
         <div className="bg-[#111A10] border-2 border-purple-500/40 rounded-3xl p-5 space-y-4 shadow-lg animate-modal">
           <div className="flex flex-wrap justify-between items-center gap-3">
             <div>
               <h3 className="text-sm sm:text-base font-black text-purple-300 uppercase flex items-center gap-2">
-                <Users className="w-5 h-5 text-purple-400" /> Estadísticas Generales de Revendedores ({nombreAdminEnVista})
+                <Users className="w-5 h-5 text-purple-400" /> Estadísticas de Revendedores ({nombreAdminEnVista})
               </h3>
               <p className="text-[11px] text-gray-400">
-                Filtra aquí mismo la ganancia diaria, semanal, mensual o histórica de los revendedores.
+                Elige ver el Total General o selecciona a uno de tus revendedores para ver su rendimiento.
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={revendedorSeleccionadoStatsId}
+                onChange={(e) => setRevendedorSeleccionadoStatsId(e.target.value)}
+                className="bg-[#070B06] border border-purple-400 rounded-xl px-3 py-1.5 text-xs text-purple-200 font-bold"
+              >
+                <option value="todos">📊 Todos los Revendedores ({revendedoresDelAdminVista.length})</option>
+                {revendedoresDelAdminVista.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    🤝 {r.nombre} — 📞 {r.telefono}
+                  </option>
+                ))}
+              </select>
+
               {[
-                { id: "dia", label: "Hoy (Diario)" },
-                { id: "semana", label: "Esta Semana (Lun - Dom)" },
+                { id: "dia", label: "Hoy" },
+                { id: "semana", label: "Esta Semana" },
                 { id: "mes", label: "Este Mes" },
                 { id: "todo", label: "Histórico" }
               ].map((op) => (
@@ -757,7 +825,7 @@ export default function ModuloEstadisticas({
                   {op.label}
                 </button>
               ))}
-              <button onClick={() => setVerEstadisticasRevendedores(false)} className="text-gray-400 hover:text-white ml-2">
+              <button onClick={() => setVerEstadisticasRevendedores(false)} className="text-gray-400 hover:text-white ml-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -771,7 +839,7 @@ export default function ModuloEstadisticas({
               }`}
             >
               <p className="text-[10px] font-black uppercase text-[#66FF00]">
-                🟢 1. Profit Total Generado para Admin
+                🟢 1. Profit Generado para Mí ({totalVentasRevFiltro} vtas)
               </p>
               <p className="text-xl font-black text-white mt-0.5">
                 Bs {totalProfitParaMiRev.toFixed(2)}
@@ -785,7 +853,7 @@ export default function ModuloEstadisticas({
               }`}
             >
               <p className="text-[10px] font-black uppercase text-purple-300">
-                🟣 2. Ganancia Neta Total de Revendedores
+                🟣 2. Ganancia Neta del Revendedor
               </p>
               <p className="text-xl font-black text-white mt-0.5">
                 Bs {totalGananciaDeEllosRev.toFixed(2)}
@@ -805,12 +873,12 @@ export default function ModuloEstadisticas({
           {geoRev.seleccionado && (
             <div className="bg-[#070B06] border border-purple-500/50 rounded-2xl p-3 flex flex-wrap justify-between items-center gap-2 text-xs">
               <span className="font-mono font-bold text-white">{formatearFechaDMA(geoRev.seleccionado.fecha)}</span>
-              <span>Ventas de revendedores: <b>{geoRev.seleccionado.ventas}</b></span>
+              <span>Ventas: <b>{geoRev.seleccionado.ventas}</b></span>
               <span className="text-[#66FF00] font-black">
                 🟢 Profit p/Admin: Bs {Number(geoRev.seleccionado.gananciaParaAdmin ?? geoRev.seleccionado.ganancia).toFixed(2)}
               </span>
               <span className="text-purple-300 font-black">
-                🟣 Ganancia de Ellos: Bs {Number(geoRev.seleccionado.gananciaDeEllos ?? geoRev.seleccionado.ganancia).toFixed(2)}
+                🟣 Ganancia Revendedor: Bs {Number(geoRev.seleccionado.gananciaDeEllos ?? geoRev.seleccionado.ganancia).toFixed(2)}
               </span>
             </div>
           )}
@@ -884,7 +952,9 @@ export default function ModuloEstadisticas({
         </div>
       )}
 
-      {/* MODAL BONO SEMANAL (SIEMPRE MUESTRA EL TOP 3 DE LA SEMANA SIN BORRARLO) */}
+      {/* ========================================================================= */}
+      {/* MODAL BONO SEMANAL: MUESTRA QUIÉN ES CADA PUESTO + PORCENTAJES + TABLA    */}
+      {/* ========================================================================= */}
       {modalBonoAbierto && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto animate-modal">
@@ -913,7 +983,79 @@ export default function ModuloEstadisticas({
               </div>
             </div>
 
-            <div className="space-y-2">
+            {/* CONFIGURAR TOP 1 / TOP 2 / TOP 3 Y PORCENTAJES */}
+            <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex gap-1.5">
+                {[
+                  { n: 1, texto: "🥇 Solo Top 1" },
+                  { n: 2, texto: "🥈 Top 2" },
+                  { n: 3, texto: "🥉 Top 3" }
+                ].map((op) => (
+                  <button
+                    key={op.n}
+                    type="button"
+                    onClick={() => {
+                      setCantidadGanadoresTop(op.n);
+                      localStorage.setItem("moss_top_count", String(op.n));
+                    }}
+                    className={`px-3 py-1.5 rounded-xl font-extrabold border cursor-pointer ${
+                      cantidadGanadoresTop === op.n
+                        ? "bg-amber-400 text-black border-amber-400"
+                        : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                    }`}
+                  >
+                    {op.texto}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-amber-300 font-bold">#1 (%):</span>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={pctTop1}
+                  onChange={(e) => {
+                    setPctTop1(e.target.value);
+                    localStorage.setItem("moss_pct_bono_1", e.target.value);
+                  }}
+                  className="w-12 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
+                />
+                {cantidadGanadoresTop >= 2 && (
+                  <>
+                    <span className="text-gray-300 font-bold">#2 (%):</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={pctTop2}
+                      onChange={(e) => {
+                        setPctTop2(e.target.value);
+                        localStorage.setItem("moss_pct_bono_2", e.target.value);
+                      }}
+                      className="w-12 bg-[#111A10] border border-gray-400 rounded-lg p-1 text-center text-white font-black"
+                    />
+                  </>
+                )}
+                {cantidadGanadoresTop >= 3 && (
+                  <>
+                    <span className="text-orange-300 font-bold">#3 (%):</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={pctTop3}
+                      onChange={(e) => {
+                        setPctTop3(e.target.value);
+                        localStorage.setItem("moss_pct_bono_3", e.target.value);
+                      }}
+                      className="w-12 bg-[#111A10] border border-orange-400 rounded-lg p-1 text-center text-white font-black"
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* GANADORES DEL TOP 3 CON SU NOMBRE, TELÉFONO, VENTAS Y PROFIT GENERADO */}
+            <div className="space-y-2.5">
               {ganadoresActivosPodio.length === 0 ? (
                 <p className="text-xs text-gray-400 bg-[#070B06] p-4 rounded-xl text-center">
                   Aún no hay ventas de revendedores entre el Lunes {formatearFechaDMA(lunesSemanaActualISO)} y el Domingo {formatearFechaDMA(domingoSemanaActualISO)}.
@@ -922,33 +1064,126 @@ export default function ModuloEstadisticas({
                 ganadoresActivosPodio.map((g) => (
                   <div
                     key={g.id}
-                    className="bg-[#070B06] border border-amber-400/50 rounded-2xl p-3.5 flex justify-between items-center text-xs"
+                    className="bg-[#070B06] border border-amber-400/60 rounded-2xl p-3.5 flex flex-wrap justify-between items-center gap-3 text-xs"
                   >
-                    <div>
-                      <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-black font-black text-[10px]">
-                        Puesto #{g.puesto} de la Semana ({g.ventasSemana} vtas)
-                      </span>
-                      <p className="text-amber-300 font-black text-sm mt-1">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-black font-black text-[11px]">
+                          {g.puesto === 1 ? "🥇 Puesto #1" : g.puesto === 2 ? "🥈 Puesto #2" : "🥉 Puesto #3"} ({g.ventasSemana} vtas)
+                        </span>
+                        <span className="text-white font-black text-sm">
+                          {g.nombre}
+                        </span>
+                        <span className="text-[#66FF00] font-mono">
+                          📞 {g.telefono}
+                        </span>
+                      </div>
+
+                      <p className="text-gray-300 text-[11px]">
+                        Me generó de Profit: <b className="text-[#66FF00]">Bs {g.gananciaNetaParaAdmin.toFixed(2)}</b> · Ganancia de él:{" "}
+                        <b className="text-purple-300">Bs {g.gananciaDelRevendedorSemana.toFixed(2)}</b>
+                      </p>
+
+                      <p className="text-amber-300 font-black text-sm">
                         Bono {g.pctAplicado}%: Bs {g.bonoCalculado.toFixed(2)}
                       </p>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => pagarBonoAGanadorTop(g)}
-                      className={`px-4 py-2 rounded-xl font-black border flex items-center gap-1.5 cursor-pointer ${
-                        g.bono_semanal_pagado
-                          ? "bg-green-900/50 text-green-300 border-green-500"
-                          : "bg-amber-400 text-black border-amber-400"
-                      }`}
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      {g.bono_semanal_pagado ? "✓ Pagado" : `Marcar Pagado (Bs ${g.bonoCalculado.toFixed(1)})`}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleMostrarCartelBonoEnPortal(g)}
+                        className={`px-3 py-2 rounded-xl font-bold border flex items-center gap-1 cursor-pointer ${
+                          g.mostrar_bono_semanal
+                            ? "bg-purple-600 text-white border-purple-400"
+                            : "bg-[#111A10] text-gray-300 border-[#2A4226]"
+                        }`}
+                        title="Mostrar cartel de felicidades en el portal del revendedor"
+                      >
+                        <Bell className="w-3.5 h-3.5" />
+                        {g.mostrar_bono_semanal ? "Cartel Activo" : "Avisar en Portal"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => pagarBonoAGanadorTop(g)}
+                        className={`px-4 py-2 rounded-xl font-black border flex items-center gap-1.5 cursor-pointer ${
+                          g.bono_semanal_pagado
+                            ? "bg-green-900/50 text-green-300 border-green-500"
+                            : "bg-amber-400 text-black border-amber-400"
+                        }`}
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        {g.bono_semanal_pagado ? "✓ Pagado" : `Marcar Pagado (Bs ${g.bonoCalculado.toFixed(1)})`}
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
             </div>
+
+            {/* RANKING COMPLETO DE TODOS LOS REVENDEDORES EN LA SEMANA */}
+            <div className="pt-3 border-t border-[#233820] space-y-2">
+              <h4 className="text-xs font-black uppercase text-gray-300">
+                📊 Tabla Completa de Revendedores esta Semana ({rankingSemanalBono.length})
+              </h4>
+              <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                {rankingSemanalBono.map((r) => (
+                  <div
+                    key={r.id}
+                    className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2.5 flex flex-wrap justify-between items-center gap-2 text-xs"
+                  >
+                    <div>
+                      <b className="text-white">#{r.puesto} {r.nombre}</b>{" "}
+                      <span className="text-gray-400 font-mono">({r.telefono})</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span><b>{r.ventasSemana}</b> vtas</span>
+                      <span className="text-[#66FF00] font-bold">
+                        Me generó: Bs {r.gananciaNetaParaAdmin.toFixed(2)}
+                      </span>
+                      <span className="text-purple-300 font-bold">
+                        Ganó él: Bs {r.gananciaDelRevendedorSemana.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* HISTORIAL DE BONOS PAGADOS */}
+            {historialBonosPagados.length > 0 && (
+              <div className="pt-3 border-t border-[#233820] space-y-2">
+                <h4 className="text-xs font-black uppercase text-gray-400">
+                  📜 Historial de Bonos Pagados ({historialBonosPagados.length})
+                </h4>
+                <div className="max-h-36 overflow-y-auto space-y-1.5">
+                  {historialBonosPagados.map((b) => (
+                    <div
+                      key={b.id}
+                      className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2 flex justify-between items-center text-xs"
+                    >
+                      <span className="truncate">
+                        <b className="text-amber-300">{b.descripcion || b.tipo}</b> · {formatearFechaDMA(b.fecha)}
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-black text-white">Bs {Math.abs(Number(b.monto)).toFixed(2)}</span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await supabase.from("movimientos_yolo").delete().eq("id", b.id);
+                            await recargarTodo();
+                          }}
+                          className="text-gray-500 hover:text-red-400 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
