@@ -25,7 +25,8 @@ import {
   FileText,
   ExternalLink,
   Trash2,
-  RotateCcw
+  RotateCcw,
+  PlusCircle
 } from "lucide-react";
 
 export default function ModuloStock({
@@ -49,6 +50,9 @@ export default function ModuloStock({
   const [vistaPropietarioStock, setVistaPropietarioStock] = useState(adminKeyActual);
   const [verPapeleraMatrices, setVerPapeleraMatrices] = useState(false);
   const [confirmarEliminarMatrizId, setConfirmarEliminarMatrizId] = useState(null);
+
+  // Confirmación antes de borrar un perfil individual de una matriz
+  const [confirmarBorrarPerfilId, setConfirmarBorrarPerfilId] = useState(null);
 
   const [busquedaStock, setBusquedaStock] = useState("");
   const [filtroPlatStock, setFiltroPlatStock] = useState("Todas");
@@ -95,6 +99,77 @@ export default function ModuloStock({
     setFechaCompra(new Date().toISOString().split("T")[0]);
   }, []);
 
+  const generarPinAleatorio = () => Math.floor(1000 + Math.random() * 9000).toString();
+
+  // =========================================================================
+  // AGREGAR UN PERFIL EXTRA A UNA MATRIZ EXISTENTE (EJ: DE 15 A 16 EN CHATGPT)
+  // =========================================================================
+  const agregarPerfilExtraAMatriz = async (matriz) => {
+    const perfilesActuales = matriz.perfiles_matriz || [];
+    const maxSlot = perfilesActuales.reduce(
+      (max, p) => Math.max(max, Number(p.numero_slot || 0)),
+      0
+    );
+    const nuevoNumeroSlot = maxSlot + 1;
+    const nuevaCapacidad = perfilesActuales.length + 1;
+
+    const cfgPlat = plataformasList.find((p) => p.nombre === matriz.plataforma);
+    const llevaPin = cfgPlat ? cfgPlat.pidePin !== false : false;
+
+    const { error } = await supabase.from("perfiles_matriz").insert([
+      {
+        matriz_id: matriz.id,
+        numero_slot: nuevoNumeroSlot,
+        nombre_perfil: `Perfil ${nuevoNumeroSlot}`,
+        pin: llevaPin ? generarPinAleatorio() : "",
+        es_extra_final: false,
+        ocupado: false,
+        caido: false
+      }
+    ]);
+
+    if (error) return notificar("Error al agregar perfil: " + error.message, "error");
+
+    await supabase
+      .from("matrices_stock")
+      .update({ capacidad_total: nuevaCapacidad })
+      .eq("id", matriz.id);
+
+    await recargarTodo();
+    notificar(`➕ Perfil ${nuevoNumeroSlot} agregado a ${matriz.plataforma} (Total: ${nuevaCapacidad} cupos)`);
+  };
+
+  // =========================================================================
+  // ELIMINAR UN PERFIL INDIVIDUAL DE UNA MATRIZ CON CONFIRMACIÓN
+  // =========================================================================
+  const eliminarPerfilIndividualConfirmado = async (perfil, matriz) => {
+    // Si había una suscripción vinculada a este slot, desvincular perfil_id para no dar error de llave foránea
+    await supabase
+      .from("suscripciones")
+      .update({ perfil_id: null })
+      .eq("perfil_id", perfil.id);
+
+    const { error } = await supabase
+      .from("perfiles_matriz")
+      .delete()
+      .eq("id", perfil.id);
+
+    if (error) return notificar("Error al eliminar perfil: " + error.message, "error");
+
+    const nuevaCapacidad = Math.max(1, (matriz.perfiles_matriz || []).length - 1);
+    await supabase
+      .from("matrices_stock")
+      .update({ capacidad_total: nuevaCapacidad })
+      .eq("id", matriz.id);
+
+    setConfirmarBorrarPerfilId(null);
+    if (perfilModal?.perfil?.id === perfil.id) {
+      setPerfilModal(null);
+    }
+    await recargarTodo();
+    notificar(`🗑️ ${perfil.nombre_perfil} eliminado de la matriz`);
+  };
+
   const abrirModalPersonita = (perfil, matriz, subOcupante) => {
     setPerfilModal({ perfil, matriz, subOcupante });
     setNombrePerfilEdit(perfil.nombre_perfil || "");
@@ -107,16 +182,12 @@ export default function ModuloStock({
     setPinProvReempPersonita("");
   };
 
-  // =========================================================================
-  // ENVIAR A PAPELERA, RECUPERAR O ELIMINAR MATRIZ PARA SIEMPRE CON CONFIRMACIÓN
-  // =========================================================================
   const enviarMatrizAPapelera = async (matriz) => {
     await supabase
       .from("matrices_stock")
       .update({ en_papelera: true })
       .eq("id", matriz.id);
 
-    // Elimina el descuento de Costo Matriz de tu banco para devolver tu saldo a como estaba antes
     await supabase
       .from("movimientos_yolo")
       .delete()
@@ -385,8 +456,6 @@ export default function ModuloStock({
     notificar("Correo, contraseña y Notas/2FA extraídos limpiamente");
   };
 
-  const generarPinAleatorio = () => Math.floor(1000 + Math.random() * 9000).toString();
-
   const crearMatriz = async (e) => {
     e.preventDefault();
     if (!correo || costoTotal === "") return notificar("Completa correo y costo", "error");
@@ -587,7 +656,6 @@ export default function ModuloStock({
             </button>
           ))}
 
-          {/* BOTÓN DE PAPELERA DE MATRICES */}
           <button
             type="button"
             onClick={() => setVerPapeleraMatrices(!verPapeleraMatrices)}
@@ -611,9 +679,7 @@ export default function ModuloStock({
               : `Matrices en este Apartado (${matricesActivas.length})`}
           </h2>
           <p className="text-xs text-gray-300">
-            {verPapeleraMatrices
-              ? "Aquí puedes recuperar una matriz equivocada o eliminarla para siempre de la base de datos."
-              : "Si te equivocaste al crear una matriz, dale al ícono de basurero 🗑️ para borrarla y restaurar tu saldo."}
+            Usa el botón "+ Agregar Perfil" en cualquier matriz si necesitas meter 1 cupo extra, o el basurero 🗑️ de cada perfil para borrarlo con confirmación.
           </p>
         </div>
         <div className="flex gap-2">
@@ -683,7 +749,7 @@ export default function ModuloStock({
                 matriz.estado === "Caida" ? "border-2 border-red-500 bg-red-950/15" : "border-[#233820]"
               }`}
             >
-              <div className="flex justify-between items-start">
+              <div className="flex justify-between items-start gap-2">
                 <div>
                   <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
                     {matriz.plataforma}
@@ -697,29 +763,41 @@ export default function ModuloStock({
                   </p>
                 </div>
 
-                <div className="text-right">
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-[#66FF00]/15 text-[#66FF00]">
-                    {libres} / {perfiles.length} Libres
-                  </span>
-                  <p className="text-xs mt-1 text-gray-400">
+                <div className="text-right space-y-1">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-[#66FF00]/15 text-[#66FF00]">
+                      {libres} / {perfiles.length} Libres
+                    </span>
+                    {!matriz.en_papelera && (
+                      <button
+                        type="button"
+                        onClick={() => agregarPerfilExtraAMatriz(matriz)}
+                        className="px-2.5 py-1 rounded-lg bg-[#66FF00] hover:bg-[#52cc00] text-black font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-[0_0_10px_rgba(102,255,0,0.3)]"
+                        title="Agregar 1 perfil extra a esta matriz"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" /> + Perfil
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400">
                     Vence: {formatearFechaDMA(matriz.fecha_corte_matriz)} ({diasVida}d)
                   </p>
                 </div>
               </div>
 
+              {/* GRILLA DE PERFILES CON BOTÓN DE BASURERO 🗑️ Y CONFIRMACIÓN SÍ / NO EN CADA PERFIL */}
               {!matriz.en_papelera && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                   {perfiles.map((p) => {
                     const subOcupante = suscripciones.find(
                       (s) => s.perfil_id === p.id && !s.en_papelera && s.estado !== "Reembolsada"
                     );
+                    const pidiendoConfirmarEste = confirmarBorrarPerfilId === p.id;
 
                     return (
-                      <button
+                      <div
                         key={p.id}
-                        type="button"
-                        onClick={() => abrirModalPersonita(p, matriz, subOcupante)}
-                        className={`p-2.5 rounded-2xl border text-left transition flex items-center gap-2 cursor-pointer ${
+                        className={`relative p-2.5 rounded-2xl border text-left transition flex items-center gap-2 ${
                           p.caido
                             ? "bg-red-950/60 border-red-500"
                             : p.ocupado
@@ -727,44 +805,94 @@ export default function ModuloStock({
                             : "bg-[#142412] border-[#66FF00]/40 hover:border-[#66FF00]"
                         }`}
                       >
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border ${
-                            p.caido
-                              ? "bg-red-900/70 border-red-400 text-red-200"
-                              : p.ocupado
-                              ? "bg-orange-500/15 border-orange-400/50 text-orange-300"
-                              : "bg-[#66FF00]/20 border-[#66FF00] text-[#66FF00]"
-                          }`}
-                        >
-                          {p.caido ? <UserX className="w-4 h-4" /> : p.ocupado ? <UserCheck className="w-4 h-4" /> : <User className="w-4 h-4" />}
-                        </div>
+                        {pidiendoConfirmarEste ? (
+                          <div className="w-full flex flex-col items-center justify-center gap-1 py-0.5 text-center">
+                            <span className="text-[10px] font-black text-red-300">
+                              ¿Borrar {p.nombre_perfil}?
+                            </span>
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => eliminarPerfilIndividualConfirmado(p, matriz)}
+                                className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-black cursor-pointer"
+                              >
+                                Sí
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmarBorrarPerfilId(null)}
+                                className="px-2 py-0.5 bg-gray-800 text-gray-200 rounded text-[10px] font-bold cursor-pointer"
+                              >
+                                No
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              onClick={() => abrirModalPersonita(p, matriz, subOcupante)}
+                              className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer"
+                            >
+                              <div
+                                className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 border ${
+                                  p.caido
+                                    ? "bg-red-900/70 border-red-400 text-red-200"
+                                    : p.ocupado
+                                    ? "bg-orange-500/15 border-orange-400/50 text-orange-300"
+                                    : "bg-[#66FF00]/20 border-[#66FF00] text-[#66FF00]"
+                                }`}
+                              >
+                                {p.caido ? (
+                                  <UserX className="w-3.5 h-3.5" />
+                                ) : p.ocupado ? (
+                                  <UserCheck className="w-3.5 h-3.5" />
+                                ) : (
+                                  <User className="w-3.5 h-3.5" />
+                                )}
+                              </div>
 
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-black text-white truncate">
-                            {p.nombre_perfil} {p.pin ? <span className="text-[#66FF00] font-mono">(PIN {p.pin})</span> : ""}
-                          </p>
-                          {p.caido ? (
-                            <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído (Reemplazar)</p>
-                          ) : p.ocupado && subOcupante ? (
-                            <>
-                              <p className="text-[10px] text-orange-300 font-bold truncate">
-                                {subOcupante.nombre_cliente}
-                              </p>
-                              <p className="text-[10px] text-[#66FF00] font-mono truncate">
-                                📞 {subOcupante.telefono_cliente}
-                              </p>
-                            </>
-                          ) : (
-                            <p className="text-[10px] text-[#66FF00] font-semibold">● Libre</p>
-                          )}
-                        </div>
-                      </button>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[11px] font-black text-white truncate">
+                                  {p.nombre_perfil}{" "}
+                                  {p.pin ? <span className="text-[#66FF00] font-mono">({p.pin})</span> : ""}
+                                </p>
+                                {p.caido ? (
+                                  <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído</p>
+                                ) : p.ocupado && subOcupante ? (
+                                  <>
+                                    <p className="text-[10px] text-orange-300 font-bold truncate">
+                                      {subOcupante.nombre_cliente}
+                                    </p>
+                                    <p className="text-[9px] text-[#66FF00] font-mono truncate">
+                                      📞 {subOcupante.telefono_cliente}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <p className="text-[10px] text-[#66FF00] font-semibold">● Libre</p>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* BASURERO EN CADA PERFIL CON CONFIRMACIÓN */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmarBorrarPerfilId(p.id);
+                              }}
+                              className="p-1 text-gray-500 hover:text-red-400 shrink-0 cursor-pointer"
+                              title={`Eliminar ${p.nombre_perfil}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
               )}
 
-              {/* SI ESTÁ EN PAPELERA: RECUPERAR O ELIMINAR PARA SIEMPRE CON CONFIRMACIÓN */}
               {matriz.en_papelera ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E331A]">
                   <button
@@ -805,6 +933,14 @@ export default function ModuloStock({
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#1E331A]">
+                  <button
+                    type="button"
+                    onClick={() => agregarPerfilExtraAMatriz(matriz)}
+                    className="px-2.5 py-1.5 rounded-lg bg-[#162914] hover:bg-[#66FF00] text-[#66FF00] hover:text-black border border-[#66FF00]/50 text-xs font-extrabold flex items-center gap-1 cursor-pointer"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" /> + Agregar Perfil
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -859,7 +995,6 @@ export default function ModuloStock({
                     {matriz.estado === "Caida" ? "Quitar Caída" : "Marcar Caída"}
                   </button>
 
-                  {/* BOTÓN DE ELIMINAR / ENVIAR A PAPELERA EN CADA MATRIZ */}
                   {confirmarEliminarMatrizId === matriz.id ? (
                     <div className="ml-auto flex items-center gap-1 bg-red-950 border border-red-500 px-2 py-1 rounded-xl">
                       <span className="text-[10px] font-bold text-red-200 mr-1">¿Borrar matriz?</span>
@@ -871,7 +1006,7 @@ export default function ModuloStock({
                         }}
                         className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-black cursor-pointer"
                       >
-                        Sí, a Papelera
+                        Papelera
                       </button>
                       <button
                         type="button"
