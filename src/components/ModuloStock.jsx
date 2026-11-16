@@ -489,6 +489,10 @@ export default function ModuloStock({
 
       if (errMatriz) throw errMatriz;
 
+      const cfgPlat = plataformasList.find((p) => p.nombre === plataforma);
+      const usaPinEstaPlat =
+        !plataforma.toLowerCase().includes("chat") &&
+        (cfgPlat ? cfgPlat.pidePin !== false : true);
       const esNetflix = plataforma.toLowerCase().includes("netflix") && Number(capacidad) === 6;
       const perfilesInsertar = [];
       for (let i = 1; i <= Number(capacidad); i++) {
@@ -496,7 +500,7 @@ export default function ModuloStock({
           matriz_id: nuevaMatriz.id,
           numero_slot: i,
           nombre_perfil: esNetflix && i === 6 ? "Perfil 1 (Extra)" : `Perfil ${i}`,
-          pin: esNetflix && i === 6 ? "2020" : generarPinAleatorio(),
+          pin: !usaPinEstaPlat ? "" : esNetflix && i === 6 ? "2020" : generarPinAleatorio(),
           es_extra_final: esNetflix && i === 6,
           ocupado: false,
           caido: false

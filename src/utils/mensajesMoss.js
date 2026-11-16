@@ -22,7 +22,27 @@ function obtenerTextoPlanDias(item) {
   return `${dias} ${dias === 1 ? "día" : "días"}`;
 }
 
-// Construye las Reglas y Garantía adaptadas según la plataforma y modalidad (Spotify Invitación, ChatGPT Plus, Cuenta Completa o 1 Dispositivo)
+// Plataformas donde no existen PINs de perfil (solo se muestra el nombre del perfil si aplica, nunca PIN)
+function plataformaUsaPin(nombrePlataforma = "") {
+  const p = String(nombrePlataforma || "").toLowerCase();
+  if (
+    p.includes("chat") ||
+    p.includes("gpt") ||
+    p.includes("crunchy") ||
+    p.includes("flujo") ||
+    p.includes("iptv") ||
+    p.includes("capcut") ||
+    p.includes("canva") ||
+    p.includes("claude") ||
+    p.includes("gemini") ||
+    p.includes("youtube") ||
+    p.includes("spotify")
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function construirBloqueReglasGarantia(listaItems) {
   const hayUnDispositivo = listaItems.some(
     (i) =>
@@ -62,7 +82,6 @@ function construirBloqueReglasGarantia(listaItems) {
   return "\n\n" + lineas.join("\n");
 }
 
-// Formatea las líneas de cada cuenta (detectando si es Spotify Invitación con Link + Calle + Correo + Nombre de Perfil)
 function armarDetalleCuentaTexto(item, esCombo, idx, paraRevendedor = false) {
   const textoPlan = obtenerTextoPlanDias(item);
   const vence = formatearFechaDMA(item.fechaCorte);
@@ -75,7 +94,6 @@ function armarDetalleCuentaTexto(item, esCombo, idx, paraRevendedor = false) {
     ? `🔹 *${paraRevendedor ? `CUENTA #${idx + 1}: ` : `#${idx + 1} `}${item.plataforma.toUpperCase()}*`
     : `📺 *Plataforma:* ${item.plataforma}`;
 
-  // Caso especial: Spotify por Invitación (Correo cliente, Nombre del perfil de Spotify, Link de invitación y Calle/Dirección)
   if (esSpotifyInv) {
     const correoCli = item.correoFinal ? `\n📧 *Correo:* ${item.correoFinal}` : "";
     const nomSpotify =
@@ -106,12 +124,19 @@ function armarDetalleCuentaTexto(item, esCombo, idx, paraRevendedor = false) {
         )
       ? `\n👤 *Perfil:* ${item.perfilFinal}`
       : "";
-  const pin =
-    item.pinFinal && item.tipoCuenta === "1 Dispositivo" && !esInv
-      ? paraRevendedor
-        ? `\n📌 *PIN:* ${item.pinFinal}`
-        : ` | 📌 *PIN:* ${item.pinFinal}`
-      : "";
+
+  // Solo muestra PIN si la plataforma realmente usa PINs (En ChatGPT Plus sale el Perfil pero NO sale PIN)
+  const mostrarPin =
+    plataformaUsaPin(item.plataforma) &&
+    item.pinFinal &&
+    item.tipoCuenta === "1 Dispositivo" &&
+    !esInv;
+
+  const pin = mostrarPin
+    ? paraRevendedor
+      ? `\n📌 *PIN:* ${item.pinFinal}`
+      : ` | 📌 *PIN:* ${item.pinFinal}`
+    : "";
 
   return `${head}\n📧 *Correo:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan} | 📅 *Vence:* ${vence}`;
 }
@@ -177,9 +202,10 @@ export function generarMensajeEntrega(
 export function generarMensajeRenovacionCorto(s, textoDias) {
   const corteDMA = formatearFechaDMA(s.fecha_corte);
   const esRev = s.tipo_comprador === "revendedor";
+  const mostrarPin = plataformaUsaPin(s.plataforma) && s.pin_perfil;
   const lineaPerfil =
     s.nombre_perfil && !["Cuenta / Invitación", "Por Invitación", "1 Dispositivo", "Cuenta Completa"].includes(s.nombre_perfil)
-      ? `\n👤 *Perfil:* ${s.nombre_perfil}${s.pin_perfil ? ` | *PIN:* ${s.pin_perfil}` : ""}`
+      ? `\n👤 *Perfil:* ${s.nombre_perfil}${mostrarPin ? ` | *PIN:* ${s.pin_perfil}` : ""}`
       : "";
 
   const encabezado = esRev
@@ -224,7 +250,8 @@ export function generarMensajeCambioCredencial(
 ) {
   const lineaPass = password ? `\n🔑 *Contraseña:* ${password}` : "";
   const lineaPerfil = perfil ? `\n👤 *Perfil:* ${perfil}` : "";
-  const lineaPin = pin ? ` | 📌 *PIN:* ${pin}` : "";
+  const mostrarPin = plataformaUsaPin(plataforma) && pin;
+  const lineaPin = mostrarPin ? ` | 📌 *PIN:* ${pin}` : "";
   const telRevLimpio = String(telefonoRevendedor || "").trim();
   const lineaSoporte =
     telRevLimpio && telRevLimpio !== "78953018"
