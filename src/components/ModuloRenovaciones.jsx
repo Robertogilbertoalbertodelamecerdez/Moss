@@ -4,7 +4,8 @@ import {
   supabase,
   formatearFechaDMA,
   obtenerFechaBoliviaISO,
-  sumarDiasBoliviaISO
+  sumarDiasBoliviaISO,
+  extraerFechaLocalISO
 } from "@/config";
 import {
   generarMensajeRenovacionCorto,
@@ -19,7 +20,8 @@ import {
   X,
   Users,
   Truck,
-  Send
+  Send,
+  Calendar
 } from "lucide-react";
 
 export default function ModuloRenovaciones({
@@ -31,6 +33,7 @@ export default function ModuloRenovaciones({
   notificar
 }) {
   const [subTab, setSubTab] = useState("por_avisar");
+  const [diasAnticipacion, setDiasAnticipacion] = useState(3); // 0 = vencidos/hoy, 3, 7, 15
   const [subRenovar, setSubRenovar] = useState(null);
 
   const [confirmandoNoRenuevaId, setConfirmandoNoRenuevaId] = useState(null);
@@ -47,30 +50,56 @@ export default function ModuloRenovaciones({
 
   const hoyISO = obtenerFechaBoliviaISO();
 
+  // Cálculo blindado contra formatos con hora (T00:00:00) y desfases de zona horaria
   const calcularDias = (fechaCorte) => {
     if (!fechaCorte) return 999;
-    const hoy = new Date(hoyISO + "T00:00:00-04:00");
-    const corte = new Date(fechaCorte + "T00:00:00-04:00");
-    return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
+    const limpia = extraerFechaLocalISO(fechaCorte);
+    if (!limpia || !/^\d{4}-\d{2}-\d{2}$/.test(limpia)) return 999;
+    const [ah, mh, dh] = hoyISO.split("-").map(Number);
+    const [ac, mc, dc] = limpia.split("-").map(Number);
+    const msHoy = Date.UTC(ah, mh - 1, dh);
+    const msCorte = Date.UTC(ac, mc - 1, dc);
+    return Math.round((msCorte - msHoy) / (1000 * 60 * 60 * 24));
   };
 
-  const subsPorVencer = suscripciones.filter((s) => {
-    if (s.en_papelera || s.estado !== "Activa") return false;
-    return calcularDias(s.fecha_corte) <= 3;
-  });
+  const estaActiva = (estado) =>
+    !estado || String(estado).trim().toLowerCase() === "activa";
 
-  const subsProveedorPorRenovar = suscripciones.filter((s) => {
-    if (s.en_papelera || s.estado !== "Activa") return false;
+  const subsActivasTodas = suscripciones.filter(
+    (s) => !s.en_papelera && estaActiva(s.estado)
+  );
+
+  const matricesActivasTodas = matrices.filter(
+    (m) => !m.en_papelera && estaActiva(m.estado)
+  );
+
+  const subsPorVencer = subsActivasTodas
+    .filter((s) => calcularDias(s.fecha_corte) <= diasAnticipacion)
+    .sort((a, b) => calcularDias(a.fecha_corte) - calcularDias(b.fecha_corte));
+
+  const subsProveedorPorRenovar = subsActivasTodas.filter((s) => {
     if (!s.fecha_renovacion_proveedor) return false;
-    if (s.fecha_renovacion_proveedor >= s.fecha_corte) return false;
-    return calcularDias(s.fecha_renovacion_proveedor) <= 3;
+    const fProv = extraerFechaLocalISO(s.fecha_renovacion_proveedor);
+    const fCorte = extraerFechaLocalISO(s.fecha_corte);
+    if (fProv >= fCorte) return false;
+    return calcularDias(fProv) <= diasAnticipacion;
   });
 
   const listaPorAvisar = subsPorVencer.filter((s) => !s.avisado_renovacion);
   const listaAvisados = subsPorVencer.filter((s) => s.avisado_renovacion);
-  const matricesPorVencer = matrices.filter(
-    (m) => !m.en_papelera && m.estado === "Activa" && calcularDias(m.fecha_corte_matriz) <= 3
-  );
+
+  const matricesPorVencer = matricesActivasTodas
+    .filter((m) => calcularDias(m.fecha_corte_matriz) <= diasAnticipacion)
+    .sort((a, b) => calcularDias(a.fecha_corte_matriz) - calcularDias(b.fecha_corte_matriz));
+
+  // Próximo vencimiento más cercano (para diagnóstico cuando la bandeja está en 0)
+  const proximaSubMasCercana = [...subsActivasTodas]
+    .filter((s) => calcularDias(s.fecha_corte) < 900)
+    .sort((a, b) => calcularDias(a.fecha_corte) - calcularDias(b.fecha_corte))[0];
+
+  const proximaMatrizMasCercana = [...matricesActivasTodas]
+    .filter((m) => calcularDias(m.fecha_corte_matriz) < 900)
+    .sort((a, b) => calcularDias(a.fecha_corte_matriz) - calcularDias(b.fecha_corte_matriz))[0];
 
   const lotesPorRevendedor = revendedores
     .map((r) => {
@@ -85,8 +114,8 @@ export default function ModuloRenovaciones({
 
   const avanzarCicloProveedor = async (sub, mesesAgregar = null) => {
     const intervalo = Number(mesesAgregar || sub.cada_cuantos_meses_avisar_prov || 1);
-    const baseFecha =
-      sub.fecha_renovacion_proveedor > hoyISO ? sub.fecha_renovacion_proveedor : hoyISO;
+    const fProvLimpia = extraerFechaLocalISO(sub.fecha_renovacion_proveedor);
+    const baseFecha = fProvLimpia > hoyISO ? fProvLimpia : hoyISO;
     const nuevaFechaProv = sumarDiasBoliviaISO(intervalo * 30, baseFecha);
     const nuevosMesesPagados = Number(sub.meses_pagados_proveedor || 1) + intervalo;
 
@@ -95,7 +124,9 @@ export default function ModuloRenovaciones({
       .update({
         meses_pagados_proveedor: nuevosMesesPagados,
         fecha_renovacion_proveedor:
-          nuevaFechaProv > sub.fecha_corte ? sub.fecha_corte : nuevaFechaProv
+          nuevaFechaProv > extraerFechaLocalISO(sub.fecha_corte)
+            ? extraerFechaLocalISO(sub.fecha_corte)
+            : nuevaFechaProv
       })
       .eq("id", sub.id);
 
@@ -122,7 +153,9 @@ export default function ModuloRenovaciones({
   };
 
   const ejecutarRenovarMatriz30Dias = async (m) => {
-    const nuevaFecha = sumarDiasBoliviaISO(30, m.fecha_corte_matriz);
+    const fCorteLimpia = extraerFechaLocalISO(m.fecha_corte_matriz);
+    const baseFecha = fCorteLimpia > hoyISO ? fCorteLimpia : hoyISO;
+    const nuevaFecha = sumarDiasBoliviaISO(30, baseFecha);
     await supabase
       .from("matrices_stock")
       .update({ fecha_corte_matriz: nuevaFecha })
@@ -141,7 +174,7 @@ export default function ModuloRenovaciones({
     }
     setConfirmandoRenovarMatrizId(null);
     await recargarTodo();
-    notificar("Matriz renovada +30 días");
+    notificar(`Matriz renovada hasta ${formatearFechaDMA(nuevaFecha)}`);
   };
 
   const abrirModalRenovar = (sub) => {
@@ -155,12 +188,11 @@ export default function ModuloRenovaciones({
     setCostoProv("0");
   };
 
-  // Al confirmar la renovación, actualiza creado_en y fecha_venta para que salga de PRIMERO arriba en el Directorio
   const confirmarRenovacion = async (e) => {
     e.preventDefault();
     const diasSumar = Number(mesesRenovacion) === 12 ? 365 : Number(mesesRenovacion) * 30;
-    const baseFecha =
-      subRenovar.fecha_corte > hoyISO ? subRenovar.fecha_corte : hoyISO;
+    const fCorteLimpia = extraerFechaLocalISO(subRenovar.fecha_corte);
+    const baseFecha = fCorteLimpia > hoyISO ? fCorteLimpia : hoyISO;
     const nuevaFechaCorte = sumarDiasBoliviaISO(diasSumar, baseFecha);
 
     let datosUpdate = {
@@ -227,6 +259,34 @@ export default function ModuloRenovaciones({
 
   return (
     <div className="space-y-5">
+      {/* SELECTOR DE ANTICIPACIÓN (VENCIDOS/HOY, 3 DÍAS, 7 DÍAS, 15 DÍAS) */}
+      <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-gray-300 font-bold flex items-center gap-1.5">
+          <Calendar className="w-4 h-4 text-[#66FF00]" /> Mostrar cuentas y matrices que vencen en:
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { d: 0, label: "🚨 Hoy / Vencidos" },
+            { d: 3, label: "≤ 3 días" },
+            { d: 7, label: "≤ 7 días" },
+            { d: 15, label: "≤ 15 días" }
+          ].map((op) => (
+            <button
+              key={op.d}
+              type="button"
+              onClick={() => setDiasAnticipacion(op.d)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
+                diasAnticipacion === op.d
+                  ? "bg-[#66FF00] text-black border-[#66FF00]"
+                  : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+              }`}
+            >
+              {op.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="flex flex-wrap gap-2">
         <button
           onClick={() => setSubTab("por_avisar")}
@@ -282,7 +342,7 @@ export default function ModuloRenovaciones({
         <div className="space-y-3">
           {subsProveedorPorRenovar.length === 0 ? (
             <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs">
-              No tienes pagos intermedios a proveedores que venzan en los próximos 3 días.
+              No tienes pagos intermedios a proveedores que venzan en los próximos {diasAnticipacion} día(s).
             </div>
           ) : (
             subsProveedorPorRenovar.map((s) => {
@@ -340,7 +400,7 @@ export default function ModuloRenovaciones({
         <div className="space-y-4">
           {lotesPorRevendedor.length === 0 ? (
             <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs">
-              Ningún revendedor tiene cuentas próximas a vencer en los siguientes 3 días.
+              Ningún revendedor tiene cuentas próximas a vencer en los siguientes {diasAnticipacion} día(s).
             </div>
           ) : (
             lotesPorRevendedor.map(({ revendedor: rev, cuentas }) => {
@@ -383,31 +443,55 @@ export default function ModuloRenovaciones({
         </div>
       ) : subTab === "matrices" ? (
         <div className="space-y-3">
-          {matricesPorVencer.map((m) => (
-            <div key={m.id} className="bg-[#111A10] border border-yellow-500/70 rounded-2xl p-4 flex justify-between items-center">
-              <div>
-                <span className="text-xs font-bold px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-300">{m.plataforma}</span>
-                <p className="font-bold mt-1">{m.correo}</p>
-                <p className="text-xs text-gray-400">Corte: {formatearFechaDMA(m.fecha_corte_matriz)}</p>
-              </div>
-              {confirmandoRenovarMatrizId === m.id ? (
-                <div className="flex gap-1.5">
-                  <button onClick={() => ejecutarRenovarMatriz30Dias(m)} className="px-3 py-1 bg-[#66FF00] text-black text-xs font-black rounded-lg">Confirmar</button>
-                  <button onClick={() => setConfirmandoRenovarMatrizId(null)} className="px-2 py-1 bg-gray-800 text-xs rounded-lg">No</button>
-                </div>
-              ) : (
-                <button onClick={() => setConfirmandoRenovarMatrizId(m.id)} className="px-3 py-2 bg-[#66FF00] text-black text-xs font-extrabold rounded-xl cursor-pointer">
-                  Renovar Matriz (+30d)
-                </button>
+          {matricesPorVencer.length === 0 ? (
+            <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs space-y-2">
+              <p>No tienes matrices que venzan en los próximos {diasAnticipacion} día(s).</p>
+              {proximaMatrizMasCercana && (
+                <p className="text-[#66FF00] font-bold">
+                  📅 Tu matriz más próxima a vencer es {proximaMatrizMasCercana.plataforma} ({proximaMatrizMasCercana.correo}) el{" "}
+                  {formatearFechaDMA(proximaMatrizMasCercana.fecha_corte_matriz)} (en {calcularDias(proximaMatrizMasCercana.fecha_corte_matriz)} días).
+                </p>
               )}
             </div>
-          ))}
+          ) : (
+            matricesPorVencer.map((m) => {
+              const diasM = calcularDias(m.fecha_corte_matriz);
+              return (
+                <div key={m.id} className="bg-[#111A10] border border-yellow-500/70 rounded-2xl p-4 flex flex-wrap justify-between items-center gap-3">
+                  <div>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-300">{m.plataforma}</span>
+                    <span className="ml-2 text-xs font-bold text-orange-400">
+                      {diasM < 0 ? `Venció hace ${Math.abs(diasM)}d` : diasM === 0 ? "¡Vence HOY!" : `Vence en ${diasM}d`}
+                    </span>
+                    <p className="font-bold mt-1">{m.correo}</p>
+                    <p className="text-xs text-gray-400">Corte: {formatearFechaDMA(m.fecha_corte_matriz)}</p>
+                  </div>
+                  {confirmandoRenovarMatrizId === m.id ? (
+                    <div className="flex gap-1.5">
+                      <button onClick={() => ejecutarRenovarMatriz30Dias(m)} className="px-3 py-1 bg-[#66FF00] text-black text-xs font-black rounded-lg cursor-pointer">Confirmar</button>
+                      <button onClick={() => setConfirmandoRenovarMatrizId(null)} className="px-2 py-1 bg-gray-800 text-xs rounded-lg cursor-pointer">No</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setConfirmandoRenovarMatrizId(m.id)} className="px-3 py-2 bg-[#66FF00] text-black text-xs font-extrabold rounded-xl cursor-pointer">
+                      Renovar Matriz (+30d)
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       ) : (
         <div className="space-y-3">
           {listaMostrar.length === 0 ? (
-            <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-sm">
-              No hay clientes pendientes en esta bandeja.
+            <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-8 text-center text-gray-400 text-xs space-y-2">
+              <p className="text-sm">No hay clientes por vencer en los próximos {diasAnticipacion} día(s) en esta bandeja.</p>
+              {proximaSubMasCercana && (
+                <p className="text-[#66FF00] font-bold">
+                  📅 Tu cuenta más próxima a vencer es {proximaSubMasCercana.plataforma} de {proximaSubMasCercana.nombre_cliente} el{" "}
+                  {formatearFechaDMA(proximaSubMasCercana.fecha_corte)} (en {calcularDias(proximaSubMasCercana.fecha_corte)} días).
+                </p>
+              )}
             </div>
           ) : (
             listaMostrar.map((s) => {
@@ -480,8 +564,8 @@ export default function ModuloRenovaciones({
 
                     {confirmandoNoRenuevaId === s.id ? (
                       <div className="ml-auto flex gap-1.5">
-                        <button onClick={() => ejecutarNoVaARenovar(s)} className="px-2.5 py-1 bg-red-600 text-white rounded-lg text-xs font-bold">Sí, liberar</button>
-                        <button onClick={() => setConfirmandoNoRenuevaId(null)} className="px-2 py-1 bg-gray-800 text-xs rounded-lg">No</button>
+                        <button onClick={() => ejecutarNoVaARenovar(s)} className="px-2.5 py-1 bg-red-600 text-white rounded-lg text-xs font-bold cursor-pointer">Sí, liberar</button>
+                        <button onClick={() => setConfirmandoNoRenuevaId(null)} className="px-2 py-1 bg-gray-800 text-xs rounded-lg cursor-pointer">No</button>
                       </div>
                     ) : (
                       <button
