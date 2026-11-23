@@ -50,8 +50,6 @@ export default function ModuloStock({
   const [vistaPropietarioStock, setVistaPropietarioStock] = useState(adminKeyActual);
   const [verPapeleraMatrices, setVerPapeleraMatrices] = useState(false);
   const [confirmarEliminarMatrizId, setConfirmarEliminarMatrizId] = useState(null);
-
-  // Confirmación antes de borrar un perfil individual de una matriz
   const [confirmarBorrarPerfilId, setConfirmarBorrarPerfilId] = useState(null);
 
   const [busquedaStock, setBusquedaStock] = useState("");
@@ -101,9 +99,26 @@ export default function ModuloStock({
 
   const generarPinAleatorio = () => Math.floor(1000 + Math.random() * 9000).toString();
 
-  // =========================================================================
-  // AGREGAR UN PERFIL EXTRA A UNA MATRIZ EXISTENTE (EJ: DE 15 A 16 EN CHATGPT)
-  // =========================================================================
+  // Calcula cuánto se ha recuperado / cobrado de una matriz y su ganancia o faltante
+  const calcularBalanceMatriz = (matriz) => {
+    const costoMatriz = Number(matriz.costo_total || 0);
+    const ventasDeEstaMatriz = suscripciones.filter(
+      (s) => !s.en_papelera && s.estado !== "Reembolsada" && s.matriz_id === matriz.id
+    );
+    const recuperado = ventasDeEstaMatriz.reduce(
+      (acc, s) =>
+        acc +
+        Number(
+          s.tipo_comprador === "revendedor" && Number(s.precio_venta_revendedor) > 0
+            ? s.precio_venta_revendedor
+            : s.precio_venta || 0
+        ),
+      0
+    );
+    const balance = recuperado - costoMatriz; // > 0 significa ganancia libre; < 0 significa cuánto falta recuperar
+    return { costoMatriz, recuperado, balance, cantVendidos: ventasDeEstaMatriz.length };
+  };
+
   const agregarPerfilExtraAMatriz = async (matriz) => {
     const perfilesActuales = matriz.perfiles_matriz || [];
     const maxSlot = perfilesActuales.reduce(
@@ -114,7 +129,9 @@ export default function ModuloStock({
     const nuevaCapacidad = perfilesActuales.length + 1;
 
     const cfgPlat = plataformasList.find((p) => p.nombre === matriz.plataforma);
-    const llevaPin = cfgPlat ? cfgPlat.pidePin !== false : false;
+    const llevaPin =
+      !matriz.plataforma.toLowerCase().includes("chat") &&
+      (cfgPlat ? cfgPlat.pidePin !== false : true);
 
     const { error } = await supabase.from("perfiles_matriz").insert([
       {
@@ -139,11 +156,7 @@ export default function ModuloStock({
     notificar(`➕ Perfil ${nuevoNumeroSlot} agregado a ${matriz.plataforma} (Total: ${nuevaCapacidad} cupos)`);
   };
 
-  // =========================================================================
-  // ELIMINAR UN PERFIL INDIVIDUAL DE UNA MATRIZ CON CONFIRMACIÓN
-  // =========================================================================
   const eliminarPerfilIndividualConfirmado = async (perfil, matriz) => {
-    // Si había una suscripción vinculada a este slot, desvincular perfil_id para no dar error de llave foránea
     await supabase
       .from("suscripciones")
       .update({ perfil_id: null })
@@ -494,6 +507,7 @@ export default function ModuloStock({
         !plataforma.toLowerCase().includes("chat") &&
         (cfgPlat ? cfgPlat.pidePin !== false : true);
       const esNetflix = plataforma.toLowerCase().includes("netflix") && Number(capacidad) === 6;
+
       const perfilesInsertar = [];
       for (let i = 1; i <= Number(capacidad); i++) {
         perfilesInsertar.push({
@@ -580,7 +594,7 @@ export default function ModuloStock({
     await recargarTodo();
     notificar(
       nuevoEstado === "Caida"
-        ? "Matriz marcada como Caída (Ya tienes habilitado el botón amarillo Dar Reemplazo Matriz)"
+        ? "Matriz marcada como Caída"
         : "Matriz resuelta"
     );
   };
@@ -601,6 +615,23 @@ export default function ModuloStock({
   );
 
   const cantidadEnPapelera = matricesDelPropietario.filter((m) => m.en_papelera).length;
+
+  // Resumen global de inversión vs recuperado vs ganancia de las matrices de este apartado
+  const resumenGlobalMatrices = React.useMemo(() => {
+    const activasSinPapelera = matricesDelPropietario.filter((m) => !m.en_papelera);
+    let inversionTotal = 0;
+    let recuperadoTotal = 0;
+    activasSinPapelera.forEach((m) => {
+      const b = calcularBalanceMatriz(m);
+      inversionTotal += b.costoMatriz;
+      recuperadoTotal += b.recuperado;
+    });
+    return {
+      inversionTotal,
+      recuperadoTotal,
+      gananciaNetaMatrices: recuperadoTotal - inversionTotal
+    };
+  }, [matricesDelPropietario, suscripciones]);
 
   const matricesFiltradas = matricesActivas.filter((m) => {
     if (filtroPlatStock !== "Todas" && m.plataforma !== filtroPlatStock) return false;
@@ -674,6 +705,38 @@ export default function ModuloStock({
         </div>
       </div>
 
+      {/* RESUMEN DE RECUPERACIÓN Y GANANCIA DE TUS MATRICES */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3.5">
+          <p className="text-[10px] text-gray-400 uppercase font-bold">Inversión Total en Matrices</p>
+          <p className="text-xl font-black text-orange-300 mt-0.5">
+            Bs {resumenGlobalMatrices.inversionTotal.toFixed(2)}
+          </p>
+        </div>
+        <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3.5">
+          <p className="text-[10px] text-gray-400 uppercase font-bold">Recuperado / Vendido en Matrices</p>
+          <p className="text-xl font-black text-white mt-0.5">
+            Bs {resumenGlobalMatrices.recuperadoTotal.toFixed(2)}
+          </p>
+        </div>
+        <div className="bg-[#111A10] border-2 border-[#66FF00]/60 rounded-2xl p-3.5">
+          <p className="text-[10px] text-[#66FF00] uppercase font-black">
+            {resumenGlobalMatrices.gananciaNetaMatrices >= 0
+              ? "Ganancia Libre de Matrices"
+              : "Falta por Recuperar Inversión"}
+          </p>
+          <p
+            className={`text-xl font-black mt-0.5 ${
+              resumenGlobalMatrices.gananciaNetaMatrices >= 0 ? "text-[#66FF00]" : "text-amber-300"
+            }`}
+          >
+            {resumenGlobalMatrices.gananciaNetaMatrices >= 0
+              ? `+Bs ${resumenGlobalMatrices.gananciaNetaMatrices.toFixed(2)}`
+              : `-Bs ${Math.abs(resumenGlobalMatrices.gananciaNetaMatrices).toFixed(2)}`}
+          </p>
+        </div>
+      </div>
+
       <div className="bg-gradient-to-r from-[#162914] to-[#0E180D] border border-[#66FF00]/40 rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-black text-white flex items-center gap-2">
@@ -683,7 +746,7 @@ export default function ModuloStock({
               : `Matrices en este Apartado (${matricesActivas.length})`}
           </h2>
           <p className="text-xs text-gray-300">
-            Usa el botón "+ Agregar Perfil" en cualquier matriz si necesitas meter 1 cupo extra, o el basurero 🗑️ de cada perfil para borrarlo con confirmación.
+            Revisa en cada matriz si ya recuperaste su costo o cuánto llevas ganado.
           </p>
         </div>
         <div className="flex gap-2">
@@ -745,6 +808,7 @@ export default function ModuloStock({
           const perfiles = (matriz.perfiles_matriz || []).sort((a, b) => a.numero_slot - b.numero_slot);
           const libres = perfiles.filter((p) => !p.ocupado && !p.caido).length;
           const diasVida = calcularDiasRestantes(matriz.fecha_corte_matriz);
+          const bal = calcularBalanceMatriz(matriz);
 
           return (
             <div
@@ -763,7 +827,15 @@ export default function ModuloStock({
                   </span>
                   <h3 className="font-bold text-base mt-1 break-all">{matriz.correo}</h3>
                   <p className="text-xs text-gray-400">
-                    Clave: <span className="text-white font-mono">{matriz.password || "N/A"}</span> · Costo: Bs {matriz.costo_total}
+                    Clave: <span className="text-white font-mono">{matriz.password || "N/A"}</span> · Costo Matriz: <b className="text-orange-300">Bs {bal.costoMatriz.toFixed(2)}</b>
+                  </p>
+                  <p className="text-xs mt-0.5">
+                    Recuperado: <b className="text-white">Bs {bal.recuperado.toFixed(2)}</b> ({bal.cantVendidos} vtas) ·{" "}
+                    {bal.balance >= 0 ? (
+                      <span className="text-[#66FF00] font-black">✓ Ganancia: +Bs {bal.balance.toFixed(2)}</span>
+                    ) : (
+                      <span className="text-amber-300 font-black">⏳ Falta: Bs {Math.abs(bal.balance).toFixed(2)}</span>
+                    )}
                   </p>
                 </div>
 
@@ -777,7 +849,6 @@ export default function ModuloStock({
                         type="button"
                         onClick={() => agregarPerfilExtraAMatriz(matriz)}
                         className="px-2.5 py-1 rounded-lg bg-[#66FF00] hover:bg-[#52cc00] text-black font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-[0_0_10px_rgba(102,255,0,0.3)]"
-                        title="Agregar 1 perfil extra a esta matriz"
                       >
                         <PlusCircle className="w-3.5 h-3.5" /> + Perfil
                       </button>
@@ -789,7 +860,6 @@ export default function ModuloStock({
                 </div>
               </div>
 
-              {/* GRILLA DE PERFILES CON BOTÓN DE BASURERO 🗑️ Y CONFIRMACIÓN SÍ / NO EN CADA PERFIL */}
               {!matriz.en_papelera && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-[#1E331A]">
                   {perfiles.map((p) => {
@@ -858,7 +928,7 @@ export default function ModuloStock({
                               <div className="min-w-0 flex-1">
                                 <p className="text-[11px] font-black text-white truncate">
                                   {p.nombre_perfil}{" "}
-                                  {p.pin ? <span className="text-[#66FF00] font-mono">({p.pin})</span> : ""}
+                                  {p.pin ? <span className="text-[#66FF00] font-mono">(PIN {p.pin})</span> : ""}
                                 </p>
                                 {p.caido ? (
                                   <p className="text-[10px] text-red-400 font-extrabold">⚠️ Caído</p>
@@ -877,7 +947,6 @@ export default function ModuloStock({
                               </div>
                             </div>
 
-                            {/* BASURERO EN CADA PERFIL CON CONFIRMACIÓN */}
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1032,7 +1101,7 @@ export default function ModuloStock({
                       type="button"
                       onClick={() => setConfirmarEliminarMatrizId(matriz.id)}
                       className="ml-auto p-1.5 bg-gray-900 text-gray-400 hover:text-red-400 rounded-xl cursor-pointer"
-                      title="Eliminar Matriz (Restaura tu saldo del banco)"
+                      title="Eliminar Matriz"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -1570,7 +1639,7 @@ export default function ModuloStock({
               </select>
               <input type="number" step="0.01" placeholder="Costo Total (Bs)" value={costoTotal} onChange={(e) => setCostoTotal(e.target.value)} className="bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-white text-xs font-bold" />
               <input type="text" placeholder="Correo *" value={correo} onChange={(e) => setCorreo(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
-              <input type="text" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-xs text-white" />
+              <input type="text" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
               <input type="number" placeholder="Cupos (Ej: 15 en ChatGPT)" value={capacidad} onChange={(e) => setCapacidad(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
               <input type="date" value={fechaCompra} onChange={(e) => setFechaCompra(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs" />
             </div>

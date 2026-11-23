@@ -50,6 +50,7 @@ const limpiarMontoConSigno = (val) => {
 
 export default function PortalRevendedor({
   revendedor,
+  subAdmins = [],
   suscripciones = [],
   matrices = [],
   movimientosRevendedor = [],
@@ -65,6 +66,14 @@ export default function PortalRevendedor({
   const hoyISO = obtenerFechaBoliviaISO();
   const lunesSemanaISO = obtenerLunesDeSemanaBolivia(hoyISO);
   const domingoSemanaISO = obtenerDomingoDeSemanaBolivia(hoyISO);
+
+  // Número del Sub-Admin al que pertenece este revendedor (si lo creó Marcus, sale el número de Marcus)
+  const subAdminPadre = useMemo(() => {
+    if (!revendedor.admin_propietario || revendedor.admin_propietario === "admin") return null;
+    return subAdmins.find((sa) => sa.id === revendedor.admin_propietario) || null;
+  }, [revendedor, subAdmins]);
+
+  const telSoporteAdmin = subAdminPadre?.telefono || "78953018";
 
   const [periodoEst, setPeriodoEst] = useState("semana");
   const [fechaDiaEst, setFechaDiaEst] = useState(hoyISO);
@@ -269,9 +278,12 @@ export default function PortalRevendedor({
       : puntosRealesSVG[puntosRealesSVG.length - 1] || null;
 
   const calcularDias = (fechaCorte) => {
-    const hoy = new Date(hoyISO + "T00:00:00-04:00");
-    const corte = new Date(fechaCorte + "T00:00:00-04:00");
-    return Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
+    if (!fechaCorte) return 999;
+    const limpia = extraerFechaLocalISO(fechaCorte);
+    if (!limpia || !/^\d{4}-\d{2}-\d{2}$/.test(limpia)) return 999;
+    const [ah, mh, dh] = hoyISO.split("-").map(Number);
+    const [ac, mc, dc] = limpia.split("-").map(Number);
+    return Math.round((Date.UTC(ac, mc - 1, dc) - Date.UTC(ah, mh - 1, dh)) / (1000 * 60 * 60 * 24));
   };
 
   const misRenovaciones = misVentas.filter((s) => s.estado === "Activa" && calcularDias(s.fecha_corte) <= 3);
@@ -440,6 +452,7 @@ export default function PortalRevendedor({
         }
       ]);
 
+      // Soporte del Revendedor / Número de su Admin (ej: Marcus), nunca el número de Mateus
       const msg = generarMensajeEntrega(
         nomVentaStock.trim(),
         revendedor.telefono,
@@ -459,7 +472,8 @@ export default function PortalRevendedor({
         ],
         "",
         null,
-        true
+        true,
+        telSoporteAdmin
       );
       msg.telefonoClienteFinal = telVentaStock.trim();
 
@@ -514,6 +528,7 @@ export default function PortalRevendedor({
           precio_venta_revendedor: Number(precioCobradoRenovarRev || subRenovarRev.precio_venta_revendedor || 0),
           pagado_al_admin: false,
           avisado_renovacion: false,
+          creado_en: new Date().toISOString(),
           estado: "Activa"
         })
         .eq("id", subRenovarRev.id);
@@ -553,7 +568,8 @@ export default function PortalRevendedor({
         ],
         "",
         "RENOVACIÓN EXITOSA",
-        true
+        true,
+        telSoporteAdmin
       );
       msg.telefonoClienteFinal = subRenovarRev.telefono_cliente_final;
 
@@ -569,7 +585,6 @@ export default function PortalRevendedor({
     }
   };
 
-  // Guarda gasto o ingreso manual en la billetera del revendedor
   const registrarMovimientoPropio = async (e) => {
     e.preventDefault();
     const numBase = parseFloat(montoBanca);
@@ -679,7 +694,7 @@ export default function PortalRevendedor({
               className={`px-3 py-1 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
                 filtroTarjetasRev === op.id
                   ? "bg-[#66FF00] text-black border-[#66FF00]"
-                  : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  : "bg-[#070B06] text-gray-300 border-[#2A4226] hover:border-[#66FF00]/50"
               }`}
             >
               {op.label}
@@ -688,7 +703,6 @@ export default function PortalRevendedor({
         </div>
       </div>
 
-      {/* TARJETAS FINANCIERAS CON BOTÓN FUNCIONAL DE REGISTRAR GASTO / INGRESO */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4">
           <p className="text-[11px] text-gray-400 uppercase font-bold">Total Cobrado ({etiquetaFiltroRev})</p>
@@ -731,7 +745,6 @@ export default function PortalRevendedor({
         </div>
       </div>
 
-      {/* BARRA DE PESTAÑAS */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#0E170D] p-2 rounded-2xl border border-[#264023]">
         <button
           onClick={() => setTabRev("mis_clientes")}
@@ -911,7 +924,8 @@ export default function PortalRevendedor({
                             ],
                             "",
                             s.fue_reemplazada ? "REEMPLAZO DE CUENTA" : null,
-                            true
+                            true,
+                            telSoporteAdmin
                           );
                           m.telefonoClienteFinal = s.telefono_cliente_final;
                           setMensajeModal(m);
@@ -1110,7 +1124,7 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA (CON HISTORIAL DE MOVIMIENTOS Y BOTÓN NUEVO GASTO/INGRESO) */}
+      {/* PESTAÑA 4: ESTADÍSTICAS Y BANCA */}
       {tabRev === "estadisticas" && (
         <div className="space-y-5">
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
@@ -1218,7 +1232,6 @@ export default function PortalRevendedor({
             )}
           </div>
 
-          {/* HISTORIAL DE GASTOS E INGRESOS MANUALES DE SU BILLETERA */}
           <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-5 space-y-3">
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-black text-[#66FF00] uppercase flex items-center gap-2">
@@ -1271,9 +1284,6 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL REGISTRAR GASTO / INGRESO EN LA BILLETERA DEL REVENDEDOR            */}
-      {/* ========================================================================= */}
       {modalAjusteBanca && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <form
@@ -1315,9 +1325,7 @@ export default function PortalRevendedor({
             </div>
 
             <div>
-              <label className="text-xs text-gray-400">
-                Monto (Bs) — (Acepta números y signos + / -, bloquea letras)
-              </label>
+              <label className="text-xs text-gray-400">Monto (Bs)</label>
               <input
                 type="text"
                 autoComplete="off"
@@ -1358,7 +1366,6 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL PERSONITA EN MATRIZ */}
       {perfilPropioModal && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1428,7 +1435,8 @@ export default function PortalRevendedor({
                     perfilPropioModal.matriz.password,
                     perfilPropioModal.perfil.nombre_perfil,
                     pinEditRev,
-                    revendedor.telefono
+                    revendedor.telefono,
+                    telSoporteAdmin
                   );
                   navigator.clipboard.writeText(msg);
                   notificar("Aviso corto de cambio de PIN copiado");
@@ -1448,7 +1456,8 @@ export default function PortalRevendedor({
                     perfilPropioModal.matriz.password,
                     perfilPropioModal.perfil.nombre_perfil,
                     pinEditRev,
-                    revendedor.telefono
+                    revendedor.telefono,
+                    telSoporteAdmin
                   );
                   enviarWhatsappDirecto(telCliEditRev, msg);
                 }}
@@ -1461,7 +1470,6 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL RENOVAR CUENTA */}
       {subRenovarRev && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1535,7 +1543,6 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL SACAR DE STOCK */}
       {matrizVender && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <form
@@ -1626,7 +1633,6 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL ANOTAR CLIENTE FINAL */}
       {subAnotar && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <form
@@ -1674,7 +1680,6 @@ export default function PortalRevendedor({
         </div>
       )}
 
-      {/* MODAL MENSAJE DE ENTREGA */}
       {mensajeModal && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4">

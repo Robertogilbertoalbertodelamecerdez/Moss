@@ -70,7 +70,6 @@ export default function ModuloVentas({
   const [provPassword, setProvPassword] = useState("");
   const [provPerfil, setProvPerfil] = useState("");
   const [provPin, setProvPin] = useState("");
-  // Campos especiales para Spotify por Invitación (Link + Calle/Dirección) y Notas / 2FA
   const [spotifyLinkInvitacion, setSpotifyLinkInvitacion] = useState("");
   const [spotifyCalleDireccion, setSpotifyCalleDireccion] = useState("");
   const [notasCuenta, setNotasCuenta] = useState("");
@@ -93,6 +92,28 @@ export default function ModuloVentas({
   useEffect(() => {
     setFechaVenta(obtenerFechaBoliviaISO());
   }, []);
+
+  const obtenerTelSoporteSubAdmin = (subId) => {
+    const found = subAdmins.find((sa) => sa.id === subId);
+    return found?.telefono || sesionActual?.telefono || "";
+  };
+
+  const construirMensajeConSoporte = (nombreCli, telCli, items, esRev, subAdmIdObjetivo = null) => {
+    const targetSubId = subAdmIdObjetivo || (!esSuperAdmin ? adminKeyActual : null);
+    if (targetSubId) {
+      const telSub = obtenerTelSoporteSubAdmin(targetSubId);
+      return generarMensajeEntrega(
+        nombreCli,
+        telSub || telCli,
+        items,
+        linkWhatsappMoss,
+        null,
+        esRev,
+        "78953018"
+      );
+    }
+    return generarMensajeEntrega(nombreCli, telCli, items, linkWhatsappMoss, null, esRev, "");
+  };
 
   const configPlatActual =
     plataformasList.find((p) => p.nombre === plataforma) || {
@@ -299,7 +320,6 @@ export default function ModuloVentas({
     }
   };
 
-  // Extractor mejorado: limpia asteriscos *, detecta saltos de línea, Código 2FA y Link + Calle de Spotify
   const procesarTextoProveedor = (texto) => {
     setTextoProveedorCrudo(texto);
     const extraido = extraerDatosProveedor(texto);
@@ -512,6 +532,11 @@ export default function ModuloVentas({
         if (cliData) clienteId = cliData.id;
       }
 
+      const esVentaMiaAMarcus = esSuperAdmin && tipoComprador === "subadmin";
+      const subAdmIdElegido = esVentaMiaAMarcus
+        ? subAdminCompradorId || subAdmins[0]?.id || "admin"
+        : null;
+
       for (const item of itemsParaGuardar) {
         const precioFijoMarcusDefault = obtenerPrecioFijoMarcus(item.plataforma, item.meses);
 
@@ -526,7 +551,6 @@ export default function ModuloVentas({
           String(item.provNombreFinal || "").toLowerCase().includes("moss");
 
         const esFieDeMarcusAMateus = sacoDeStockDeMateus || eligioProveedorMossMateus;
-        const esVentaMiaAMarcus = esSuperAdmin && tipoComprador === "subadmin";
 
         const costoDescontarAMarcus = esVentaMiaAMarcus
           ? Number(item.precioFijoMarcus ?? precioFijoMarcusDefault)
@@ -534,9 +558,7 @@ export default function ModuloVentas({
           ? Number(item.costoFinal)
           : precioFijoMarcusDefault;
 
-        const targetAdminPropietario = esVentaMiaAMarcus
-          ? subAdminCompradorId || subAdmins[0]?.id || "admin"
-          : adminKeyActual;
+        const targetAdminPropietario = esVentaMiaAMarcus ? subAdmIdElegido : adminKeyActual;
 
         const { data: nuevaSub, error: errSub } = await supabase
           .from("suscripciones")
@@ -625,13 +647,12 @@ export default function ModuloVentas({
         }
       }
 
-      const msgObj = generarMensajeEntrega(
+      const msgObj = construirMensajeConSoporte(
         nombreCliente.trim(),
         telefono.trim(),
         itemsParaGuardar,
-        linkWhatsappMoss,
-        null,
-        tipoComprador === "revendedor" || tipoComprador === "subadmin"
+        tipoComprador === "revendedor" || tipoComprador === "subadmin",
+        subAdmIdElegido
       );
       setModalVentaAbierto(false);
       setMensajeGenerado(msgObj);
@@ -730,52 +751,59 @@ export default function ModuloVentas({
           <div className="text-center py-6 text-gray-400 text-xs">Aún no hay ventas registradas en tu cuenta.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {ventasActivas.slice(0, 6).map((v) => (
-              <div key={v.id} className="bg-[#070B06] border border-[#1E331A] rounded-2xl p-3.5 flex justify-between items-center gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
-                      {v.plataforma}
-                    </span>
-                    <span className="text-xs font-bold text-white truncate">{v.nombre_cliente}</span>
+            {ventasActivas.slice(0, 6).map((v) => {
+              const esSpotInv =
+                String(v.plataforma || "").toLowerCase().includes("spotify") &&
+                (v.tipo_cuenta === "Por Invitación" || String(v.plataforma || "").toLowerCase().includes("invitaci"));
+              const itemMsg = {
+                plataforma: v.plataforma,
+                tipoCuenta: v.tipo_cuenta || "1 Dispositivo",
+                correoFinal: v.correo_cuenta,
+                passFinal: v.password_cuenta,
+                perfilFinal: v.nombre_perfil,
+                pinFinal: v.pin_perfil,
+                linkInvitacion: esSpotInv ? v.password_cuenta : "",
+                direccion: esSpotInv ? v.pin_perfil : "",
+                meses: v.meses_contratados || 1,
+                diasTotales: v.dias_totales || 30,
+                fechaCorte: v.fecha_corte,
+                precioVenta: v.precio_venta
+              };
+              return (
+                <div key={v.id} className="bg-[#070B06] border border-[#1E331A] rounded-2xl p-3.5 flex justify-between items-center gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-[#66FF00]/20 text-[#66FF00]">
+                        {v.plataforma}
+                      </span>
+                      <span className="text-xs font-bold text-white truncate">{v.nombre_cliente}</span>
+                    </div>
+                    <p className="text-xs text-gray-400 truncate mt-1">{v.correo_cuenta}</p>
+                    <p className="text-[11px] text-gray-500">
+                      Bs {v.precio_venta} · Plan: {v.dias_totales || 30} días · Vence: {formatearFechaDMA(v.fecha_corte)}
+                    </p>
                   </div>
-                  <p className="text-xs text-gray-400 truncate mt-1">{v.correo_cuenta}</p>
-                  <p className="text-[11px] text-gray-500">
-                    Bs {v.precio_venta} · Plan: {v.dias_totales || 30} días · Vence: {formatearFechaDMA(v.fecha_corte)}
-                  </p>
-                </div>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMensajeGenerado(
-                      generarMensajeEntrega(
-                        v.nombre_cliente,
-                        v.telefono_cliente,
-                        [{
-                          plataforma: v.plataforma,
-                          tipoCuenta: v.tipo_cuenta || "1 Dispositivo",
-                          correoFinal: v.correo_cuenta,
-                          passFinal: v.password_cuenta,
-                          perfilFinal: v.nombre_perfil,
-                          pinFinal: v.pin_perfil,
-                          meses: v.meses_contratados || 1,
-                          diasTotales: v.dias_totales || 30,
-                          fechaCorte: v.fecha_corte,
-                          precioVenta: v.precio_venta
-                        }],
-                        linkWhatsappMoss,
-                        v.fue_reemplazada ? "REEMPLAZO DE CUENTA" : null,
-                        v.tipo_comprador === "revendedor" || v.tipo_comprador === "subadmin"
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMensajeGenerado(
+                        construirMensajeConSoporte(
+                          v.nombre_cliente,
+                          v.telefono_cliente,
+                          [itemMsg],
+                          v.tipo_comprador === "revendedor" || v.tipo_comprador === "subadmin",
+                          v.tipo_comprador === "subadmin" ? v.admin_propietario : null
+                        )
                       )
-                    )
-                  }
-                  className="px-3 py-2 bg-[#162614] hover:bg-[#66FF00] text-[#66FF00] hover:text-black border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" /> Entregar
-                </button>
-              </div>
-            ))}
+                    }
+                    className="px-3 py-2 bg-[#162614] hover:bg-[#66FF00] text-[#66FF00] hover:text-black border border-[#66FF00]/40 rounded-xl text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" /> Entregar
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1020,7 +1048,7 @@ export default function ModuloVentas({
                           {tagOwner} 👉{" "}
                           {tipoCuenta === "Cuenta Completa"
                             ? "👑 Ocupará TODA la matriz"
-                            : `${sig?.nombre_perfil} (PIN: ${sig?.pin})`}
+                            : `${sig?.nombre_perfil}`}
                         </option>
                       );
                     })}
@@ -1054,13 +1082,12 @@ export default function ModuloVentas({
 
                 <textarea
                   rows={2}
-                  placeholder="Pega aquí el mensaje del proveedor (Extrae correo, clave, Código 2FA o Link y Calle de Spotify sin *)..."
+                  placeholder="Pega aquí el mensaje del proveedor..."
                   value={textoProveedorCrudo}
                   onChange={(e) => procesarTextoProveedor(e.target.value)}
                   className="w-full bg-[#070B06] border border-[#233820] rounded-lg p-2 text-xs text-white"
                 />
 
-                {/* SI ES SPOTIFY POR INVITACIÓN: PIDE CORREO DEL CLIENTE, NOMBRE DE PERFIL DE SPOTIFY, LINK Y CALLE */}
                 {esSpotifyInvitacionActual ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <div>
@@ -1147,14 +1174,13 @@ export default function ModuloVentas({
               </div>
             )}
 
-            {/* APARTADO SIEMPRE VISIBLE DE NOTAS / CÓDIGO 2FA */}
             <div className="bg-[#0B120A] border border-cyan-500/40 rounded-xl p-3 space-y-1.5">
               <label className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
-                <FileText className="w-4 h-4" /> 📝 Notas / Código 2FA (Opcional — Se llena solo si el mensaje trae Codigo2FA):
+                <FileText className="w-4 h-4" /> 📝 Notas / Código 2FA:
               </label>
               <textarea
                 rows={2}
-                placeholder="Ej: Código 2FA: OCYUC3VR... | Link: https://2fa.live o cualquier nota de la cuenta"
+                placeholder="Ej: Código 2FA: OCYUC3VR... | Link: https://2fa.live o cualquier nota"
                 value={notasCuenta}
                 onChange={(e) => setNotasCuenta(e.target.value)}
                 className="w-full bg-[#070B06] border border-cyan-500/40 rounded-lg p-2 text-xs text-white font-mono"

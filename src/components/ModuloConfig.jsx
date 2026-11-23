@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useRef } from "react";
-import { supabase, PLATAFORMAS, formatearFechaDMA } from "@/config";
+import { supabase, PLATAFORMAS, formatearFechaDMA, extraerFechaLocalISO } from "@/config";
 import {
   Download,
   Upload,
@@ -20,7 +20,10 @@ import {
   ArrowUp,
   ArrowDown,
   ShieldCheck,
-  History
+  History,
+  ChevronDown,
+  ChevronUp,
+  Phone
 } from "lucide-react";
 
 export default function ModuloConfig({
@@ -42,6 +45,14 @@ export default function ModuloConfig({
   recargarTodo,
   notificar
 }) {
+  const subAdminActualObj = !esSuperAdmin
+    ? subAdmins.find((sa) => sa.id === adminKeyActual)
+    : null;
+
+  const [miTelefonoSoporte, setMiTelefonoSoporte] = useState(
+    subAdminActualObj?.telefono || sesionActual?.telefono || ""
+  );
+
   const [restaurando, setRestaurando] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -53,6 +64,7 @@ export default function ModuloConfig({
   const [subAdminHistorialFie, setSubAdminHistorialFie] = useState(null);
   const [cuentaFieEditandoId, setCuentaFieEditandoId] = useState(null);
   const [nuevoCostoFieInput, setNuevoCostoFieInput] = useState("");
+  const [diasExpandidosFie, setDiasExpandidosFie] = useState({});
 
   const [busquedaProv, setBusquedaProv] = useState("");
   const [busquedaRev, setBusquedaRev] = useState("");
@@ -89,51 +101,62 @@ export default function ModuloConfig({
   const [pinSubAdm, setPinSubAdm] = useState("1234");
   const [editSubAdm, setEditSubAdm] = useState(null);
 
-  const obtenerCuentasAlFieDeSubAdmin = (subAdminId) => {
-    return suscripciones.filter((s) => {
-      if (s.en_papelera) return false;
-      if (s.admin_propietario !== subAdminId) return false;
-      const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
-      const matDeMateus =
-        s.matriz_id &&
-        (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
-      return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
-    });
+  const esCuentaDeSubAdminVinculadaAMateus = (s) => {
+    if ((s.admin_propietario || "admin") === "admin") return false;
+    const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
+    const matDeMateus =
+      s.matriz_id &&
+      (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
+    return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
   };
 
-  const cerarDeudaAlFieSubAdmin = async (sa) => {
-    const pendientes = obtenerCuentasAlFieDeSubAdmin(sa.id).filter(
-      (s) => s.pagado_al_admin === false
+  const obtenerCuentasAlFieDeSubAdmin = (subAdminId) => {
+    return suscripciones.filter(
+      (s) =>
+        !s.en_papelera &&
+        s.admin_propietario === subAdminId &&
+        esCuentaDeSubAdminVinculadaAMateus(s)
     );
-    if (pendientes.length === 0) {
-      return notificar(`${sa.nombre} no tiene deuda al fíe pendiente.`);
-    }
+  };
 
-    const totalCobrado = pendientes.reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
-    const ids = pendientes.map((s) => s.id);
+  const obtenerPagosFieDeSubAdmin = (subAdminId) => {
+    return movimientosYolo.filter(
+      (m) =>
+        (m.admin_propietario || "admin") === "admin" &&
+        (m.tipo === "Abono Fie Admin" || m.tipo === "Pago Fie Admin Liquidado") &&
+        m.referencia_id === subAdminId
+    );
+  };
+
+  // Marcar PAGADA o PENDIENTE una cuenta individual que sacó Marcus al fíe
+  const togglePagadoCuentaIndividualFie = async (cuenta) => {
+    const nuevoPagado = cuenta.pagado_al_admin !== true;
+    const montoCuenta = Math.abs(Number(cuenta.costo_proveedor || 0));
 
     await supabase
       .from("suscripciones")
-      .update({ pagado_al_admin: true })
-      .in("id", ids);
+      .update({ pagado_al_admin: nuevoPagado })
+      .eq("id", cuenta.id);
 
-    if (totalCobrado > 0) {
+    if (nuevoPagado && montoCuenta > 0) {
       await supabase.from("movimientos_yolo").insert([
         {
           admin_propietario: "admin",
-          tipo: "Ingreso Venta",
-          monto: Math.abs(totalCobrado),
+          tipo: "Abono Fie Admin",
+          monto: montoCuenta,
           afecta_ganancia_neta: true,
-          descripcion: `Liquidación de ${pendientes.length} cuenta(s) al fíe de Admin ${sa.nombre}`
+          descripcion: `Pago cuenta al fíe (${cuenta.plataforma} - ${cuenta.nombre_cliente})`,
+          referencia_id: cuenta.admin_propietario
         }
       ]);
+      notificar(`✅ Cuenta ${cuenta.plataforma} marcada como Pagada (+Bs ${montoCuenta.toFixed(2)})`);
+    } else {
+      notificar(`⏳ Cuenta ${cuenta.plataforma} marcada como Pendiente`);
     }
 
     await recargarTodo();
-    notificar(`¡Deuda al fíe de ${sa.nombre} cerada (+Bs ${totalCobrado.toFixed(2)} en tu banco)!`);
   };
 
-  // Guardar la edición del precio al fíe de una cuenta de Marcus para que su costo y ganancia neta se recalculen bien
   const guardarNuevoCostoFieCuenta = async (subId) => {
     const num = Number(nuevoCostoFieInput || 0);
     await supabase
@@ -142,7 +165,77 @@ export default function ModuloConfig({
       .eq("id", subId);
     setCuentaFieEditandoId(null);
     await recargarTodo();
-    notificar("Precio al fíe actualizado (Se ajustó automáticamente el costo y ganancia neta de Marcus)");
+    notificar("Precio de esta cuenta al fíe actualizado");
+  };
+
+  const cerarDeudaAlFieSubAdmin = async (sa) => {
+    const todas = obtenerCuentasAlFieDeSubAdmin(sa.id);
+    const pendientes = todas.filter((s) => s.pagado_al_admin !== true);
+    const pagos = obtenerPagosFieDeSubAdmin(sa.id);
+    const abonosActivos = pagos.filter((m) => m.tipo === "Abono Fie Admin");
+
+    const brutoPend = pendientes.reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0);
+    const totalAbon = abonosActivos.reduce((acc, m) => acc + Math.abs(Number(m.monto || 0)), 0);
+    const restante = Math.max(0, brutoPend - totalAbon);
+
+    if (pendientes.length === 0 && restante <= 0) {
+      return notificar(`${sa.nombre} no tiene deuda al fíe pendiente.`);
+    }
+
+    if (pendientes.length > 0) {
+      await supabase
+        .from("suscripciones")
+        .update({ pagado_al_admin: true })
+        .in(
+          "id",
+          pendientes.map((s) => s.id)
+        );
+    }
+
+    if (abonosActivos.length > 0) {
+      await supabase
+        .from("movimientos_yolo")
+        .update({ tipo: "Pago Fie Admin Liquidado" })
+        .in(
+          "id",
+          abonosActivos.map((m) => m.id)
+        );
+    }
+
+    if (restante > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: "admin",
+          tipo: "Pago Fie Admin Liquidado",
+          monto: Math.abs(restante),
+          afecta_ganancia_neta: true,
+          descripcion: `Liquidación total al fíe de ${sa.nombre} (${pendientes.length} ctas)`,
+          referencia_id: sa.id
+        }
+      ]);
+    }
+
+    await recargarTodo();
+    notificar(`✅ ¡Deuda al fíe de ${sa.nombre} cerada (+Bs ${restante.toFixed(2)} en tu banco)!`);
+  };
+
+  const guardarMiTelefonoSoporteSubAdmin = async () => {
+    if (!miTelefonoSoporte.trim()) return notificar("Ingresa tu número de teléfono", "error");
+    await supabase
+      .from("sub_admins")
+      .update({ telefono: miTelefonoSoporte.trim() })
+      .eq("id", adminKeyActual);
+
+    const guardada = localStorage.getItem("moss_sesion_v3");
+    if (guardada) {
+      try {
+        const obj = JSON.parse(guardada);
+        obj.telefono = miTelefonoSoporte.trim();
+        localStorage.setItem("moss_sesion_v3", JSON.stringify(obj));
+      } catch {}
+    }
+    await recargarTodo();
+    notificar("📞 Tu número de soporte fue actualizado para tus entregas y revendedores");
   };
 
   const seleccionarModoInvitacionCrear = (modoInv) => {
@@ -400,7 +493,7 @@ export default function ModuloConfig({
 
     const backupObj = {
       fecha_backup: new Date().toISOString(),
-      version: "MOSS_CRM_7.0",
+      version: "MOSS_CRM_8.0",
       sub_admins: saRes.data || [],
       plataformas: plRes.data || [],
       ajustes_sistema: ajRes.data || [],
@@ -459,8 +552,47 @@ export default function ModuloConfig({
     );
   });
 
+  // Agrupa pagos/abonos de Marcus por día para poder expandir con flecha ▼ / ▲ cuando hubo varios en un mismo día
+  const pagosAgrupadosPorDia = React.useMemo(() => {
+    if (!subAdminHistorialFie) return [];
+    const pagos = obtenerPagosFieDeSubAdmin(subAdminHistorialFie.id);
+    const mapa = {};
+    pagos.forEach((m) => {
+      const f = extraerFechaLocalISO(m.fecha) || "sin-fecha";
+      if (!mapa[f]) mapa[f] = { fecha: f, totalDia: 0, items: [] };
+      mapa[f].totalDia += Math.abs(Number(m.monto || 0));
+      mapa[f].items.push(m);
+    });
+    return Object.values(mapa).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  }, [subAdminHistorialFie, movimientosYolo]);
+
   return (
     <div className="space-y-6">
+      {/* SI ES SUB-ADMIN (MARCUS): PERMITIR CAMBIAR SU NÚMERO DE SOPORTE */}
+      {!esSuperAdmin && (
+        <div className="bg-[#111A10] border-2 border-amber-400/70 rounded-2xl p-5 space-y-2">
+          <h3 className="font-black text-amber-300 text-xs flex items-center gap-2">
+            <Phone className="w-4 h-4" /> Mi Número de Soporte (Sale en mis entregas y en las de mis revendedores)
+          </h3>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={miTelefonoSoporte}
+              onChange={(e) => setMiTelefonoSoporte(e.target.value)}
+              placeholder="Ej: 77635738"
+              className="flex-1 bg-[#070B06] border border-amber-400 rounded-xl p-2.5 text-white text-xs font-mono font-bold"
+            />
+            <button
+              type="button"
+              onClick={guardarMiTelefonoSoporteSubAdmin}
+              className="px-4 py-2 bg-amber-400 text-black font-black rounded-xl text-xs cursor-pointer"
+            >
+              Guardar Número
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-[#111A10] border-2 border-[#66FF00]/50 rounded-3xl p-5 flex items-center justify-between">
           <div>
@@ -658,7 +790,7 @@ export default function ModuloConfig({
             <div className="space-y-3 max-h-80 overflow-y-auto">
               {subAdmins.map((sa) => {
                 const todasAlFie = obtenerCuentasAlFieDeSubAdmin(sa.id);
-                const pendientesAlFie = todasAlFie.filter((s) => s.pagado_al_admin === false);
+                const pendientesAlFie = todasAlFie.filter((s) => s.pagado_al_admin !== true);
                 const montoDeudaFie = pendientesAlFie.reduce(
                   (acc, s) => acc + Number(s.costo_proveedor || 0),
                   0
@@ -729,7 +861,7 @@ export default function ModuloConfig({
                           >
                             <Check className="w-4 h-4" />
                             {montoDeudaFie > 0
-                              ? `Marcar Pagado (+Bs ${montoDeudaFie.toFixed(1)})`
+                              ? `Marcar Todo Pagado (+Bs ${montoDeudaFie.toFixed(1)})`
                               : "✓ Deuda en 0"}
                           </button>
 
@@ -738,7 +870,7 @@ export default function ModuloConfig({
                             onClick={() => setSubAdminHistorialFie(sa)}
                             className="px-3 py-2 bg-amber-400 text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                           >
-                            <History className="w-4 h-4" /> Historial al Fíe ({todasAlFie.length})
+                            <History className="w-4 h-4" /> Cuentas y Pagos ({todasAlFie.length})
                           </button>
 
                           <button
@@ -766,17 +898,17 @@ export default function ModuloConfig({
         </div>
       )}
 
-      {/* MODAL HISTORIAL AL FÍE CON EDICIÓN DIRECTA DEL COSTO DE CADA CUENTA */}
+      {/* MODAL DETALLE CUENTAS AL FÍE (MARCAR PAGADA CADA CUENTA + EDITAR PRECIO + FLECHA EXPANDIR PAGOS POR DÍA) */}
       {subAdminHistorialFie && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-[60] overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-[#233820] pb-3">
               <div>
                 <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
-                  <History className="w-5 h-5" /> Historial de Cuentas al Fíe de {subAdminHistorialFie.nombre}
+                  <History className="w-5 h-5" /> Cuentas al Fíe y Pagos de {subAdminHistorialFie.nombre}
                 </h3>
                 <p className="text-[11px] text-gray-400">
-                  Puedes tocar "Editar Precio" en cualquier cuenta para ajustar cuánto te paga {subAdminHistorialFie.nombre} y que su ganancia neta se recalcule sola.
+                  Marca pagada o edita el precio en cada cuenta individual, y expande con la flecha ▼ los pagos de un mismo día.
                 </p>
               </div>
               <button onClick={() => setSubAdminHistorialFie(null)} className="text-gray-400 hover:text-white">
@@ -784,62 +916,57 @@ export default function ModuloConfig({
               </button>
             </div>
 
-            <div className="space-y-2 max-h-96 overflow-y-auto">
+            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
               {obtenerCuentasAlFieDeSubAdmin(subAdminHistorialFie.id).length === 0 ? (
-                <p className="text-xs text-gray-500 text-center py-6">
+                <p className="text-xs text-gray-500 text-center py-4">
                   Aún no hay cuentas registradas al fíe para {subAdminHistorialFie.nombre}.
                 </p>
               ) : (
                 obtenerCuentasAlFieDeSubAdmin(subAdminHistorialFie.id).map((s) => {
                   const editandoPrecioEsta = cuentaFieEditandoId === s.id;
-                  const gananciaDeMarcusEnEsta =
-                    Number(s.precio_venta || 0) - Number(s.costo_proveedor || 0);
+                  const estaPagada = s.pagado_al_admin === true;
 
                   return (
                     <div
                       key={s.id}
                       className={`p-3 rounded-2xl border flex flex-wrap justify-between items-center gap-2 text-xs ${
-                        s.pagado_al_admin
+                        estaPagada
                           ? "bg-[#070B06] border-[#1E331A] opacity-80"
                           : "bg-amber-950/30 border-amber-400"
                       }`}
                     >
-                      <div>
+                      <div className="min-w-0">
                         <span className="px-2 py-0.5 rounded bg-amber-400 text-black font-black text-[10px]">
                           {s.plataforma}
                         </span>
                         <span className="ml-2 text-gray-400 font-mono">{formatearFechaDMA(s.fecha_venta)}</span>
-                        <p className="text-white font-bold mt-1">
-                          Cuenta: <span className="font-mono">{s.correo_cuenta}</span> ({s.nombre_perfil}) · Cliente: {s.nombre_cliente}
-                        </p>
-                        <p className="text-[11px] text-gray-400">
-                          Él la vendió en: <b>Bs {Number(s.precio_venta || 0).toFixed(2)}</b> · Su ganancia neta:{" "}
-                          <b className="text-[#66FF00]">Bs {gananciaDeMarcusEnEsta.toFixed(2)}</b>
+                        <p className="text-white font-bold mt-0.5 truncate">
+                          {s.correo_cuenta} · Cliente: {s.nombre_cliente}
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {editandoPrecioEsta ? (
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1">
                             <input
                               type="number"
                               step="0.5"
                               value={nuevoCostoFieInput}
                               onChange={(e) => setNuevoCostoFieInput(e.target.value)}
-                              className="w-20 bg-black border border-amber-400 rounded-lg p-1.5 text-center text-white font-black"
+                              className="w-20 bg-black border border-amber-400 rounded-lg p-1 text-center text-white font-black"
                             />
                             <button
                               type="button"
                               onClick={() => guardarNuevoCostoFieCuenta(s.id)}
-                              className="px-2.5 py-1.5 bg-[#66FF00] text-black font-black rounded-lg cursor-pointer"
+                              className="px-2 py-1 bg-[#66FF00] text-black font-black rounded-lg cursor-pointer"
                             >
                               Guardar
                             </button>
                           </div>
                         ) : (
                           <>
-                            <span className="font-black text-amber-300">
-                              Su Costo / Fíe: Bs {Number(s.costo_proveedor || 0).toFixed(2)}
+                            <span className="font-black text-amber-300 mr-1">
+                              Bs {Number(s.costo_proveedor || 0).toFixed(2)}
                             </span>
                             <button
                               type="button"
@@ -847,35 +974,101 @@ export default function ModuloConfig({
                                 setCuentaFieEditandoId(s.id);
                                 setNuevoCostoFieInput(String(s.costo_proveedor || 0));
                               }}
-                              className="px-2.5 py-1 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 rounded-lg font-bold cursor-pointer"
+                              className="px-2 py-1 bg-[#1A2B18] text-[#66FF00] border border-[#66FF00]/40 rounded-lg font-bold cursor-pointer"
                             >
-                              ✏️ Editar Precio
+                              ✏️ Editar
                             </button>
                           </>
                         )}
 
-                        {s.pagado_al_admin ? (
-                          <span className="px-2.5 py-1 rounded-lg bg-green-900/40 text-green-300 font-bold">
-                            ✓ Pagado
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-black font-black">
-                            ⏳ Debe
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => togglePagadoCuentaIndividualFie(s)}
+                          className={`px-2.5 py-1 rounded-lg font-black cursor-pointer ${
+                            estaPagada
+                              ? "bg-green-900/50 text-green-300 border border-green-500/40"
+                              : "bg-[#66FF00] text-black"
+                          }`}
+                        >
+                          {estaPagada ? "✓ Pagada" : "Marcar Pagada"}
+                        </button>
                       </div>
                     </div>
                   );
                 })
               )}
             </div>
+
+            {/* HISTORIAL DE PAGOS / ABONOS AGRUPADO POR DÍA CON FLECHA PARA EXPANDIR */}
+            {pagosAgrupadosPorDia.length > 0 && (
+              <div className="space-y-2 pt-3 border-t border-[#233820]">
+                <h4 className="text-xs font-black uppercase text-cyan-300">
+                  💵 Pagos / Abonos Recibidos por Día (Toca la flecha para expandir si hubo varios pagos)
+                </h4>
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {pagosAgrupadosPorDia.map((grupo) => {
+                    const expandido = Boolean(diasExpandidosFie[grupo.fecha]);
+                    return (
+                      <div key={grupo.fecha} className="bg-[#070B06] border border-[#1E331A] rounded-2xl p-3 text-xs space-y-2">
+                        <div
+                          onClick={() =>
+                            setDiasExpandidosFie((prev) => ({ ...prev, [grupo.fecha]: !prev[grupo.fecha] }))
+                          }
+                          className="flex justify-between items-center cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2">
+                            {expandido ? (
+                              <ChevronUp className="w-4 h-4 text-cyan-300" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-cyan-300" />
+                            )}
+                            <span className="font-mono font-bold text-white">
+                              {grupo.fecha === "sin-fecha" ? "Fecha" : formatearFechaDMA(grupo.fecha)}
+                            </span>
+                            <span className="text-[10px] text-gray-400">
+                              ({grupo.items.length} {grupo.items.length === 1 ? "pago" : "pagos"})
+                            </span>
+                          </div>
+                          <span className="font-black text-[#66FF00]">
+                            +Bs {grupo.totalDia.toFixed(2)}
+                          </span>
+                        </div>
+
+                        {expandido && (
+                          <div className="space-y-1.5 pl-6 pt-1 border-t border-[#162414]">
+                            {grupo.items.map((pago) => (
+                              <div key={pago.id} className="flex justify-between items-center text-[11px]">
+                                <span className="text-gray-300 truncate">{pago.descripcion}</span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className="font-bold text-[#66FF00]">
+                                    +Bs {Math.abs(Number(pago.monto || 0)).toFixed(2)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await supabase.from("movimientos_yolo").delete().eq("id", pago.id);
+                                      await recargarTodo();
+                                    }}
+                                    className="text-gray-500 hover:text-red-400 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL PLATAFORMAS CON 3 PRECIOS FIJOS (CLIENTE | REVENDEDOR | MARCUS)      */}
-      {/* ========================================================================= */}
+      {/* MODAL PLATAFORMAS */}
       {modalPlataformas && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-3xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
@@ -884,9 +1077,6 @@ export default function ModuloConfig({
                 <h3 className="font-black text-[#66FF00] text-base">
                   Catálogo de Plataformas y Precios Fijos ({plataformasList.length})
                 </h3>
-                <p className="text-[11px] text-gray-400">
-                  Configura el precio fijo de Catálogo Cliente, Revendedor y Admin Asociado (Marcus).
-                </p>
               </div>
               <button onClick={() => setModalPlataformas(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -1060,42 +1250,21 @@ export default function ModuloConfig({
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <div className="flex justify-end gap-2 pt-1">
                           <button
                             type="button"
-                            onClick={() =>
-                              setPlatEditando({
-                                ...platEditando,
-                                pidePass: !platEditando.pidePass,
-                                pidePerfil: !platEditando.pidePass ? true : false,
-                                pidePin: !platEditando.pidePass ? platEditando.pidePin : false
-                              })
-                            }
-                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer ${
-                              platEditando.pidePass
-                                ? "bg-[#66FF00]/20 text-[#66FF00] border-[#66FF00]"
-                                : "bg-blue-950 text-blue-300 border-blue-500"
-                            }`}
+                            onClick={() => setPlatEditando(null)}
+                            className="px-3.5 py-1.5 bg-gray-800 text-white rounded-xl font-bold cursor-pointer"
                           >
-                            {platEditando.pidePass ? "🔑 Pide Contraseña: SÍ" : "📩 Por Invitación"}
+                            Cancelar
                           </button>
-
-                          <div className="ml-auto flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setPlatEditando(null)}
-                              className="px-3.5 py-1.5 bg-gray-800 text-white rounded-xl font-bold cursor-pointer"
-                            >
-                              Cancelar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={guardarEdicionPlataforma}
-                              className="px-4 py-1.5 bg-[#66FF00] text-black rounded-xl font-black flex items-center gap-1 cursor-pointer"
-                            >
-                              <Check className="w-4 h-4" /> Guardar Cambios
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            onClick={guardarEdicionPlataforma}
+                            className="px-4 py-1.5 bg-[#66FF00] text-black rounded-xl font-black flex items-center gap-1 cursor-pointer"
+                          >
+                            <Check className="w-4 h-4" /> Guardar Cambios
+                          </button>
                         </div>
                       </div>
                     ) : (

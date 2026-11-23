@@ -22,7 +22,6 @@ function obtenerTextoPlanDias(item) {
   return `${dias} ${dias === 1 ? "día" : "días"}`;
 }
 
-// Plataformas donde no existen PINs de perfil (solo se muestra el nombre del perfil si aplica, nunca PIN)
 function plataformaUsaPin(nombrePlataforma = "") {
   const p = String(nombrePlataforma || "").toLowerCase();
   if (
@@ -125,7 +124,6 @@ function armarDetalleCuentaTexto(item, esCombo, idx, paraRevendedor = false) {
       ? `\n👤 *Perfil:* ${item.perfilFinal}`
       : "";
 
-  // Solo muestra PIN si la plataforma realmente usa PINs (En ChatGPT Plus sale el Perfil pero NO sale PIN)
   const mostrarPin =
     plataformaUsaPin(item.plataforma) &&
     item.pinFinal &&
@@ -141,14 +139,28 @@ function armarDetalleCuentaTexto(item, esCombo, idx, paraRevendedor = false) {
   return `${head}\n📧 *Correo:* ${item.correoFinal}${pass}${perfil}${pin}\n⏳ *Plan:* ${textoPlan} | 📅 *Vence:* ${vence}`;
 }
 
+function construirLineaSoporte(telPrincipal, telSecundario = "") {
+  const p = String(telPrincipal || "").trim();
+  const s = String(telSecundario || "").trim();
+  if (p && s && p !== s) {
+    return `\n\n🛠️ *Soporte:* ${p} / ${s}`;
+  }
+  if (p) {
+    return `\n\n🛠️ *Soporte:* ${p}`;
+  }
+  return `\n\n🛠️ *Soporte:* ${s || "78953018"}`;
+}
+
 // 1. Mensaje de Entrega / Reemplazo / Edición
+// telSoporteSecundario: cuando un revendedor vende bajo un Sub-Admin (Marcus), pasa el número de Marcus (y en Sub-Admin pasa el tuyo)
 export function generarMensajeEntrega(
   nombre,
   tel,
   listaItems,
   linkWhatsappMoss = "",
   tituloPersonalizado = null,
-  esRevendedor = false
+  esRevendedor = false,
+  telSoporteSecundario = ""
 ) {
   const esCombo = listaItems.length > 1;
   const totalCobrado = listaItems.reduce((acc, i) => acc + Number(i.precioVenta || 0), 0);
@@ -167,12 +179,7 @@ export function generarMensajeEntrega(
       ? `✅ *DATOS DE ACCESO (${listaItems.length} CUENTAS)*`
       : `✅ *DATOS DE ACCESO*`;
 
-    const numRevendedor = tel?.trim() ? tel.trim() : "";
-    const lineaSoporte =
-      numRevendedor && numRevendedor !== "78953018"
-        ? `\n\n🛠️ *Soporte:* ${numRevendedor} / 78953018`
-        : `\n\n🛠️ *Soporte:* 78953018`;
-
+    const lineaSoporte = construirLineaSoporte(tel, telSoporteSecundario);
     const msgRevendedor = `${encabezadoRev}\n\n${bloquesRev}${textoReglas}${lineaSoporte}`;
     return { completo: msgRevendedor, resumido: msgRevendedor, telefono: tel, cliente: nombre };
   }
@@ -193,7 +200,8 @@ export function generarMensajeEntrega(
     : `🌿 *MOSS - ENTREGA DE CUENTA*`;
 
   const lineaTotal = esCombo ? `\n\n💰 *Total Combo:* Bs ${totalCobrado.toFixed(2)}` : "";
-  const completo = `${encabezado}\n\n¡Hola *${nombre}*!\n\n${bloques}${lineaTotal}${textoReglas}\n\n🛠️ *Soporte:* 78953018${bloqueOfertas}`;
+  const lineaSoporteCliente = construirLineaSoporte(tel || "78953018", telSoporteSecundario);
+  const completo = `${encabezado}\n\n¡Hola *${nombre}*!\n\n${bloques}${lineaTotal}${textoReglas}${lineaSoporteCliente}${bloqueOfertas}`;
 
   return { completo, resumido: completo, telefono: tel, cliente: nombre };
 }
@@ -246,17 +254,14 @@ export function generarMensajeCambioCredencial(
   password,
   perfil,
   pin,
-  telefonoRevendedor = ""
+  telefonoRevendedor = "",
+  telefonoAdmin = ""
 ) {
   const lineaPass = password ? `\n🔑 *Contraseña:* ${password}` : "";
   const lineaPerfil = perfil ? `\n👤 *Perfil:* ${perfil}` : "";
   const mostrarPin = plataformaUsaPin(plataforma) && pin;
   const lineaPin = mostrarPin ? ` | 📌 *PIN:* ${pin}` : "";
-  const telRevLimpio = String(telefonoRevendedor || "").trim();
-  const lineaSoporte =
-    telRevLimpio && telRevLimpio !== "78953018"
-      ? `\n🛠️ *Soporte:* ${telRevLimpio} / 78953018`
-      : `\n🛠️ *Soporte:* 78953018`;
+  const lineaSoporte = construirLineaSoporte(telefonoRevendedor, telefonoAdmin);
 
   return `🔄 *Se realizó un cambio de ${tipoCambio}*\n📺 *Plataforma:* ${plataforma}\n📧 *Correo:* ${correo}${lineaPass}${lineaPerfil}${lineaPin}${lineaSoporte}`;
 }
