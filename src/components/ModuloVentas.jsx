@@ -81,6 +81,7 @@ export default function ModuloVentas({
   const [meses, setMeses] = useState(1);
   const [diasPersonalizados, setDiasPersonalizados] = useState(30);
 
+  // Recordatorio de pago intermedio al proveedor cuando el cliente paga > 30 días
   const [mesesPagadosProv, setMesesPagadosProv] = useState(1);
   const [cadaCuantosMesesAvisar, setCadaCuantosMesesAvisar] = useState(1);
 
@@ -1233,6 +1234,24 @@ export default function ModuloVentas({
                     </button>
                   ))}
                 </div>
+                <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                  <input
+                    type="number"
+                    min="1"
+                    value={meses}
+                    onChange={(e) => cambiarDuracionMeses(e.target.value)}
+                    placeholder="Meses"
+                    className="bg-[#070B06] border border-[#2A4226] rounded-lg px-2 py-1 text-xs text-white text-center"
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    value={diasPersonalizados}
+                    onChange={(e) => cambiarDuracionDias(e.target.value)}
+                    placeholder="Días"
+                    className="bg-[#070B06] border border-[#66FF00] rounded-lg px-2 py-1 text-xs text-white font-bold text-center"
+                  />
+                </div>
               </div>
 
               <div>
@@ -1245,6 +1264,40 @@ export default function ModuloVentas({
                 />
               </div>
             </div>
+
+            {/* RECORDATORIO DE RENOVACIÓN AL PROVEEDOR PARA COMPRAS MAYORES A 30 DÍAS */}
+            {Number(diasPersonalizados) > 30 && (
+              <div className="bg-amber-950/35 border-2 border-amber-400 rounded-2xl p-3.5 space-y-2.5">
+                <p className="text-xs font-black text-amber-300">
+                  📦 Recordatorio de Pago al Proveedor (Plan de {diasPersonalizados} días):
+                </p>
+                <p className="text-[11px] text-gray-300">
+                  Si pagas mes a mes al proveedor (ej. Prime Video cada mes), indica cuántos meses pagaste hoy y cada cuántos meses avisarte en <b>Renovaciones</b>.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-center justify-between bg-[#070B06] p-2.5 rounded-xl border border-amber-500/40">
+                    <span className="text-gray-200 font-semibold">Meses pagados HOY al proveedor:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={mesesPagadosProv}
+                      onChange={(e) => setMesesPagadosProv(e.target.value)}
+                      className="w-16 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between bg-[#070B06] p-2.5 rounded-xl border border-amber-500/40">
+                    <span className="text-gray-200 font-semibold">Avisarme cada (meses):</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={cadaCuantosMesesAvisar}
+                      onChange={(e) => setCadaCuantosMesesAvisar(e.target.value)}
+                      className="w-16 bg-[#111A10] border border-amber-400 rounded-lg p-1 text-center text-white font-black"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             <button
               type="button"

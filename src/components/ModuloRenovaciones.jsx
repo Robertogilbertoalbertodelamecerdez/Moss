@@ -7,6 +7,7 @@ import {
   sumarDiasBoliviaISO,
   extraerFechaLocalISO
 } from "@/config";
+import { extraerDatosProveedor } from "@/utils/extractorProveedor";
 import {
   generarMensajeRenovacionCorto,
   generarMensajeLoteRenovacionRevendedor,
@@ -33,7 +34,7 @@ export default function ModuloRenovaciones({
   notificar
 }) {
   const [subTab, setSubTab] = useState("por_avisar");
-  const [diasAnticipacion, setDiasAnticipacion] = useState(3); // 0 = vencidos/hoy, 3, 7, 15
+  const [diasAnticipacion, setDiasAnticipacion] = useState(3);
   const [subRenovar, setSubRenovar] = useState(null);
 
   const [confirmandoNoRenuevaId, setConfirmandoNoRenuevaId] = useState(null);
@@ -41,25 +42,25 @@ export default function ModuloRenovaciones({
 
   const [precioRenovacion, setPrecioRenovacion] = useState("");
   const [mesesRenovacion, setMesesRenovacion] = useState(1);
-  const [origenRenovacion, setOrigenRenovacion] = useState("misma");
+  const [origenRenovacion, setOrigenRenovacion] = useState("misma"); // 'misma' | 'otra_matriz' | 'proveedor'
   const [nuevaMatrizId, setNuevaMatrizId] = useState("");
+  const [provIdRenov, setProvIdRenov] = useState("");
+  const [textoProvRenov, setTextoProvRenov] = useState("");
   const [provCorreo, setProvCorreo] = useState("");
   const [provPass, setProvPass] = useState("");
   const [provPerfil, setProvPerfil] = useState("");
-  const [costoProv, setCostoProv] = useState("");
+  const [provPin, setProvPin] = useState("");
+  const [costoProv, setCostoProv] = useState("0");
 
   const hoyISO = obtenerFechaBoliviaISO();
 
-  // Cálculo blindado contra formatos con hora (T00:00:00) y desfases de zona horaria
   const calcularDias = (fechaCorte) => {
     if (!fechaCorte) return 999;
     const limpia = extraerFechaLocalISO(fechaCorte);
     if (!limpia || !/^\d{4}-\d{2}-\d{2}$/.test(limpia)) return 999;
     const [ah, mh, dh] = hoyISO.split("-").map(Number);
     const [ac, mc, dc] = limpia.split("-").map(Number);
-    const msHoy = Date.UTC(ah, mh - 1, dh);
-    const msCorte = Date.UTC(ac, mc - 1, dc);
-    return Math.round((msCorte - msHoy) / (1000 * 60 * 60 * 24));
+    return Math.round((Date.UTC(ac, mc - 1, dc) - Date.UTC(ah, mh - 1, dh)) / (1000 * 60 * 60 * 24));
   };
 
   const estaActiva = (estado) =>
@@ -92,7 +93,6 @@ export default function ModuloRenovaciones({
     .filter((m) => calcularDias(m.fecha_corte_matriz) <= diasAnticipacion)
     .sort((a, b) => calcularDias(a.fecha_corte_matriz) - calcularDias(b.fecha_corte_matriz));
 
-  // Próximo vencimiento más cercano (para diagnóstico cuando la bandeja está en 0)
   const proximaSubMasCercana = [...subsActivasTodas]
     .filter((s) => calcularDias(s.fecha_corte) < 900)
     .sort((a, b) => calcularDias(a.fecha_corte) - calcularDias(b.fecha_corte))[0];
@@ -178,13 +178,24 @@ export default function ModuloRenovaciones({
   };
 
   const abrirModalRenovar = (sub) => {
+    const matricesLibresMismaPlat = matrices.filter(
+      (m) =>
+        !m.en_papelera &&
+        m.estado === "Activa" &&
+        m.plataforma === sub.plataforma &&
+        (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
+    );
     setSubRenovar(sub);
     setPrecioRenovacion(sub.precio_venta);
     setMesesRenovacion(1);
     setOrigenRenovacion("misma");
-    setProvCorreo(sub.correo_cuenta);
-    setProvPass(sub.password_cuenta || "");
-    setProvPerfil(sub.nombre_perfil || "");
+    setNuevaMatrizId(matricesLibresMismaPlat[0]?.id || "");
+    setProvIdRenov(sub.proveedor_id || proveedores[0]?.id || "");
+    setTextoProvRenov("");
+    setProvCorreo("");
+    setProvPass("");
+    setProvPerfil(sub.nombre_perfil || "1 Dispositivo");
+    setProvPin("");
     setCostoProv("0");
   };
 
@@ -208,32 +219,47 @@ export default function ModuloRenovaciones({
 
     if (origenRenovacion === "otra_matriz") {
       const mat = matrices.find((m) => m.id === nuevaMatrizId);
-      if (!mat) return notificar("Selecciona matriz", "error");
-      const libres = (mat.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido);
+      if (!mat) return notificar("Selecciona una matriz de Stock con cupos libres", "error");
+      const libres = (mat.perfiles_matriz || [])
+        .filter((p) => !p.ocupado && !p.caido)
+        .sort((a, b) => a.numero_slot - b.numero_slot);
       const slot = libres[0];
-      if (!slot) return notificar("Sin cupos libres", "error");
-      if (subRenovar.perfil_id) await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subRenovar.perfil_id);
+      if (!slot) return notificar("Esa matriz no tiene cupos libres", "error");
+      if (subRenovar.perfil_id) {
+        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subRenovar.perfil_id);
+      }
       await supabase.from("perfiles_matriz").update({ ocupado: true }).eq("id", slot.id);
       datosUpdate = {
         ...datosUpdate,
         origen: "stock",
         matriz_id: mat.id,
         perfil_id: slot.id,
+        proveedor_id: mat.proveedor_id || null,
+        nombre_proveedor: mat.nombre_proveedor || null,
+        telefono_proveedor: mat.telefono_proveedor || null,
         correo_cuenta: mat.correo,
         password_cuenta: mat.password,
         nombre_perfil: slot.nombre_perfil,
         pin_perfil: slot.pin
       };
     } else if (origenRenovacion === "proveedor") {
-      if (subRenovar.perfil_id) await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subRenovar.perfil_id);
+      if (!provCorreo.trim()) return notificar("Ingresa el correo de la cuenta del proveedor", "error");
+      if (subRenovar.perfil_id) {
+        await supabase.from("perfiles_matriz").update({ ocupado: false }).eq("id", subRenovar.perfil_id);
+      }
+      const provObj = proveedores.find((p) => p.id === (provIdRenov || proveedores[0]?.id));
       datosUpdate = {
         ...datosUpdate,
         origen: "proveedor",
         matriz_id: null,
         perfil_id: null,
+        proveedor_id: provObj ? provObj.id : null,
+        nombre_proveedor: provObj ? provObj.nombre : "Proveedor Externo",
+        telefono_proveedor: provObj ? provObj.telefono : "",
         correo_cuenta: provCorreo.trim(),
         password_cuenta: provPass.trim(),
         nombre_perfil: provPerfil.trim() || "1 Dispositivo",
+        pin_perfil: provPin.trim(),
         costo_proveedor: Number(costoProv || 0)
       };
     }
@@ -250,6 +276,19 @@ export default function ModuloRenovaciones({
       }
     ]);
 
+    if (origenRenovacion === "proveedor" && Number(costoProv) > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: subRenovar.admin_propietario || "admin",
+          tipo: "Costo Proveedor",
+          monto: -Math.abs(Number(costoProv)),
+          afecta_ganancia_neta: true,
+          descripcion: `Costo renovación proveedor ${subRenovar.plataforma} (${subRenovar.nombre_cliente})`,
+          referencia_id: subRenovar.id
+        }
+      ]);
+    }
+
     setSubRenovar(null);
     await recargarTodo();
     notificar(`¡Renovado hasta ${formatearFechaDMA(nuevaFechaCorte)}! Ya aparece de primero en tu Directorio.`);
@@ -259,7 +298,6 @@ export default function ModuloRenovaciones({
 
   return (
     <div className="space-y-5">
-      {/* SELECTOR DE ANTICIPACIÓN (VENCIDOS/HOY, 3 DÍAS, 7 DÍAS, 15 DÍAS) */}
       <div className="bg-[#111A10] border border-[#233820] rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-gray-300 font-bold flex items-center gap-1.5">
           <Calendar className="w-4 h-4 text-[#66FF00]" /> Mostrar cuentas y matrices que vencen en:
@@ -583,30 +621,166 @@ export default function ModuloRenovaciones({
         </div>
       )}
 
+      {/* MODAL RENOVAR CON SELECTOR: MISMA CUENTA | OTRA MATRIZ DE STOCK | PROVEEDOR */}
       {subRenovar && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50">
-          <form onSubmit={confirmarRenovacion} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-md w-full space-y-4">
-            <div className="flex justify-between items-center">
-              <h3 className="font-black text-[#66FF00]">Renovar a {subRenovar.nombre_cliente}</h3>
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <form onSubmit={confirmarRenovacion} className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-lg w-full space-y-4 animate-modal">
+            <div className="flex justify-between items-center border-b border-[#233820] pb-2">
+              <h3 className="font-black text-[#66FF00]">Renovar {subRenovar.plataforma} — {subRenovar.nombre_cliente}</h3>
               <button type="button" onClick={() => setSubRenovar(null)} className="text-gray-400"><X className="w-5 h-5" /></button>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <input type="number" step="0.01" value={precioRenovacion} onChange={(e) => setPrecioRenovacion(e.target.value)} className="bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-white font-bold text-xs" placeholder="Precio Bs" />
-              <select value={mesesRenovacion} onChange={(e) => setMesesRenovacion(e.target.value)} className="bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs">
-                <option value={1}>1 Mes (+30d)</option>
-                <option value={2}>2 Meses (+60d)</option>
-                <option value={3}>3 Meses (+90d)</option>
-                <option value={12}>1 Año (+365d)</option>
-              </select>
+
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                { id: "misma", label: "Misma Cuenta" },
+                { id: "otra_matriz", label: "📦 Stock (Otra)" },
+                { id: "proveedor", label: "🚚 Proveedor" }
+              ].map((op) => (
+                <button
+                  key={op.id}
+                  type="button"
+                  onClick={() => setOrigenRenovacion(op.id)}
+                  className={`py-2 px-2 rounded-xl text-xs font-black border cursor-pointer ${
+                    origenRenovacion === op.id
+                      ? "bg-[#66FF00] text-black border-[#66FF00]"
+                      : "bg-[#070B06] text-gray-300 border-[#2A4226]"
+                  }`}
+                >
+                  {op.label}
+                </button>
+              ))}
             </div>
-            <select value={origenRenovacion} onChange={(e) => setOrigenRenovacion(e.target.value)} className="w-full bg-[#070B06] border border-[#2A4226] rounded-xl p-2.5 text-xs text-white">
-              <option value="misma">Mantener en la cuenta actual ({subRenovar.correo_cuenta})</option>
-              <option value="otra_matriz">Cambiar a otra Matriz de mi Stock</option>
-              <option value="proveedor">Asignar cuenta nueva de Proveedor</option>
-            </select>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setSubRenovar(null)} className="flex-1 py-2 bg-gray-800 rounded-xl text-xs font-bold">Cancelar</button>
-              <button type="submit" className="flex-1 py-2 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">Confirmar</button>
+
+            {origenRenovacion === "misma" && (
+              <div className="bg-[#070B06] border border-[#233820] rounded-xl p-3 text-xs text-gray-300">
+                Se mantendrá en la cuenta actual: <b className="text-white font-mono">{subRenovar.correo_cuenta}</b> ({subRenovar.nombre_perfil}).
+              </div>
+            )}
+
+            {origenRenovacion === "otra_matriz" && (
+              <div className="bg-[#070B06] border border-[#66FF00]/50 rounded-xl p-3 space-y-2">
+                <label className="text-xs font-bold text-[#66FF00]">Selecciona Matriz de Stock con cupo libre:</label>
+                <select
+                  value={nuevaMatrizId}
+                  onChange={(e) => setNuevaMatrizId(e.target.value)}
+                  className="w-full bg-[#111A10] border border-[#66FF00] rounded-xl p-2 text-xs text-white font-bold"
+                >
+                  <option value="">-- Selecciona Matriz --</option>
+                  {matrices
+                    .filter(
+                      (m) =>
+                        !m.en_papelera &&
+                        m.estado === "Activa" &&
+                        (m.perfiles_matriz || []).some((p) => !p.ocupado && !p.caido)
+                    )
+                    .map((m) => {
+                      const libres = (m.perfiles_matriz || []).filter((p) => !p.ocupado && !p.caido);
+                      return (
+                        <option key={m.id} value={m.id}>
+                          {m.plataforma} — {m.correo} ({libres.length} libres)
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+            )}
+
+            {origenRenovacion === "proveedor" && (
+              <div className="bg-[#070B06] border border-amber-400/60 rounded-xl p-3 space-y-2.5">
+                <select
+                  value={provIdRenov || proveedores[0]?.id || ""}
+                  onChange={(e) => setProvIdRenov(e.target.value)}
+                  className="w-full bg-[#111A10] border border-[#2A4226] rounded-xl p-2 text-xs text-white"
+                >
+                  {proveedores.map((p) => (
+                    <option key={p.id} value={p.id}>{p.nombre} — 📞 {p.telefono}</option>
+                  ))}
+                </select>
+
+                <textarea
+                  rows={2}
+                  placeholder="Pegar mensaje del proveedor para extraer datos..."
+                  value={textoProvRenov}
+                  onChange={(e) => {
+                    setTextoProvRenov(e.target.value);
+                    const ext = extraerDatosProveedor(e.target.value);
+                    if (ext.correo) setProvCorreo(ext.correo);
+                    if (ext.password) setProvPass(ext.password);
+                    if (ext.perfil) setProvPerfil(ext.perfil);
+                    if (ext.pin) setProvPin(ext.pin);
+                  }}
+                  className="w-full bg-[#111A10] border border-[#233820] rounded-lg p-2 text-xs text-white"
+                />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Nuevo Correo *"
+                    value={provCorreo}
+                    onChange={(e) => setProvCorreo(e.target.value)}
+                    className="bg-[#111A10] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Nueva Clave"
+                    value={provPass}
+                    onChange={(e) => setProvPass(e.target.value)}
+                    className="bg-[#111A10] border border-amber-400 rounded-lg p-2 text-xs text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Perfil"
+                    value={provPerfil}
+                    onChange={(e) => setProvPerfil(e.target.value)}
+                    className="bg-[#111A10] border border-[#2A4226] rounded-lg p-2 text-xs text-white"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Costo Proveedor (Bs)"
+                    value={costoProv}
+                    onChange={(e) => setCostoProv(e.target.value)}
+                    className="bg-[#111A10] border border-orange-500/60 rounded-lg p-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-[#66FF00] font-bold">Precio Cobrado (Bs)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={precioRenovacion}
+                  onChange={(e) => setPrecioRenovacion(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#66FF00] rounded-xl p-2 text-white font-bold text-xs"
+                  placeholder="Precio Bs"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-400">Duración</label>
+                <select
+                  value={mesesRenovacion}
+                  onChange={(e) => setMesesRenovacion(e.target.value)}
+                  className="w-full mt-1 bg-[#070B06] border border-[#2A4226] rounded-xl p-2 text-white text-xs"
+                >
+                  <option value={1}>1 Mes (+30d)</option>
+                  <option value={2}>2 Meses (+60d)</option>
+                  <option value={3}>3 Meses (+90d)</option>
+                  <option value={6}>6 Meses (+180d)</option>
+                  <option value={12}>1 Año (+365d)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => setSubRenovar(null)} className="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-bold">
+                Cancelar
+              </button>
+              <button type="submit" className="flex-1 py-2.5 bg-[#66FF00] text-black rounded-xl text-xs font-extrabold cursor-pointer">
+                Confirmar Renovación
+              </button>
             </div>
           </form>
         </div>
