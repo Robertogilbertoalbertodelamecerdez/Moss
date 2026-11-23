@@ -38,7 +38,8 @@ import {
   Check,
   Calendar,
   Truck,
-  Edit3
+  Edit3,
+  ShieldCheck
 } from "lucide-react";
 
 const limpiarMontoConSigno = (val) => {
@@ -75,7 +76,12 @@ export default function MossCRM() {
   const [movimientosRevendedor, setMovimientosRevendedor] = useState([]);
   const [notificaciones, setNotificaciones] = useState([]);
 
-  // Estados del Modal de Banco (Registrar, Editar o Eliminar Gastos/Ingresos)
+  // Modal de Cobro / Abono al Fíe de un Sub-Admin (Marcus)
+  const [subAdminCobroModal, setSubAdminCobroModal] = useState(null);
+  const [montoAbonoFieInput, setMontoAbonoFieInput] = useState("");
+  const [notaAbonoFieInput, setNotaAbonoFieInput] = useState("");
+
+  // Modal de Banco (Registrar, Editar o Eliminar Gastos/Ingresos)
   const [modalYolo, setModalYolo] = useState(false);
   const [tipoAjusteYolo, setTipoAjusteYolo] = useState("gasto");
   const [montoAjusteYolo, setMontoAjusteYolo] = useState("");
@@ -267,6 +273,169 @@ export default function MossCRM() {
     notificar("Usuario o PIN incorrecto (Verifica tus datos)", "error", false);
   };
 
+  // =========================================================================
+  // CÁLCULO CENTRAL DE DEUDA AL FÍE Y ABONOS PARCIALES DE CADA SUB-ADMIN
+  // =========================================================================
+  const esCuentaDeMarcusVinculadaAMateus = (s) => {
+    if ((s.admin_propietario || "admin") === "admin") return false;
+    const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
+    const matDeMateus =
+      s.matriz_id &&
+      (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
+    return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
+  };
+
+  const calcularEstadoFieSubAdmin = (subAdminId) => {
+    const todasCuentasFie = suscripciones.filter(
+      (s) =>
+        !s.en_papelera &&
+        s.admin_propietario === subAdminId &&
+        esCuentaDeMarcusVinculadaAMateus(s)
+    );
+
+    const cuentasPendientes = todasCuentasFie.filter((s) => s.pagado_al_admin !== true);
+    const brutoPendiente = cuentasPendientes.reduce(
+      (acc, s) => acc + Number(s.costo_proveedor || 0),
+      0
+    );
+
+    const abonosActivos = movimientosYolo.filter(
+      (m) =>
+        (m.admin_propietario || "admin") === "admin" &&
+        m.tipo === "Abono Fie Admin" &&
+        m.referencia_id === subAdminId
+    );
+    const totalAbonado = abonosActivos.reduce((acc, m) => acc + Math.abs(Number(m.monto || 0)), 0);
+
+    const historialPagosFie = movimientosYolo.filter(
+      (m) =>
+        (m.admin_propietario || "admin") === "admin" &&
+        (m.tipo === "Abono Fie Admin" || m.tipo === "Pago Fie Admin Liquidado") &&
+        m.referencia_id === subAdminId
+    );
+
+    const deudaRestante = Math.max(0, brutoPendiente - totalAbonado);
+
+    return {
+      todasCuentasFie,
+      cuentasPendientes,
+      brutoPendiente,
+      abonosActivos,
+      totalAbonado,
+      deudaRestante,
+      historialPagosFie
+    };
+  };
+
+  // Registrar un abono parcial (colocar cuánto me pagó) o liquidar si cubre toda la deuda
+  const registrarAbonoParcialSubAdmin = async (e) => {
+    e.preventDefault();
+    if (!subAdminCobroModal) return;
+    const monto = parseFloat(montoAbonoFieInput);
+    if (isNaN(monto) || monto <= 0) {
+      return notificar("Ingresa un monto mayor a 0", "error");
+    }
+
+    const estado = calcularEstadoFieSubAdmin(subAdminCobroModal.id);
+    const cubreTodo = monto >= estado.deudaRestante && estado.deudaRestante > 0;
+
+    if (cubreTodo) {
+      if (estado.cuentasPendientes.length > 0) {
+        await supabase
+          .from("suscripciones")
+          .update({ pagado_al_admin: true })
+          .in(
+            "id",
+            estado.cuentasPendientes.map((s) => s.id)
+          );
+      }
+      if (estado.abonosActivos.length > 0) {
+        await supabase
+          .from("movimientos_yolo")
+          .update({ tipo: "Pago Fie Admin Liquidado" })
+          .in(
+            "id",
+            estado.abonosActivos.map((m) => m.id)
+          );
+      }
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: "admin",
+          tipo: "Pago Fie Admin Liquidado",
+          monto: Math.abs(monto),
+          afecta_ganancia_neta: true,
+          descripcion:
+            notaAbonoFieInput.trim() ||
+            `Liquidación total al fíe de ${subAdminCobroModal.nombre} (Bs ${monto.toFixed(2)})`,
+          referencia_id: subAdminCobroModal.id
+        }
+      ]);
+      notificar(`✅ ¡Deuda total de ${subAdminCobroModal.nombre} liquidada (+Bs ${monto.toFixed(2)} en tu banco)!`);
+    } else {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: "admin",
+          tipo: "Abono Fie Admin",
+          monto: Math.abs(monto),
+          afecta_ganancia_neta: true,
+          descripcion:
+            notaAbonoFieInput.trim() ||
+            `Abono parcial al fíe de ${subAdminCobroModal.nombre} (Bs ${monto.toFixed(2)})`,
+          referencia_id: subAdminCobroModal.id
+        }
+      ]);
+      notificar(`💵 Abono de Bs ${monto.toFixed(2)} registrado. Restante de ${subAdminCobroModal.nombre}: Bs ${Math.max(0, estado.deudaRestante - monto).toFixed(2)}`);
+    }
+
+    setMontoAbonoFieInput("");
+    setNotaAbonoFieInput("");
+    await recargarTodo();
+  };
+
+  // Marcar TODA la deuda al fíe de un Sub-Admin como pagada en 1 clic
+  const marcarTodoPagadoSubAdmin = async (sa) => {
+    const estado = calcularEstadoFieSubAdmin(sa.id);
+    if (estado.cuentasPendientes.length === 0 && estado.deudaRestante <= 0) {
+      return notificar(`${sa.nombre} no tiene deuda pendiente.`);
+    }
+
+    if (estado.cuentasPendientes.length > 0) {
+      await supabase
+        .from("suscripciones")
+        .update({ pagado_al_admin: true })
+        .in(
+          "id",
+          estado.cuentasPendientes.map((s) => s.id)
+        );
+    }
+
+    if (estado.abonosActivos.length > 0) {
+      await supabase
+        .from("movimientos_yolo")
+        .update({ tipo: "Pago Fie Admin Liquidado" })
+        .in(
+          "id",
+          estado.abonosActivos.map((m) => m.id)
+        );
+    }
+
+    if (estado.deudaRestante > 0) {
+      await supabase.from("movimientos_yolo").insert([
+        {
+          admin_propietario: "admin",
+          tipo: "Pago Fie Admin Liquidado",
+          monto: Math.abs(estado.deudaRestante),
+          afecta_ganancia_neta: true,
+          descripcion: `Pago total de deuda al fíe de ${sa.nombre} (${estado.cuentasPendientes.length} ctas)`,
+          referencia_id: sa.id
+        }
+      ]);
+    }
+
+    await recargarTodo();
+    notificar(`✅ ¡Toda la deuda de ${sa.nombre} marcada como Pagada (+Bs ${estado.deudaRestante.toFixed(2)} en tu banco)!`);
+  };
+
   const misNotificacionesCobro = notificaciones.filter(
     (n) =>
       n.tipo === "venta_revendedor" &&
@@ -329,15 +498,6 @@ export default function MossCRM() {
     }
     await recargarTodo();
     notificar(`¡${pendientes.length} cobros marcados como Pagados (+Bs ${sumaTotal.toFixed(2)})!`);
-  };
-
-  const esCuentaDeMarcusVinculadaAMateus = (s) => {
-    if ((s.admin_propietario || "admin") === "admin") return false;
-    const provMoss = String(s.nombre_proveedor || "").toLowerCase().includes("moss");
-    const matDeMateus =
-      s.matriz_id &&
-      (matrices.find((m) => m.id === s.matriz_id)?.admin_propietario || "admin") === "admin";
-    return provMoss || Boolean(matDeMateus) || s.tipo_comprador === "subadmin";
   };
 
   const misSuscripcionesPropias = suscripciones.filter(
@@ -418,9 +578,7 @@ export default function MossCRM() {
     : 0;
 
   const deudaPendienteFieMarcus = esSubAdmin
-    ? misSuscripcionesPropias
-        .filter((s) => !s.en_papelera && esCuentaDeMarcusVinculadaAMateus(s) && s.pagado_al_admin === false)
-        .reduce((acc, s) => acc + Number(s.costo_proveedor || 0), 0)
+    ? calcularEstadoFieSubAdmin(adminKeyActual).deudaRestante
     : 0;
 
   const pagadoProveedoresExternosTop = ventasEnPeriodoTop
@@ -438,26 +596,37 @@ export default function MossCRM() {
       ? "DE ESTE MES"
       : "HISTÓRICO";
 
-  const hoy = new Date(hoyBolivia + "T00:00:00-04:00");
+  const calcularDiasSafe = (fechaCorte) => {
+    if (!fechaCorte) return 999;
+    const limpia = extraerFechaLocalISO(fechaCorte);
+    if (!limpia || !/^\d{4}-\d{2}-\d{2}$/.test(limpia)) return 999;
+    const [ah, mh, dh] = hoyBolivia.split("-").map(Number);
+    const [ac, mc, dc] = limpia.split("-").map(Number);
+    return Math.round((Date.UTC(ac, mc - 1, dc) - Date.UTC(ah, mh - 1, dh)) / (1000 * 60 * 60 * 24));
+  };
+
   const cantidadPorRenovar = misSuscripcionesPropias.filter((s) => {
-    if (s.en_papelera || s.estado !== "Activa") return false;
-    const corte = new Date(s.fecha_corte + "T00:00:00-04:00");
-    const dias = Math.ceil((corte - hoy) / (1000 * 60 * 60 * 24));
+    if (s.en_papelera) return false;
+    if (s.estado && String(s.estado).trim().toLowerCase() !== "activa") return false;
+    const dias = calcularDiasSafe(s.fecha_corte);
     const venceCliente = dias <= 3 && !s.avisado_renovacion;
     const venceProveedorIntermedio =
       s.fecha_renovacion_proveedor &&
-      s.fecha_renovacion_proveedor < s.fecha_corte &&
-      Math.ceil((new Date(s.fecha_renovacion_proveedor + "T00:00:00-04:00") - hoy) / (1000 * 60 * 60 * 24)) <= 3;
+      extraerFechaLocalISO(s.fecha_renovacion_proveedor) < extraerFechaLocalISO(s.fecha_corte) &&
+      calcularDiasSafe(s.fecha_renovacion_proveedor) <= 3;
     return venceCliente || venceProveedorIntermedio;
   }).length;
 
   const cantidadCaidos = misSuscripcionesPropias.filter((s) => !s.en_papelera && s.estado === "Caida").length;
 
+  const subAdminsConDeudaCount = esSuperAdmin
+    ? subAdmins.filter((sa) => calcularEstadoFieSubAdmin(sa.id).deudaRestante > 0).length
+    : 0;
   const cobrosPendientesCount = misNotificacionesCobro.filter((n) => !n.pagado).length;
   const erroresCount = esSuperAdmin
     ? notificaciones.filter((n) => n.tipo === "error" && !n.leido).length
     : 0;
-  const alertasTotalesBadge = cobrosPendientesCount + erroresCount;
+  const alertasTotalesBadge = cobrosPendientesCount + erroresCount + subAdminsConDeudaCount;
 
   const registrarAjusteYolo = async (e) => {
     e.preventDefault();
@@ -490,7 +659,6 @@ export default function MossCRM() {
     notificar(`Saldo de ${nombreBilleteraMostrada} actualizado`);
   };
 
-  // Guardar la edición de un gasto o movimiento existente del banco
   const guardarEdicionMovimientoBanco = async () => {
     if (!movEditandoBanco) return;
     const num = parseFloat(movEditandoBanco.monto);
@@ -510,7 +678,6 @@ export default function MossCRM() {
     notificar("Movimiento de banco actualizado y saldo recalculado");
   };
 
-  // Eliminar un gasto o movimiento con confirmación y devolver el saldo a como estaba antes
   const eliminarMovimientoBancoConfirmado = async (idMov) => {
     await supabase.from("movimientos_yolo").delete().eq("id", idMov);
     setConfirmEliminarMovId(null);
@@ -522,6 +689,10 @@ export default function MossCRM() {
     sesionActual?.rol === "revendedor"
       ? revendedores.find((r) => r.id === sesionActual.revendedorId)
       : null;
+
+  const estadoModalCobroActual = subAdminCobroModal
+    ? calcularEstadoFieSubAdmin(subAdminCobroModal.id)
+    : null;
 
   return (
     <div className="min-h-screen text-white pb-16">
@@ -797,6 +968,56 @@ export default function MossCRM() {
               </div>
             </div>
 
+            {/* ===================================================================== */}
+            {/* BARRA VISIBLE DE DEUDA AL FÍE DE ADMINS ASOCIADOS (SOLO PARA MATEUS)  */}
+            {/* ===================================================================== */}
+            {esSuperAdmin && subAdmins.length > 0 && (
+              <div className="bg-gradient-to-r from-amber-950/50 via-[#151A0F] to-[#111A10] border-2 border-amber-400/70 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="px-2.5 py-1 rounded-xl bg-amber-400 text-black font-black text-xs flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4" /> Deuda al Fíe de Admins
+                  </span>
+
+                  {subAdmins.map((sa) => {
+                    const est = calcularEstadoFieSubAdmin(sa.id);
+                    return (
+                      <div
+                        key={sa.id}
+                        className="flex flex-wrap items-center gap-2 bg-[#070B06] border border-amber-500/40 rounded-xl px-3 py-1.5 text-xs"
+                      >
+                        <span className="font-black text-white">👑 {sa.nombre}:</span>
+                        <span
+                          className={`font-black text-sm ${
+                            est.deudaRestante > 0 ? "text-amber-400" : "text-[#66FF00]"
+                          }`}
+                        >
+                          {est.deudaRestante > 0
+                            ? `Te debe Bs ${est.deudaRestante.toFixed(2)}`
+                            : "✓ Al día (Bs 0)"}
+                        </span>
+                        {est.totalAbonado > 0 && (
+                          <span className="text-[10px] text-cyan-300 font-bold">
+                            (Abonó Bs {est.totalAbonado.toFixed(1)})
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSubAdminCobroModal(sa);
+                            setMontoAbonoFieInput("");
+                            setNotaAbonoFieInput("");
+                          }}
+                          className="px-3 py-1 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-lg text-[11px] cursor-pointer"
+                        >
+                          💵 Cobrar / Abonar
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 bg-[#0E170D]/90 p-2 rounded-2xl border border-[#264023] shadow-xl">
               <button
                 onClick={() => setTabActiva("ventas")}
@@ -973,17 +1194,236 @@ export default function MossCRM() {
             )}
           </main>
 
+          {/* ========================================================================= */}
+          {/* MODAL COBRAR / REGISTRAR ABONO PARCIAL O LIQUIDAR FÍE DE UN SUB-ADMIN     */}
+          {/* ========================================================================= */}
+          {subAdminCobroModal && estadoModalCobroActual && (
+            <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
+              <div className="bg-[#111A10] border-2 border-amber-400 rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[92vh] overflow-y-auto animate-modal">
+                <div className="flex justify-between items-center border-b border-[#233820] pb-3">
+                  <div>
+                    <h3 className="font-black text-amber-400 text-base flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5" /> Cuenta al Fíe de {subAdminCobroModal.nombre}
+                    </h3>
+                    <p className="text-[11px] text-gray-400">
+                      Registra cuánto te pagó (abono parcial) o marca toda la deuda como pagada.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSubAdminCobroModal(null)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* RESUMEN NUMÉRICO DE LA DEUDA */}
+                <div className="grid grid-cols-3 gap-2.5 text-center">
+                  <div className="bg-[#070B06] border border-[#233820] rounded-2xl p-3">
+                    <p className="text-[10px] text-gray-400 uppercase font-bold">Total Sacado Pend.</p>
+                    <p className="text-lg font-black text-white mt-0.5">
+                      Bs {estadoModalCobroActual.brutoPendiente.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="bg-[#070B06] border border-cyan-500/40 rounded-2xl p-3">
+                    <p className="text-[10px] text-cyan-300 uppercase font-bold">Abonado a Cuenta</p>
+                    <p className="text-lg font-black text-cyan-300 mt-0.5">
+                      Bs {estadoModalCobroActual.totalAbonado.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="bg-amber-950/40 border-2 border-amber-400 rounded-2xl p-3">
+                    <p className="text-[10px] text-amber-300 uppercase font-black">Te Debe Ahora</p>
+                    <p className="text-xl font-black text-amber-400 mt-0.5">
+                      Bs {estadoModalCobroActual.deudaRestante.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* FORMULARIO: COLOCAR CUÁNTO ME PAGÓ + BOTÓN MARCAR TODO PAGADO */}
+                <form
+                  onSubmit={registrarAbonoParcialSubAdmin}
+                  className="bg-[#070B06] border border-amber-500/40 rounded-2xl p-4 space-y-3"
+                >
+                  <p className="text-xs font-black text-amber-300">
+                    💵 Colocar cuánto te pagó {subAdminCobroModal.nombre} (Abono Parcial o Total):
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      placeholder={`Ej: 50 (Debe Bs ${estadoModalCobroActual.deudaRestante.toFixed(2)})`}
+                      value={montoAbonoFieInput}
+                      onChange={(e) => setMontoAbonoFieInput(limpiarMontoConSigno(e.target.value))}
+                      className="bg-[#111A10] border-2 border-amber-400 rounded-xl p-2.5 text-white font-black text-sm"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Nota opcional (Ej: Pago por QR Yape)"
+                      value={notaAbonoFieInput}
+                      onChange={(e) => setNotaAbonoFieInput(e.target.value)}
+                      className="bg-[#111A10] border border-[#2A4226] rounded-xl p-2.5 text-white text-xs"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="submit"
+                      className="py-2.5 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl text-xs cursor-pointer"
+                    >
+                      💵 Registrar Abono / Pago Parcial
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => marcarTodoPagadoSubAdmin(subAdminCobroModal)}
+                      className="py-2.5 bg-[#66FF00] hover:bg-[#52cc00] text-black font-black rounded-xl text-xs flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Check className="w-4 h-4" /> ✅ Marcar Todo Pagado (+Bs{" "}
+                      {estadoModalCobroActual.deudaRestante.toFixed(2)})
+                    </button>
+                  </div>
+                </form>
+
+                {/* CUENTAS PENDIENTES AL FÍE */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-black uppercase text-gray-300">
+                    📋 Cuentas sin saldar de {subAdminCobroModal.nombre} ({estadoModalCobroActual.cuentasPendientes.length})
+                  </h4>
+                  <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                    {estadoModalCobroActual.cuentasPendientes.length === 0 ? (
+                      <p className="text-xs text-gray-500 text-center py-3 bg-[#070B06] rounded-xl">
+                        ✓ No tiene cuentas pendientes al fíe.
+                      </p>
+                    ) : (
+                      estadoModalCobroActual.cuentasPendientes.map((s) => (
+                        <div
+                          key={s.id}
+                          className="bg-[#070B06] border border-amber-500/30 rounded-xl p-2.5 flex justify-between items-center text-xs gap-2"
+                        >
+                          <div className="min-w-0">
+                            <span className="px-2 py-0.5 rounded bg-amber-400 text-black font-black text-[10px]">
+                              {s.plataforma}
+                            </span>
+                            <span className="ml-2 text-gray-400 font-mono text-[10px]">
+                              {formatearFechaDMA(s.fecha_venta)}
+                            </span>
+                            <p className="text-white font-semibold truncate mt-0.5">
+                              {s.correo_cuenta} · Cliente: {s.nombre_cliente}
+                            </p>
+                          </div>
+                          <span className="font-black text-amber-300 shrink-0">
+                            Bs {Number(s.costo_proveedor || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* HISTORIAL DE ABONOS Y PAGOS REGISTRADOS */}
+                {estadoModalCobroActual.historialPagosFie.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-[#233820]">
+                    <h4 className="text-xs font-black uppercase text-cyan-300">
+                      📜 Historial de Pagos / Abonos de {subAdminCobroModal.nombre}
+                    </h4>
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                      {estadoModalCobroActual.historialPagosFie.map((m) => (
+                        <div
+                          key={m.id}
+                          className="bg-[#070B06] border border-[#1E331A] rounded-xl p-2 flex justify-between items-center text-xs"
+                        >
+                          <div className="truncate">
+                            <span className="text-gray-400 font-mono text-[10px] mr-2">
+                              {formatearFechaDMA(m.fecha)}
+                            </span>
+                            <span className="text-gray-200">{m.descripcion}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-black text-[#66FF00]">
+                              +Bs {Math.abs(Number(m.monto || 0)).toFixed(2)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await supabase.from("movimientos_yolo").delete().eq("id", m.id);
+                                await recargarTodo();
+                                notificar("Abono eliminado y deuda recalculada");
+                              }}
+                              className="text-gray-500 hover:text-red-400 cursor-pointer"
+                              title="Eliminar abono"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* MODAL ALERTAS / COBROS (INCLUYE DEUDA AL FÍE DE ADMINS + REVENDEDORES) */}
           {modalNotificaciones && (
             <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
               <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-2xl w-full space-y-5 max-h-[90vh] overflow-y-auto animate-modal">
                 <div className="flex justify-between items-center border-b border-[#233820] pb-3">
                   <h3 className="font-black text-[#66FF00] text-base flex items-center gap-2">
-                    <Bell className="w-5 h-5" /> Cobros de Revendedores ({sesionActual.nombre})
+                    <Bell className="w-5 h-5" /> Centro de Cobros ({sesionActual.nombre})
                   </h3>
                   <button onClick={() => setModalNotificaciones(false)} className="text-gray-400 hover:text-white">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
+
+                {/* SECCIÓN DEUDA AL FÍE DE SUB-ADMINS DENTRO DE ALERTAS/COBROS */}
+                {esSuperAdmin && subAdmins.length > 0 && (
+                  <div className="space-y-2 pb-3 border-b border-[#233820]">
+                    <h4 className="text-xs font-black uppercase text-amber-300">
+                      👑 Deuda al Fíe de Usuarios Admin Asociados
+                    </h4>
+                    {subAdmins.map((sa) => {
+                      const est = calcularEstadoFieSubAdmin(sa.id);
+                      return (
+                        <div
+                          key={sa.id}
+                          className="p-3.5 rounded-2xl border-2 border-amber-400/60 bg-amber-950/25 flex flex-wrap justify-between items-center gap-3 text-xs"
+                        >
+                          <div>
+                            <p className="font-black text-white text-sm">
+                              👑 {sa.nombre} — <span className="text-amber-300">Te debe Bs {est.deudaRestante.toFixed(2)}</span>
+                            </p>
+                            <p className="text-gray-300 text-[11px]">
+                              {est.cuentasPendientes.length} cuenta(s) pendiente(s) · Abonado: Bs {est.totalAbonado.toFixed(2)}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setModalNotificaciones(false);
+                                setSubAdminCobroModal(sa);
+                                setMontoAbonoFieInput("");
+                                setNotaAbonoFieInput("");
+                              }}
+                              className="px-3.5 py-2 bg-amber-400 text-black font-black rounded-xl text-xs cursor-pointer"
+                            >
+                              💵 Abonar / Ver Detalle
+                            </button>
+                            {est.deudaRestante > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => marcarTodoPagadoSubAdmin(sa)}
+                                className="px-3.5 py-2 bg-[#66FF00] text-black font-black rounded-xl text-xs cursor-pointer"
+                              >
+                                ✅ Marcar Todo Pagado
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <div className="space-y-2.5">
                   <div className="flex flex-wrap justify-between items-center gap-2">
@@ -1051,9 +1491,7 @@ export default function MossCRM() {
             </div>
           )}
 
-          {/* ========================================================================= */}
-          {/* MODAL DE BANCO: REGISTRAR + EDITAR O ELIMINAR GASTOS / MOVIMIENTOS         */}
-          {/* ========================================================================= */}
+          {/* MODAL DE BANCO: REGISTRAR + EDITAR O ELIMINAR GASTOS / MOVIMIENTOS */}
           {modalYolo && (
             <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
               <div className="bg-[#111A10] border-2 border-[#66FF00] rounded-3xl p-6 max-w-xl w-full space-y-4 max-h-[92vh] overflow-y-auto animate-modal">
@@ -1066,7 +1504,6 @@ export default function MossCRM() {
                   </button>
                 </div>
 
-                {/* FORMULARIO PARA AGREGAR NUEVO GASTO O INGRESO */}
                 <form onSubmit={registrarAjusteYolo} className="bg-[#070B06] border border-[#233820] rounded-2xl p-4 space-y-3">
                   <p className="text-xs font-black text-[#66FF00]">+ Registrar Nuevo Gasto o Ingreso</p>
                   <div className="grid grid-cols-2 gap-2">
@@ -1130,7 +1567,6 @@ export default function MossCRM() {
                   </div>
                 </form>
 
-                {/* HISTORIAL DE GASTOS Y MOVIMIENTOS PARA EDITAR O ELIMINAR (VUELVE EL SALDO A ANTES) */}
                 <div className="space-y-2">
                   <h4 className="text-xs font-black uppercase text-gray-300">
                     📜 Historial de Gastos y Movimientos (Editar o Eliminar para restaurar saldo)
@@ -1156,7 +1592,7 @@ export default function MossCRM() {
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                   <div>
                                     <label className="text-[10px] text-gray-400">
-                                      Monto (Negativo - para gasto, Positivo + para ingreso)
+                                      Monto (Negativo - gasto, Positivo + ingreso)
                                     </label>
                                     <input
                                       type="text"
@@ -1253,7 +1689,6 @@ export default function MossCRM() {
                                         type="button"
                                         onClick={() => setMovEditandoBanco(m)}
                                         className="p-1.5 text-gray-400 hover:text-[#66FF00] cursor-pointer"
-                                        title="Editar monto o motivo"
                                       >
                                         <Edit3 className="w-4 h-4" />
                                       </button>
@@ -1261,7 +1696,6 @@ export default function MossCRM() {
                                         type="button"
                                         onClick={() => setConfirmEliminarMovId(m.id)}
                                         className="p-1.5 text-gray-500 hover:text-red-400 cursor-pointer"
-                                        title="Eliminar movimiento y restaurar saldo"
                                       >
                                         <Trash2 className="w-4 h-4" />
                                       </button>
